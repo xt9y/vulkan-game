@@ -2,3 +2,5 @@ build/
 .cbuild/
 .cache/
 .DS_Store
+c.lock
+compile_commands.json
