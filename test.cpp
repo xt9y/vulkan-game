@@ -166,9 +166,11 @@ namespace
 
         const auto parsed = std::stoul(value);
 
-        if (parsed < 1 || parsed > 100000)
+        if (parsed < 1 || parsed > net::scene_stream::max_scene_bytes / 48)
         {
-            throw std::invalid_argument("WORKLOAD_INSTANCES must be 1..100000");
+            throw std::invalid_argument(
+                "WORKLOAD_INSTANCES exceeds the scene protocol byte budget"
+            );
         }
 
         return parsed;
@@ -852,7 +854,13 @@ int main()
         milestone("window+vulkan_init");
         gpu.init();
 
-        const auto deadline = clock::now() + 45s;
+        const auto fragments = (
+            srv::application::get()->scene_bytes.size() +
+            net::scene_stream::fragment_size - 1
+        ) / net::scene_stream::fragment_size;
+        const auto deadline = clock::now() + std::max(
+            45s, 15s + std::chrono::milliseconds(fragments * 20)
+        );
 
         while ((!clt::connection::snapshot() || clt::prediction::ticks() < 10)
                && clock::now() < deadline)
@@ -863,7 +871,7 @@ int main()
 
         if (!clt::connection::snapshot() || clt::prediction::ticks() < 10)
         {
-            throw std::runtime_error("Scene or player state did not arrive in 45 seconds");
+            throw std::runtime_error("Scene or player state did not arrive before startup deadline");
         }
         milestone("scene_transfer+gpu_upload+first_player_ticks");
         std::cout << "STARTUP total "

@@ -98,10 +98,11 @@ namespace net::scene_stream
 
     std::vector<std::uint8_t> serialize(const ::scene::state& scene)
     {
-        if (scene.meshes.size() > 65536 ||
-            scene.instances.size() > 65536)
+        // The byte budget, not an arbitrary object count, bounds the snapshot.
+        if (scene.meshes.size() > max_scene_bytes / 12 ||
+            scene.instances.size() > max_scene_bytes / 48)
         {
-            throw std::runtime_error("Scene item count exceeds limit");
+            throw std::runtime_error("Scene snapshot exceeds 8 MiB");
         }
 
         std::vector<std::uint8_t> bytes{'S', 'C', 'N', '1'};
@@ -191,8 +192,8 @@ namespace net::scene_stream
 
         if (!input.take(mesh_count) ||
             !input.take(instance_count) ||
-            mesh_count > 65536 ||
-            instance_count > 65536)
+            mesh_count > input.remaining() / 12 ||
+            instance_count > input.remaining() / 48)
         {
             return false;
         }
