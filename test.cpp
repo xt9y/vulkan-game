@@ -199,25 +199,11 @@ namespace
             }
         }
 
-        // Reuse the existing cube mesh. This stresses the real indexed drawing
-        // path, transforms, depth, scene transfer and collision cache.
-        for (std::size_t i = 0; i < count; ++i)
-        {
-            ::scene::instance cube;
-            cube.id = static_cast<std::uint32_t>(100 + i);
-            cube.mesh_id = 2;
-
-            const float x = float(int(i % 200) - 100) * 1.6f;
-            const float z = -float(i / 200) * 1.6f - 8.0f;
-            cube.pose.position = {x, 0.5f, z};
-
-            server.scene.instances.push_back(cube);
-        }
-
+        // The server publishes a small spawn scene immediately. Background
+        // generation appends independent instance batches as they finish.
         server.colliders = ::player::build_colliders(server.scene);
         server.collision_index = ::player::build_index(server.colliders);
-        server.scene_bytes = net::scene_stream::serialize(server.scene);
-        server.scene_hash = net::scene_stream::checksum(server.scene_bytes);
+        srv::application::begin_stream();
     }
 
 
@@ -802,12 +788,43 @@ int main()
 
         const auto count = instance_count();
         build_stress_scene(count);
-        milestone("scene_generation+collision+serialization");
+        milestone("initial_scene");
+
+        // The existing generation worker builds generic scene::state patches.
+        // Only completed patches are committed by the server's 60 Hz loop.
+        constexpr std::size_t batch_size = 4096;
+        for (std::size_t start = 0; start < count; start += batch_size)
+        {
+            const auto end = std::min(start + batch_size, count);
+            if (!srv::generation::submit([start, end, count]
+            {
+                ::scene::state patch;
+                patch.instances.reserve(end - start);
+                for (std::size_t i = start; i < end; ++i)
+                {
+                    ::scene::instance cube;
+                    cube.id = static_cast<std::uint32_t>(100 + i);
+                    cube.mesh_id = 2;
+                    const float x = float(int(i % 200) - 100) * 1.6f;
+                    const float z = -float(i / 200) * 1.6f - 8.0f;
+                    cube.pose.position = {x, 0.5f, z};
+                    patch.instances.push_back(cube);
+                }
+
+                return [patch = std::move(patch), last = end == count]() mutable
+                {
+                    srv::application::append_scene(std::move(patch), last);
+                };
+            }))
+            {
+                throw std::runtime_error("Generation worker queue full");
+            }
+        }
 
         std::cout << "WORKLOAD actual Vulkan + UDP + movement + generation\n"
-                  << "  instances=" << srv::application::get()->scene.instances.size()
-                  << " scene_bytes=" << srv::application::get()->scene_bytes.size()
-                  << " (test-only Vulkan GPU timestamps where supported)\n";
+                  << "  target_instances=" << (count + 4)
+                  << " initial_scene_bytes=" << srv::application::get()->scene_bytes.size()
+                  << " (progressive scene batches, GPU timestamps where supported)\n";
 
         server_thread = std::thread([&]
         {
@@ -854,26 +871,33 @@ int main()
         milestone("window+vulkan_init");
         gpu.init();
 
-        const auto fragments = (
-            srv::application::get()->scene_bytes.size() +
-            net::scene_stream::fragment_size - 1
-        ) / net::scene_stream::fragment_size;
         const auto deadline = clock::now() + std::max(
-            45'000ms, 15'000ms + std::chrono::milliseconds(fragments * 20)
+            60'000ms, std::chrono::milliseconds(30'000 + count * 2)
         );
+        auto next_progress = clock::now();
 
-        while ((!clt::connection::snapshot() || clt::prediction::ticks() < 10)
-               && clock::now() < deadline)
+        while ((!clt::connection::get()->scene_complete.load(std::memory_order_relaxed) ||
+                clt::prediction::ticks() < 10) && clock::now() < deadline)
         {
             clt::window::poll_events();
             clt::renderer::draw_frame();
+
+            if (clock::now() >= next_progress)
+            {
+                const auto partial = clt::connection::snapshot();
+                std::cout << "STREAM rendered_instances="
+                          << (partial ? partial->instances.size() : 0)
+                          << "/" << (count + 4) << '\n';
+                next_progress = clock::now() + 1s;
+            }
         }
 
-        if (!clt::connection::snapshot() || clt::prediction::ticks() < 10)
+        if (!clt::connection::get()->scene_complete.load(std::memory_order_relaxed) ||
+            clt::prediction::ticks() < 10)
         {
-            throw std::runtime_error("Scene or player state did not arrive before startup deadline");
+            throw std::runtime_error("Scene stream did not finish before startup deadline");
         }
-        milestone("scene_transfer+gpu_upload+first_player_ticks");
+        milestone("progressive_scene_stream+gpu_upload+first_player_ticks");
         std::cout << "STARTUP total "
                   << std::chrono::duration<double>(clock::now() - startup_begin).count()
                   << " s\n";
