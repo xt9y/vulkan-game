@@ -255,7 +255,7 @@ namespace clt::scene_renderer
             vk::ImageCreateInfo info{};
             info.imageType = vk::ImageType::e2D;
             info.format = vk::Format::eD32Sfloat;
-            info.extent = {extent.width, extent.height, 1};
+            info.extent = vk::Extent3D{extent.width, extent.height, 1};
             info.mipLevels = 1;
             info.arrayLayers = 1;
             info.samples = vk::SampleCountFlagBits::e1;
@@ -286,10 +286,10 @@ namespace clt::scene_renderer
         auto& data = get();
 
         vk::pipeline::destroy(data.pipeline);
-        data.pipeline = {};
+        data.pipeline = nullptr;
 
         vk::pipeline_layout::destroy(data.layout);
-        data.layout = {};
+        data.layout = nullptr;
 
         for (auto framebuffer : data.framebuffers)
         {
@@ -306,7 +306,7 @@ namespace clt::scene_renderer
         data.views.clear();
 
         vk::image_view::destroy(data.depth_view);
-        data.depth_view = {};
+        data.depth_view = nullptr;
 
         if (data.depth.handle)
         {
@@ -314,7 +314,7 @@ namespace clt::scene_renderer
         }
 
         vk::render_pass::destroy(data.render_pass);
-        data.render_pass = {};
+        data.render_pass = nullptr;
     }
 
     void create_frame_resources()
@@ -463,7 +463,7 @@ namespace clt::scene_renderer
         vk::RenderPassBeginInfo begin{};
         begin.renderPass = data.render_pass;
         begin.framebuffer = data.framebuffers.at(image);
-        begin.renderArea = {{0, 0}, extent};
+        begin.renderArea = vk::Rect2D{vk::Offset2D{0, 0}, extent};
         begin.clearValueCount = clear.size();
         begin.pClearValues = clear.data();
 
