@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace clt::scene_renderer
@@ -45,7 +46,7 @@ namespace clt::scene_renderer
             std::vector<vk::ImageView> views;
             std::vector<vk::Framebuffer> framebuffers;
 
-            std::vector<const char*> shaders;
+            std::array<std::string, 2> shaders;
         };
 
         state& get()
@@ -63,12 +64,6 @@ namespace clt::scene_renderer
             }
 
             meshes.clear();
-        }
-
-        void init()
-        {
-            get().shaders[0] = "shd/mesh.vert.spv";
-            get().shaders[1] = "shd/mesh.frag.spv";
         }
 
         void create_pipeline()
@@ -288,6 +283,16 @@ namespace clt::scene_renderer
             data.depth_view = vk::image_view::create(view);
         }
     } // namespace
+
+    void init(const char* vertex_path, const char* fragment_path)
+    {
+        if (!vertex_path || !fragment_path || !*vertex_path || !*fragment_path)
+        {
+            throw std::invalid_argument("Scene shader paths must not be empty");
+        }
+
+        get().shaders = {vertex_path, fragment_path};
+    }
 
     void release_frame_resources()
     {
