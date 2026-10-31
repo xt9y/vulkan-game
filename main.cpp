@@ -99,8 +99,9 @@ int main()
         queue_info.pQueuePriorities = &priority;
 
         std::vector<const char *> device_extensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-        if (vk::physical_device::supports_extension(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME))
-            device_extensions.push_back(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
+        constexpr const char *portability_subset = "VK_KHR_portability_subset";
+        if (vk::physical_device::supports_extension(portability_subset))
+            device_extensions.push_back(portability_subset);
 
         vk::DeviceCreateInfo device_info{};
         device_info.queueCreateInfoCount = 1;
@@ -173,7 +174,8 @@ int main()
                 continue;
             }
 
-            device.waitForFences(frame_fence, true, UINT64_MAX);
+            if (device.waitForFences(frame_fence, true, UINT64_MAX) != vk::Result::eSuccess)
+                throw std::runtime_error("Frame fence wait failed");
             uint32_t image = 0;
             try {
                 image = vk::swapchain::acquire(UINT64_MAX, image_ready).value;
