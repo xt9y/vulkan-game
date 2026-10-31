@@ -532,7 +532,9 @@ namespace clt::scene_renderer
         if (!mesh.instance_buffer.handle || mesh.instance_buffer.size < needed)
         {
             auto replacement = vk::buffer::create(
-                std::max(needed, mesh.instance_buffer.size * 2),
+                std::max<vk::DeviceSize>(
+                    static_cast<vk::DeviceSize>(needed), mesh.instance_buffer.size * 2
+                ),
                 vk::BufferUsageFlagBits::eVertexBuffer,
                 vk::MemoryPropertyFlagBits::eHostVisible |
                 vk::MemoryPropertyFlagBits::eHostCoherent
