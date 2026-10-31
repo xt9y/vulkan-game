@@ -63,22 +63,25 @@ namespace clt::prediction
                 const auto source = connection::snapshot();
                 const bool connected = connection::get()->connected.load(std::memory_order_relaxed);
 
-                if (!connected || !source || source != cached_scene)
+                if (!connected || !source)
                 {
-                    cached_scene = source;
-
-                    colliders = source
-                        ? ::player::build_colliders(*source)
-                        : ::player::collision_world{};
-                    collision_index = ::player::build_index(colliders);        
-
+                    cached_scene.reset();
+                    colliders.clear();
+                    collision_index = {};
                     avatar = {};
                     visual_offset = {};
                     pending.clear();
-
                     sequence = 0;
                     last_server_tick = 0;
                     ready = false;
+                }
+                else if (source != cached_scene)
+                {
+                    // An appended scene batch changes collision geometry, not
+                    // the player's network identity or prediction timeline.
+                    cached_scene = source;
+                    colliders = ::player::build_colliders(*source);
+                    collision_index = ::player::build_index(colliders);
                 }
 
                 if (connected && source)

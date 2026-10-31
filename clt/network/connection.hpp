@@ -27,6 +27,7 @@ namespace clt::connection
         std::atomic<bool> connected{false};
         std::atomic<std::uint32_t> server_tick{0};
         std::atomic<std::uint64_t> player_snapshots{0};
+        std::atomic<bool> scene_complete{false};
 
         std::mutex scene_mutex;
         std::shared_ptr<const ::scene::state> scene;

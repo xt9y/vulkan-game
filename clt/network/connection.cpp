@@ -11,6 +11,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <iterator>
 #include <vector>
 
 #include <algorithm>
@@ -86,6 +87,7 @@ namespace clt::connection
         get()->connected.store(false, std::memory_order_relaxed);
         get()->server_tick.store(0, std::memory_order_relaxed);
         get()->player_snapshots.store(0, std::memory_order_relaxed);
+        get()->scene_complete.store(false, std::memory_order_relaxed);
         get()->worker = std::thread(run, get()->host, get()->port);
         get()->initialized = true;
     }
@@ -113,6 +115,7 @@ namespace clt::connection
         net::socket::destroy(get()->socket);
         get()->connected.store(false, std::memory_order_relaxed);
         get()->server_tick.store(0, std::memory_order_relaxed);
+        get()->scene_complete.store(false, std::memory_order_relaxed);
         get()->initialized = false;
     }
 
@@ -138,6 +141,7 @@ namespace clt::connection
 
                 std::vector<std::uint8_t> scene_bytes;
                 std::uint32_t scene_fragment = 0;
+                std::uint32_t scene_batch = 0;
                 std::uint32_t scene_hash = 0;
                 bool scene_ready = false;
 
@@ -152,8 +156,10 @@ namespace clt::connection
                 {
                     scene_bytes.clear();
                     scene_fragment = 0;
+                    scene_batch = 0;
                     scene_hash = 0;
                     scene_ready = false;
+                    data.scene_complete.store(false, std::memory_order_relaxed);
 
                     std::lock_guard<std::mutex> lock(data.scene_mutex);
                     data.scene.reset();
@@ -218,7 +224,7 @@ namespace clt::connection
                         {
                             if (!data.connected.load(std::memory_order_relaxed) || scene_ready ||
                                 fragment.token != token ||
-                                fragment.index != scene_fragment)
+                                fragment.index != ((scene_batch << 16) | scene_fragment))
                             {
                                 continue;
                             }
@@ -253,23 +259,46 @@ namespace clt::connection
                                 if (net::scene_stream::checksum(scene_bytes) == scene_hash &&
                                     net::scene_stream::deserialize(scene_bytes, received))
                                 {
-                                    auto completed = std::make_shared<::scene::state>(std::move(received));
-
-                                    std::cout << "Scene received: "
-                                              << completed->meshes.size() << " meshes, "
-                                              << completed->instances.size() << " instances\n";
-
+                                    auto completed = std::make_shared<::scene::state>();
                                     {
                                         std::lock_guard<std::mutex> lock(data.scene_mutex);
+                                        if (data.scene)
+                                        {
+                                            *completed = *data.scene;
+                                        }
+                                        completed->meshes.insert(
+                                            completed->meshes.end(),
+                                            std::make_move_iterator(received.meshes.begin()),
+                                            std::make_move_iterator(received.meshes.end())
+                                        );
+                                        completed->instances.insert(
+                                            completed->instances.end(),
+                                            std::make_move_iterator(received.instances.begin()),
+                                            std::make_move_iterator(received.instances.end())
+                                        );
                                         data.scene = std::move(completed);
                                     }
 
-                                    scene_ready = true;
+                                    scene_ready = fragment.final;
+                                    data.scene_complete.store(scene_ready, std::memory_order_relaxed);
+                                    ++scene_batch;
+                                    scene_fragment = 0;
+                                    scene_hash = 0;
                                     scene_bytes.clear();
+                                    next_scene_send = now;
+
+                                    if (scene_ready)
+                                    {
+                                        const auto completed = snapshot();
+                                        std::cout << "Scene received: "
+                                                  << completed->meshes.size() << " meshes, "
+                                                  << completed->instances.size() << " instances\n";
+                                    }
                                 }
                                 else
                                 {
                                     clear_scene();
+                                    next_scene_send = now;
                                 }
                             }
 
@@ -357,7 +386,7 @@ namespace clt::connection
                             net::message::type::scene_request,
                             ++sequence,
                             token,
-                            scene_fragment
+                            (scene_batch << 16) | scene_fragment
                         });
 
                         net::socket::send(
