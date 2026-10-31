@@ -337,7 +337,7 @@ namespace srv::application
                     // A bounded burst amortizes UDP round trips. The client
                     // still checks every fragment and requests any missing one.
                     for (std::size_t i = fragment_id;
-                         i < std::min<std::size_t>(count, fragment_id + 8); ++i)
+                         i < std::min<std::size_t>(count, fragment_id + 32); ++i)
                     {
                         net::scene_stream::packet packet;
                         const auto size = net::scene_stream::encode_fragment(
