@@ -859,7 +859,7 @@ int main()
             net::scene_stream::fragment_size - 1
         ) / net::scene_stream::fragment_size;
         const auto deadline = clock::now() + std::max(
-            45s, 15s + std::chrono::milliseconds(fragments * 20)
+            45'000ms, 15'000ms + std::chrono::milliseconds(fragments * 20)
         );
 
         while ((!clt::connection::snapshot() || clt::prediction::ticks() < 10)
