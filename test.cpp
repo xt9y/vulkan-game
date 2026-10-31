@@ -263,7 +263,7 @@ namespace
             catch (const std::exception&)
             {
                 std::cout << "GPU timestamp query creation failed; CPU-only timings\n";
-                queries = {};
+                queries = nullptr;
             }
         }
 
@@ -272,7 +272,7 @@ namespace
             if (queries)
             {
                 vk::query::destroy(queries);
-                queries = {};
+                queries = nullptr;
             }
         }
 
@@ -318,17 +318,20 @@ namespace
             if (queries && pending)
             {
                 std::array<std::uint64_t, 2> values{};
-                device.getQueryPoolResults(
+                const auto result = device.getQueryPoolResults(
                     queries, 0, 2, sizeof(values), values.data(),
                     sizeof(std::uint64_t), vk::QueryResultFlagBits::e64 |
                                            vk::QueryResultFlagBits::eWait
                 );
 
-                const std::uint64_t mask = valid_bits >= 64
-                    ? ~std::uint64_t(0)
-                    : (std::uint64_t(1) << valid_bits) - 1;
-                const auto elapsed_ticks = (values[1] - values[0]) & mask;
-                timing.gpu_ms = double(elapsed_ticks) * double(period) / 1000000.0;
+                if (result == vk::Result::eSuccess)
+                {
+                    const std::uint64_t mask = valid_bits >= 64
+                        ? ~std::uint64_t(0)
+                        : (std::uint64_t(1) << valid_bits) - 1;
+                    const auto elapsed_ticks = (values[1] - values[0]) & mask;
+                    timing.gpu_ms = double(elapsed_ticks) * double(period) / 1000000.0;
+                }
             }
             pending = false;
 
