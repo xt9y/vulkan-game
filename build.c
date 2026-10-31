@@ -15,7 +15,6 @@ void build(C_Build *b)
     C_Dependency *headers = c_git(
         b, "VulkanHeaders", "https://github.com/KhronosGroup/Vulkan-Headers.git", "main");
     c_dep_header_only(headers);
-    c_dep_checkout(headers, "include");
     c_dep_include(headers, "include");
     c_use(game, headers);
 
