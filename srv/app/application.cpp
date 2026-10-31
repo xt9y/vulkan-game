@@ -54,6 +54,7 @@ namespace srv::application
         session::init();
         scene::build_test(get()->scene);
         get()->colliders = player::build_colliders(get()->scene);
+        get()->collision_index = player::build_index(get()->colliders);
         srv::generation::init();
         get()->scene_bytes = net::scene_stream::serialize(get()->scene);
         get()->scene_hash = net::scene_stream::checksum(get()->scene_bytes);
@@ -307,7 +308,7 @@ namespace srv::application
 
                     const auto input = client.inputs.front();
                     client.inputs.pop_front();
-                    player::step(client.avatar, input, get()->colliders);
+                    player::step(client.avatar, input, get()->colliders, &get()->collision_index);
                     client.processed_input = input.sequence;
                 }
 

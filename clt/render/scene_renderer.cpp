@@ -2,6 +2,7 @@
 
 #include "clt/network/connection.hpp"
 #include "clt/view/camera.hpp"
+#include "srv/shared/spatial/index.hpp"
 #include "srv/shared/scene/scene.hpp"
 
 #include <algorithm>
@@ -39,6 +40,7 @@ namespace clt::scene_renderer
             vk::buffer::resource instance_buffer;
             std::vector<prepared_instance> instances;
             std::vector<instance_data> visible;
+            spatial::index visibility_index;
             vec3 center;
             float radius = 0;
             std::uint32_t index_count = 0;

@@ -2,6 +2,7 @@
 
 #include "clt/network/connection.hpp"
 #include "srv/shared/net/message.hpp"
+#include "srv/shared/player/movement.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -43,6 +44,7 @@ namespace clt::prediction
 
             std::shared_ptr<const ::scene::state> cached_scene;
             ::player::collision_world colliders;
+            spatial::index collision_index;
 
             ::player::state avatar;
             vk::util::math::vec3 visual_offset{};
@@ -68,6 +70,7 @@ namespace clt::prediction
                     colliders = source
                         ? ::player::build_colliders(*source)
                         : ::player::collision_world{};
+                    collision_index = ::player::build_index(colliders);        
 
                     avatar = {};
                     visual_offset = {};

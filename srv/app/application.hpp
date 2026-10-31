@@ -21,6 +21,7 @@ namespace srv::application
         world::state terrain;
         scene::state scene;
         player::collision_world colliders;
+        spatial::index collision_index;
         std::vector<std::uint8_t> scene_bytes;
         std::uint32_t scene_hash = 0;
         std::uint32_t tick = 0;
