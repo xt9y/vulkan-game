@@ -24,7 +24,6 @@ void build(C_Build *b)
     c_dep_cmake_option(glfw, "-DGLFW_BUILD_EXAMPLES=OFF");
     c_dep_cmake_option(glfw, "-DGLFW_BUILD_TESTS=OFF");
     c_dep_cmake_option(glfw, "-DGLFW_BUILD_DOCS=OFF");
-    c_dep_cmake_option(glfw, "-DGLFW_INSTALL=OFF");
 #ifdef __linux__
     c_dep_cmake_option(glfw, "-DGLFW_BUILD_WAYLAND=OFF");
 #endif
