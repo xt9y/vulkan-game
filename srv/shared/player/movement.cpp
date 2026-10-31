@@ -29,23 +29,31 @@ namespace player
 
     collision_world build_colliders(const ::scene::state& scene)
     {
+        return build_colliders(scene.meshes, scene.instances);
+    }
+
+    collision_world build_colliders(
+        const std::vector<::scene::mesh>& meshes,
+        const std::vector<::scene::instance>& instances
+    )
+    {
         using namespace vk::util::math;
 
         collision_world result;
-        result.reserve(scene.instances.size());
+        result.reserve(instances.size());
 
-        for (const auto& instance : scene.instances)
+        for (const auto& instance : instances)
         {
             const auto mesh = std::find_if(
-                scene.meshes.begin(),
-                scene.meshes.end(),
+                meshes.begin(),
+                meshes.end(),
                 [&](const ::scene::mesh& value)
                 {
                     return value.id == instance.mesh_id;
                 }
             );
 
-            if (mesh == scene.meshes.end() || mesh->vertices.empty())
+            if (mesh == meshes.end() || mesh->vertices.empty())
             {
                 continue;
             }

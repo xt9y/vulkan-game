@@ -41,5 +41,9 @@ namespace player
     
     spatial::index build_index(const collision_world& world);
     collision_world build_colliders(const ::scene::state& scene);
+    collision_world build_colliders(
+        const std::vector<::scene::mesh>& meshes,
+        const std::vector<::scene::instance>& instances
+    );
     void step(state& player, const input& input, const collision_world& world, const spatial::index* broadphase = nullptr);
 } // namespace player

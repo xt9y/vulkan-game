@@ -61,6 +61,7 @@ namespace spatial
         std::vector<bounds> boxes;
         std::vector<std::uint32_t> order;
         std::vector<node> nodes;
+        std::vector<std::uint32_t> roots;
 
         static float axis(vec3 p, int dimension)
         {
@@ -177,12 +178,28 @@ namespace spatial
             std::iota(order.begin(), order.end(), 0u);
 
             nodes.clear();
+            roots.clear();
             nodes.reserve(boxes.size() * 2);
 
             if (!boxes.empty())
             {
-                build(0, static_cast<std::uint32_t>(boxes.size()));
+                roots.push_back(build(0, static_cast<std::uint32_t>(boxes.size())));
             }
+        }
+
+        // Append a second BVH root instead of rebuilding the entire world.
+        // Queries visit all roots and preserve global box indices.
+        void append(const std::vector<bounds>& additional)
+        {
+            if (additional.empty()) return;
+
+            const auto first = static_cast<std::uint32_t>(boxes.size());
+            boxes.insert(boxes.end(), additional.begin(), additional.end());
+            for (std::uint32_t i = 0; i < additional.size(); ++i)
+            {
+                order.push_back(first + i);
+            }
+            roots.push_back(build(first, static_cast<std::uint32_t>(additional.size())));
         }
 
         template<class Visit>
@@ -195,7 +212,10 @@ namespace spatial
                 return overlaps(region, b);
             };
 
-            traverse(0, accept, visit);
+            for (auto root : roots)
+            {
+                traverse(root, accept, visit);
+            }
         }
 
         template<class Visit>
@@ -208,7 +228,10 @@ namespace spatial
                 return visible(b, planes);
             };
 
-            traverse(0, accept, visit);
+            for (auto root : roots)
+            {
+                traverse(root, accept, visit);
+            }
         }
     };
 } // namespace spatial

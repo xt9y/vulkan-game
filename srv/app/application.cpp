@@ -91,15 +91,24 @@ namespace srv::application
         {
             data.scene.meshes.push_back(std::move(mesh));
         }
+
+        // Only the new geometry needs collision bounds and a new BVH root.
+        auto added_colliders = player::build_colliders(data.scene.meshes, patch.instances);
+        std::vector<spatial::bounds> boxes;
+        boxes.reserve(added_colliders.size());
+        for (const auto& collider : added_colliders)
+        {
+            boxes.push_back({collider.min, collider.max});
+        }
+
         for (auto& instance : patch.instances)
         {
             data.scene.instances.push_back(std::move(instance));
         }
-
-        // New geometry becomes authoritative on the same server tick it is
-        // published; generation itself happens outside the simulation loop.
-        data.colliders = player::build_colliders(data.scene);
-        data.collision_index = player::build_index(data.colliders);
+        data.colliders.insert(
+            data.colliders.end(), added_colliders.begin(), added_colliders.end()
+        );
+        data.collision_index.append(boxes);
         data.scene_batches.push_back({std::move(bytes), hash, final});
     }
 
