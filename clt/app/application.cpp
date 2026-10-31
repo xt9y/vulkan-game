@@ -89,7 +89,7 @@ namespace clt::application
         }
 
         window::init();
-        renderer::init();
+        renderer::init("shd/mesh.vert.spv", "shd/mesh.frag.spv");
         bool connected = false;
 
         while (running() && !window::should_close())
