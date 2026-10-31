@@ -59,7 +59,7 @@ namespace clt::upload
             vk::submit::wait(queue);
 
             vk::command::free({command});
-            command = {};
+            command = nullptr;
             vk::buffer::destroy(staging);
             return destination;
         }

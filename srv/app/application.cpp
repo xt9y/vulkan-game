@@ -236,7 +236,10 @@ namespace srv::application
 
                 if (!client->active || client->token != message.token)
                 {
-                    *client = session::resource{peer, message.token, 0, false, true, clock::now()};
+                    *client = session::resource{};
+                    client->endpoint = peer;
+                    client->token = message.token;
+                    client->active = true;
                 }
 
                 client->last_seen = clock::now();
