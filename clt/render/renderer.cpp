@@ -337,44 +337,6 @@ namespace clt::renderer
         scene_renderer::draw(data.command, image);
         data.command.end();
 
-        const auto swap_image = vk::swapchain::get()->images[image];
-        vk::ImageMemoryBarrier barrier{};
-        barrier.oldLayout = vk::ImageLayout::eUndefined;
-        barrier.newLayout = vk::ImageLayout::eTransferDstOptimal;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = swap_image;
-        barrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-        barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-        data.command.pipelineBarrier(
-            vk::PipelineStageFlagBits::eTopOfPipe,
-            vk::PipelineStageFlagBits::eTransfer,
-            {},
-            {},
-            {},
-            barrier
-        );
-
-        const float wave = 0.5f + 0.5f * std::sin(glfwGetTime() * 0.5);
-        vk::ClearColorValue clear(std::array<float, 4>{0.03f, 0.05f + 0.08f * wave, 0.10f, 1.0f});
-        data.command.clearColorImage(
-            swap_image, vk::ImageLayout::eTransferDstOptimal, clear, barrier.subresourceRange
-        );
-
-        barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
-        barrier.newLayout = vk::ImageLayout::ePresentSrcKHR;
-        barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-        barrier.dstAccessMask = {};
-        data.command.pipelineBarrier(
-            vk::PipelineStageFlagBits::eTransfer,
-            vk::PipelineStageFlagBits::eBottomOfPipe,
-            {},
-            {},
-            {},
-            barrier
-        );
-        data.command.end();
-
         vk::PipelineStageFlags wait_stage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
         vk::SubmitInfo submit{};
         submit.waitSemaphoreCount = 1;
