@@ -475,6 +475,67 @@ namespace clt::scene_renderer
         }
     }
 
+    void append_instance(gpu_mesh& mesh, const ::scene::instance& instance)
+    {
+        const auto& pose = instance.pose;
+        const vec3 center{
+            mesh.center.x * pose.scale.x,
+            mesh.center.y * pose.scale.y,
+            mesh.center.z * pose.scale.z
+        };
+        const vec3 inverse{
+            pose.scale.x ? 1.0f / pose.scale.x : 0.0f,
+            pose.scale.y ? 1.0f / pose.scale.y : 0.0f,
+            pose.scale.z ? 1.0f / pose.scale.z : 0.0f
+        };
+        const float max_scale = std::max({
+            std::abs(pose.scale.x), std::abs(pose.scale.y), std::abs(pose.scale.z)
+        });
+        mesh.instances.push_back({
+            {trs(pose.position, pose.rotation, pose.scale),
+             rotation(pose.rotation) * scale(inverse)},
+            pose.position + rotate(pose.rotation, center),
+            mesh.radius * max_scale
+        });
+    }
+
+    void refresh_instances(gpu_mesh& mesh)
+    {
+        if (mesh.instances.empty())
+        {
+            return;
+        }
+
+        std::vector<spatial::bounds> boxes;
+        boxes.reserve(mesh.instances.size());
+        for (const auto& instance : mesh.instances)
+        {
+            const vec3 radius{instance.radius, instance.radius, instance.radius};
+            boxes.push_back({
+                instance.center - radius,
+                instance.center + radius
+            });
+        }
+        mesh.visibility_index.rebuild(std::move(boxes));
+        mesh.visible.reserve(mesh.instances.size());
+
+        const auto needed = mesh.instances.size() * sizeof(instance_data);
+        if (!mesh.instance_buffer.handle || mesh.instance_buffer.size < needed)
+        {
+            auto replacement = vk::buffer::create(
+                std::max(needed, mesh.instance_buffer.size * 2),
+                vk::BufferUsageFlagBits::eVertexBuffer,
+                vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent
+            );
+            if (mesh.instance_buffer.handle)
+            {
+                vk::buffer::destroy(mesh.instance_buffer);
+            }
+            mesh.instance_buffer = replacement;
+        }
+    }
+
     void synchronize()
     {
         auto& data = get();
@@ -482,6 +543,77 @@ namespace clt::scene_renderer
 
         if (source == data.snapshot)
         {
+            return;
+        }
+
+        // Scene batches are append-only; reuse immutable GPU meshes and expand
+        // only the instance buffers/BVHs that gained objects.
+        bool appended = data.snapshot && source &&
+            source->meshes.size() == data.snapshot->meshes.size() &&
+            source->instances.size() >= data.snapshot->instances.size();
+
+        if (appended)
+        {
+            for (std::size_t i = 0; i < source->meshes.size(); ++i)
+            {
+                const auto& a = source->meshes[i];
+                const auto& b = data.snapshot->meshes[i];
+                if (a.id != b.id || a.vertices.size() != b.vertices.size() ||
+                    a.indices.size() != b.indices.size())
+                {
+                    appended = false;
+                    break;
+                }
+            }
+        }
+
+        if (appended)
+        {
+            const auto equal_pose = [](const ::scene::instance& a, const ::scene::instance& b)
+            {
+                return a.id == b.id && a.mesh_id == b.mesh_id &&
+                    a.pose.position.x == b.pose.position.x &&
+                    a.pose.position.y == b.pose.position.y &&
+                    a.pose.position.z == b.pose.position.z &&
+                    a.pose.scale.x == b.pose.scale.x &&
+                    a.pose.scale.y == b.pose.scale.y &&
+                    a.pose.scale.z == b.pose.scale.z &&
+                    a.pose.rotation.x == b.pose.rotation.x &&
+                    a.pose.rotation.y == b.pose.rotation.y &&
+                    a.pose.rotation.z == b.pose.rotation.z &&
+                    a.pose.rotation.w == b.pose.rotation.w;
+            };
+            appended = std::equal(
+                data.snapshot->instances.begin(), data.snapshot->instances.end(),
+                source->instances.begin(), equal_pose
+            );
+        }
+
+        if (appended)
+        {
+            std::vector<bool> changed(data.meshes.size(), false);
+            for (std::size_t i = data.snapshot->instances.size();
+                 i < source->instances.size(); ++i)
+            {
+                const auto& instance = source->instances[i];
+                for (std::size_t j = 0; j < data.meshes.size(); ++j)
+                {
+                    if (data.meshes[j].id == instance.mesh_id)
+                    {
+                        append_instance(data.meshes[j], instance);
+                        changed[j] = true;
+                        break;
+                    }
+                }
+            }
+            for (std::size_t i = 0; i < data.meshes.size(); ++i)
+            {
+                if (changed[i])
+                {
+                    refresh_instances(data.meshes[i]);
+                }
+            }
+            data.snapshot = source;
             return;
         }
 
@@ -565,26 +697,7 @@ namespace clt::scene_renderer
                         continue;
                     }
 
-                    const auto& pose = instance.pose;
-                    const vec3 center{
-                        it->center.x * pose.scale.x,
-                        it->center.y * pose.scale.y,
-                        it->center.z * pose.scale.z
-                    };
-                    const vec3 inverse{
-                        pose.scale.x ? 1.0f / pose.scale.x : 0.0f,
-                        pose.scale.y ? 1.0f / pose.scale.y : 0.0f,
-                        pose.scale.z ? 1.0f / pose.scale.z : 0.0f
-                    };
-                    const float max_scale = std::max({
-                        std::abs(pose.scale.x), std::abs(pose.scale.y), std::abs(pose.scale.z)
-                    });
-                    it->instances.push_back({
-                        {trs(pose.position, pose.rotation, pose.scale),
-                         rotation(pose.rotation) * scale(inverse)},
-                        pose.position + rotate(pose.rotation, center),
-                        it->radius * max_scale
-                    });
+                    append_instance(*it, instance);
                 }
 
                 for (auto& mesh : meshes)
@@ -593,26 +706,7 @@ namespace clt::scene_renderer
                     {
                         continue;
                     }
-                    std::vector<spatial::bounds> boxes;
-                    boxes.reserve(mesh.instances.size());
-
-                    for (const auto& instance : mesh.instances)
-                    {
-                        const vec3 radius{instance.radius, instance.radius, instance.radius};
-                        boxes.push_back({
-                            instance.center - radius,
-                            instance.center + radius
-                        });
-                    }
-
-                    mesh.visibility_index.rebuild(std::move(boxes));
-                    mesh.visible.reserve(mesh.instances.size());
-                    mesh.instance_buffer = vk::buffer::create(
-                        mesh.instances.size() * sizeof(instance_data),
-                        vk::BufferUsageFlagBits::eVertexBuffer,
-                        vk::MemoryPropertyFlagBits::eHostVisible |
-                        vk::MemoryPropertyFlagBits::eHostCoherent
-                    );
+                    refresh_instances(mesh);
                 }
             }
         }
