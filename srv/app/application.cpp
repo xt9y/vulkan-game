@@ -3,6 +3,8 @@
 #include "srv/game/application.hpp"
 #include "srv/network/session.hpp"
 
+#include "srv/scene/test.hpp"
+
 #include <iostream>
 #include <stdexcept>
 #include <thread>
@@ -39,6 +41,8 @@ namespace srv::application
         get()->options = *game::options::get();
         get()->socket = net::socket::create(get()->options.port, get()->options.bind_host);
         session::init();
+        scene::build_test(get()->scene);
+        world::init(get()->terrain, 123456789ULL);
         get()->tick = 0;
         get()->initialized = true;
     }
@@ -56,6 +60,21 @@ namespace srv::application
         const auto started = clock::now();
         auto next = started;
         constexpr auto interval = std::chrono::nanoseconds(1'000'000'000 / 60);
+
+        // auto ground = srv::world::height(get()->terrain, 10, 20);
+        // bool blocked = srv::world::solid(get()->terrain, 10.5, 12.0, 20.5);
+        // srv::world::aabb player{
+        //     10.2, 12.0, 20.2,
+        //     10.8, 13.8, 20.8
+        // };
+        // bool collision = srv::world::collides(get()->terrain, player);
+        // srv::world::set_height(get()->terrain, 10, 20, 25);
+        // std::int32_t heights[16 * 16];
+        // srv::world::sample(get()->terrain, 0, 0, 16, 16, heights);
+        //
+        // std::cout << "Ground: " << ground
+        //       << ", Blocked: " << blocked
+        //       << ", Collision: " << collision << '\n';
 
         while (!game::application::get()->stop.load(std::memory_order_relaxed))
         {
@@ -88,6 +107,8 @@ namespace srv::application
     {
         net::socket::destroy(get()->socket);
         session::shutdown();
+        get()->scene = {};
+        get()->terrain = {};
         get()->tick = 0;
         get()->initialized = false;
     }
@@ -180,11 +201,7 @@ namespace srv::application
             }
         }
 
-        void reply(
-            const net::endpoint::resource& peer,
-            net::message::type type,
-            const net::message::resource& request
-        )
+        void reply(const net::endpoint::resource& peer, net::message::type type, const net::message::resource& request)
         {
             const auto data =
                 net::message::encode({type, request.sequence, request.token, get()->tick});
