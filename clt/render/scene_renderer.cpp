@@ -195,17 +195,17 @@ namespace clt::scene_renderer
                 stages[1].pName = "main";
 
                 std::array<vk::VertexInputBindingDescription, 2> bindings{};
-                bindings[0] = {0, sizeof(::scene::vertex), vk::VertexInputRate::eVertex};
-                bindings[1] = {1, sizeof(instance_data), vk::VertexInputRate::eInstance};
+                bindings[0] = vk::VertexInputBindingDescription{0, sizeof(::scene::vertex), vk::VertexInputRate::eVertex};
+                bindings[1] = vk::VertexInputBindingDescription{1, sizeof(instance_data), vk::VertexInputRate::eInstance};
 
                 std::array<vk::VertexInputAttributeDescription, 10> attributes{};
-                attributes[0] = {0, 0, vk::Format::eR32G32B32Sfloat,
+                attributes[0] = vk::VertexInputAttributeDescription{0, 0, vk::Format::eR32G32B32Sfloat,
                                  offsetof(::scene::vertex, position)};
-                attributes[1] = {1, 0, vk::Format::eR32G32B32Sfloat,
+                attributes[1] = vk::VertexInputAttributeDescription{1, 0, vk::Format::eR32G32B32Sfloat,
                                  offsetof(::scene::vertex, normal)};
                 for (std::uint32_t i = 0; i < 8; ++i)
                 {
-                    attributes[i + 2] = {
+                    attributes[i + 2] = vk::VertexInputAttributeDescription{
                         i + 2, 1, vk::Format::eR32G32B32A32Sfloat,
                         std::uint32_t(i * sizeof(vec4))
                     };
