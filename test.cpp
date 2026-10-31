@@ -13,19 +13,23 @@
 #include "srv/world/worker.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <numeric>
 #include <random>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace
@@ -332,6 +336,7 @@ int main()
     std::atomic<std::uint64_t> generation_ops{0};
     std::thread proxy_thread;
     std::thread server_thread;
+    std::mutex worker_error_mutex;
     std::string worker_error;
     int exit_code = 0;
 
@@ -360,7 +365,10 @@ int main()
             }
             catch (const std::exception& e)
             {
-                worker_error = e.what();
+                {
+                    std::lock_guard<std::mutex> lock(worker_error_mutex);
+                    worker_error = e.what();
+                }
                 game::application::get()->stop.store(true, std::memory_order_relaxed);
             }
         });
@@ -373,7 +381,10 @@ int main()
             }
             catch (const std::exception& e)
             {
-                worker_error = e.what();
+                {
+                    std::lock_guard<std::mutex> lock(worker_error_mutex);
+                    worker_error = e.what();
+                }
                 game::application::get()->stop.store(true, std::memory_order_relaxed);
             }
         });
