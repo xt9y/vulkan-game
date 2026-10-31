@@ -9,6 +9,49 @@
 #include <stdexcept>
 #include <vector>
 
+#ifdef __APPLE__
+#include <cstdlib>
+#include <dlfcn.h>
+#include <string>
+
+// GLFW 3.4 cannot find Homebrew's or SDK's Vulkan dylib by its standard name.
+// Keep the selected library loaded for the duration of the process.
+static PFN_vkGetInstanceProcAddr macos_vulkan_loader()
+{
+    std::vector<std::string> paths;
+    if (const char *sdk = std::getenv("VULKAN_SDK")) {
+        paths.emplace_back(std::string(sdk) + "/lib/libMoltenVK.dylib");
+        paths.emplace_back(std::string(sdk) + "/lib/libvulkan.1.dylib");
+    }
+    if (const char *prefix = std::getenv("HOMEBREW_PREFIX")) {
+        paths.emplace_back(std::string(prefix) + "/opt/molten-vk/lib/libMoltenVK.dylib");
+        paths.emplace_back(std::string(prefix) + "/lib/libMoltenVK.dylib");
+        paths.emplace_back(std::string(prefix) + "/lib/libvulkan.1.dylib");
+    }
+    for (const char *path : {
+            "/opt/homebrew/opt/molten-vk/lib/libMoltenVK.dylib",
+            "/usr/local/opt/molten-vk/lib/libMoltenVK.dylib",
+            "/opt/homebrew/lib/libMoltenVK.dylib",
+            "/usr/local/lib/libMoltenVK.dylib",
+            "libMoltenVK.dylib",
+            "/opt/homebrew/lib/libvulkan.1.dylib",
+            "/usr/local/lib/libvulkan.1.dylib",
+            "libvulkan.1.dylib"
+        })
+        paths.emplace_back(path);
+
+    for (const auto &path : paths) {
+        void *library = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+        if (!library) continue;
+        auto proc = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
+            dlsym(library, "vkGetInstanceProcAddr"));
+        if (proc) return proc;
+        dlclose(library);
+    }
+    return nullptr;
+}
+#endif
+
 static vk::Extent2D framebuffer_extent(GLFWwindow *window, vk::SurfaceCapabilitiesKHR caps)
 {
     if (caps.currentExtent.width != UINT32_MAX) return caps.currentExtent;
@@ -23,6 +66,10 @@ static vk::Extent2D framebuffer_extent(GLFWwindow *window, vk::SurfaceCapabiliti
 
 int main()
 {
+#ifdef __APPLE__
+    auto vulkan_proc = macos_vulkan_loader();
+    if (vulkan_proc) glfwInitVulkanLoader(vulkan_proc);
+#endif
     if (!glfwInit()) return 1;
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     GLFWwindow *window = glfwCreateWindow(1280, 720, "vulkan-game", nullptr, nullptr);
@@ -32,8 +79,22 @@ int main()
     }
 
     try {
-        if (!glfwVulkanSupported()) throw std::runtime_error("Vulkan loader not available");
-        if (!vk::loader::init()) throw std::runtime_error("Vulkan loader initialization failed");
+        if (!glfwVulkanSupported()) {
+#ifdef __APPLE__
+            throw std::runtime_error(
+                "Vulkan runtime not available. Install MoltenVK with: brew install molten-vk "
+                "(or install and configure the macOS Vulkan SDK)");
+#else
+            throw std::runtime_error("Vulkan loader or driver not available");
+#endif
+        }
+#ifdef __APPLE__
+        if (!vk::loader::init(vulkan_proc))
+            throw std::runtime_error("Vulkan loader initialization failed");
+#else
+        if (!vk::loader::init())
+            throw std::runtime_error("Vulkan loader initialization failed");
+#endif
 
         uint32_t count = 0;
         const char **required = glfwGetRequiredInstanceExtensions(&count);
