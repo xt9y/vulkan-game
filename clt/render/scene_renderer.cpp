@@ -499,7 +499,7 @@ namespace clt::scene_renderer
         });
     }
 
-    void refresh_instances(gpu_mesh& mesh)
+    void refresh_instances(gpu_mesh& mesh, std::size_t first = 0)
     {
         if (mesh.instances.empty())
         {
@@ -507,16 +507,25 @@ namespace clt::scene_renderer
         }
 
         std::vector<spatial::bounds> boxes;
-        boxes.reserve(mesh.instances.size());
-        for (const auto& instance : mesh.instances)
+        boxes.reserve(mesh.instances.size() - first);
+        for (std::size_t i = first; i < mesh.instances.size(); ++i)
         {
+            const auto& instance = mesh.instances[i];
             const vec3 radius{instance.radius, instance.radius, instance.radius};
             boxes.push_back({
                 instance.center - radius,
                 instance.center + radius
             });
         }
-        mesh.visibility_index.rebuild(std::move(boxes));
+
+        if (first)
+        {
+            mesh.visibility_index.append(boxes);
+        }
+        else
+        {
+            mesh.visibility_index.rebuild(std::move(boxes));
+        }
         mesh.visible.reserve(mesh.instances.size());
 
         const auto needed = mesh.instances.size() * sizeof(instance_data);
@@ -591,7 +600,13 @@ namespace clt::scene_renderer
 
         if (appended)
         {
-            std::vector<bool> changed(data.meshes.size(), false);
+            std::vector<std::size_t> previous_counts;
+            previous_counts.reserve(data.meshes.size());
+            for (const auto& mesh : data.meshes)
+            {
+                previous_counts.push_back(mesh.instances.size());
+            }
+
             for (std::size_t i = data.snapshot->instances.size();
                  i < source->instances.size(); ++i)
             {
@@ -601,16 +616,15 @@ namespace clt::scene_renderer
                     if (data.meshes[j].id == instance.mesh_id)
                     {
                         append_instance(data.meshes[j], instance);
-                        changed[j] = true;
                         break;
                     }
                 }
             }
             for (std::size_t i = 0; i < data.meshes.size(); ++i)
             {
-                if (changed[i])
+                if (data.meshes[i].instances.size() != previous_counts[i])
                 {
-                    refresh_instances(data.meshes[i]);
+                    refresh_instances(data.meshes[i], previous_counts[i]);
                 }
             }
             data.snapshot = source;
