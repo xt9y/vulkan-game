@@ -606,6 +606,19 @@ namespace clt::scene_renderer
                     {
                         continue;
                     }
+                    std::vector<spatial::bounds> boxes;
+                    boxes.reserve(mesh.instances.size());
+
+                    for (const auto& instance : mesh.instances)
+                    {
+                        const vec3 radius{instance.radius, instance.radius, instance.radius};
+                        boxes.push_back({
+                            instance.center - radius,
+                            instance.center + radius
+                        });
+                    }
+
+                    mesh.visibility_index.rebuild(std::move(boxes));
                     mesh.visible.reserve(mesh.instances.size());
                     mesh.instance_buffer = vk::buffer::create(
                         mesh.instances.size() * sizeof(instance_data),
@@ -671,6 +684,13 @@ namespace clt::scene_renderer
                 ) * camera::view();
 
             const auto planes = frustum(view_projection);
+            std::array<spatial::plane, 6> visibility_planes{};
+
+            for (std::size_t i = 0; i < visibility_planes.size(); ++i)
+            {
+                visibility_planes[i] = {planes[i].normal, planes[i].offset};
+            }
+
             command.pushConstants(
                 data.layout, vk::ShaderStageFlagBits::eVertex,
                 0, sizeof(view_projection), &view_projection
@@ -679,13 +699,18 @@ namespace clt::scene_renderer
             for (auto& mesh : data.meshes)
             {
                 mesh.visible.clear();
-                for (const auto& instance : mesh.instances)
-                {
-                    if (visible(planes, instance.center, instance.radius))
+                mesh.visibility_index.query_frustum(
+                    visibility_planes,
+                    [&](std::uint32_t id)
                     {
-                        mesh.visible.push_back(instance.transforms);
+                        const auto& instance = mesh.instances[id];
+
+                        if (visible(planes, instance.center, instance.radius))
+                        {
+                            mesh.visible.push_back(instance.transforms);
+                        }
                     }
-                }
+                );
                 if (mesh.visible.empty())
                 {
                     continue;

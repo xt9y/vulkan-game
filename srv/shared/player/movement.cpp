@@ -129,7 +129,7 @@ namespace player
         std::vector<std::uint32_t> candidates;
         if (broadphase)
         {
-            const float horizontal = 0.3f * 8.0f * dt + 0.01f;
+            const float horizontal = radius + 8.0f * dt + 0.01f;
             const float vertical = std::abs(p.velocity.y) * dt + 20.0f * dt * dt + 0.05f;
             
             const spatial::bounds region{
@@ -177,8 +177,9 @@ namespace player
         const float previous_z = p.position.z;
         p.position.z += p.velocity.z * dt;
 
-        for (const auto& b : world)
+        for (const auto id : candidates)
         {
+            const auto& b = world[id];
             if (!overlaps_y(p.position.y, b) || !overlaps_xz(p.position, b))
             {
                 continue;
@@ -198,8 +199,9 @@ namespace player
         p.position.y += p.velocity.y * dt;
         p.grounded = false;
 
-        for (const auto& b : world)
+        for (const auto id : candidates)
         {
+            const auto& b = world[id];
             if (!overlaps_xz(p.position, b))
             {
                 continue;

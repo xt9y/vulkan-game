@@ -100,7 +100,7 @@ namespace clt::prediction
 
                             for (const auto& command : pending)
                             {
-                                ::player::step(avatar, command, colliders);
+                                ::player::step(avatar, command, colliders, &collision_index);
                             }
 
                             if (was_ready)
@@ -137,7 +137,7 @@ namespace clt::prediction
                         input.yaw =
                             data.yaw.load(std::memory_order_relaxed);
 
-                        ::player::step(avatar, input, colliders);
+                        ::player::step(avatar, input, colliders, &collision_index);
                         data.ticks.fetch_add(1, std::memory_order_relaxed);
 
                         pending.push_back(input);

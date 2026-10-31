@@ -213,6 +213,7 @@ namespace
         }
 
         server.colliders = ::player::build_colliders(server.scene);
+        server.collision_index = ::player::build_index(server.colliders);
         server.scene_bytes = net::scene_stream::serialize(server.scene);
         server.scene_hash = net::scene_stream::checksum(server.scene_bytes);
     }
@@ -530,27 +531,31 @@ namespace
         double query_ms = 0;
         double step_ms = 0;
 
-        explicit collision_probe(const ::player::collision_world& bounds)
+        collision_probe(
+            const ::player::collision_world& bounds,
+            const spatial::index& index
+        )
         {
             constexpr int repeats = 32;
             std::uint64_t hits = 0;
             const ::player::state player;
             auto start = clock::now();
 
+            const spatial::bounds region{
+                {player.position.x - 0.3f, player.position.y,
+                 player.position.z - 0.3f},
+                {player.position.x + 0.3f, player.position.y + 1.8f,
+                 player.position.z + 0.3f}
+            };
             for (int run = 0; run < repeats; ++run)
             {
-                for (const auto& b : bounds)
+                index.query(region, [&](std::uint32_t id)
                 {
-                    if (player.position.x + 0.3f > b.min.x &&
-                        player.position.x - 0.3f < b.max.x &&
-                        player.position.z + 0.3f > b.min.z &&
-                        player.position.z - 0.3f < b.max.z &&
-                        player.position.y < b.max.y &&
-                        player.position.y + 1.8f > b.min.y)
+                    if (id < bounds.size())
                     {
                         ++hits;
                     }
-                }
+                });
             }
             query_ms = std::chrono::duration<double, std::milli>(
                 clock::now() - start).count() / repeats;
@@ -560,7 +565,7 @@ namespace
             for (int run = 0; run < repeats; ++run)
             {
                 auto state = player;
-                ::player::step(state, movement, bounds);
+                ::player::step(state, movement, bounds, &index);
                 hits += std::uint64_t(state.grounded);
             }
             step_ms = std::chrono::duration<double, std::milli>(
@@ -863,7 +868,10 @@ int main()
                   << " s\n";
 
         const visibility_probe visibility(*clt::connection::snapshot());
-        const collision_probe collision(srv::application::get()->colliders);
+        const collision_probe collision(
+            srv::application::get()->colliders,
+            srv::application::get()->collision_index
+        );
         std::cout << "COLLISION query_ms=" << collision.query_ms
                   << " step_ms=" << collision.step_ms << '\n';
 
