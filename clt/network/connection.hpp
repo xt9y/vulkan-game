@@ -3,6 +3,11 @@
 #include "srv/shared/net/socket.hpp"
 #include "srv/shared/scene/scene.hpp"
 
+#include "srv/shared/net/movement.hpp"
+
+#include <deque>
+#include <optional>
+
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -25,12 +30,19 @@ namespace clt::connection
         std::mutex scene_mutex;
         std::shared_ptr<const ::scene::state> scene;
 
+        std::mutex player_mutex;
+
+        std::deque<::player::input> outgoing;
+        std::optional<net::movement::snapshot> authority;
+
         std::thread worker;
         bool initialized = false;
     };
 
     state* get();
     std::shared_ptr<const ::scene::state> snapshot();
+    void send_input(const ::player::input& input);
+    std::optional<net::movement::snapshot> take_authority();
     void init();
     void shutdown() noexcept;
 } // namespace clt::connection

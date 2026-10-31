@@ -1,10 +1,13 @@
 #include "connection.hpp"
 
+#include "srv/shared/net/endpoint.hpp"
 #include "srv/shared/net/message.hpp"
+#include "srv/shared/net/movement.hpp"
 #include "srv/shared/net/socket.hpp"
 
 #include "srv/shared/net/scene_stream.hpp"
 
+#include <atomic>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -38,6 +41,29 @@ namespace clt::connection
         return get()->scene;
     }
 
+    void send_input(const ::player::input& input)
+    {
+        auto& data = *get();
+        std::lock_guard<std::mutex> lock(data.player_mutex);
+
+        if (data.outgoing.size() >= 128)
+        {
+            data.outgoing.pop_front();
+        }
+
+        data.outgoing.push_back(input);
+    }
+
+    std::optional<net::movement::snapshot> take_authority()
+    {
+        auto& data = *get();
+        std::lock_guard<std::mutex> lock(data.player_mutex);
+
+        auto result = data.authority;
+        data.authority.reset();
+        return result;
+    }
+
     void init()
     {
         if (get()->initialized || get()->worker.joinable())
@@ -45,8 +71,17 @@ namespace clt::connection
             throw std::runtime_error("clt::connection already initialized");
         }
         
-        std::lock_guard<std::mutex> lock(get()->scene_mutex);
-        get()->scene.reset();
+        {
+            std::lock_guard<std::mutex> lock(get()->player_mutex);
+            get()->outgoing.clear();
+            get()->authority.reset();
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(get()->scene_mutex);
+            get()->scene.reset();
+        }
+
         get()->stop.store(false, std::memory_order_relaxed);
         get()->connected.store(false, std::memory_order_relaxed);
         get()->server_tick.store(0, std::memory_order_relaxed);
@@ -63,8 +98,16 @@ namespace clt::connection
             get()->worker.join();
         }
         
-        std::lock_guard<std::mutex> lock(get()->scene_mutex);
-        get()->scene.reset();
+        {
+            std::lock_guard<std::mutex> lock(get()->player_mutex);
+            get()->outgoing.clear();
+            get()->authority.reset();
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(get()->scene_mutex);
+            get()->scene.reset();
+        }
 
         net::socket::destroy(get()->socket);
         get()->connected.store(false, std::memory_order_relaxed);
@@ -88,6 +131,9 @@ namespace clt::connection
                 std::uint32_t outstanding = 0;
                 std::uint32_t last_accepted = 0;
                 bool waiting = false;
+                
+                std::uint32_t last_player_tick = 0;
+                std::deque<::player::input> recent_inputs;
 
                 std::vector<std::uint8_t> scene_bytes;
                 std::uint32_t scene_fragment = 0;
@@ -130,6 +176,20 @@ namespace clt::connection
                         if (!size)
                         {
                             break;
+                        }
+                        
+                        if (const auto update = net::movement::decode_snapshot(buffer.data(), *size))
+                        {
+                            if (net::endpoint::equal(peer, server) && update->token == token &&
+                                data.connected.load(std::memory_order_relaxed) &&
+                                net::message::newer(update->tick, last_player_tick))
+                            {
+                                last_player_tick = update->tick;
+                                std::lock_guard<std::mutex> lock(data.player_mutex);
+                                data.authority = *update;
+                            }
+
+                            continue;
                         }
 
                         const auto message = net::message::decode(buffer.data(), *size);
@@ -226,6 +286,15 @@ namespace clt::connection
                     {
                         data.connected.store(false, std::memory_order_relaxed);
                         clear_scene();
+
+                        last_player_tick = 0;
+                        recent_inputs.clear();
+                        {
+                            std::lock_guard<std::mutex> lock(data.player_mutex);
+                            data.outgoing.clear();
+                            data.authority.reset();
+                        }        
+
                         waiting = false;
                         next_send = now;
                         retry = 250ms;
