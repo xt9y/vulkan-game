@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 #include "srv/game/options.hpp"
 
 #include "srv/shared/net/message.hpp"
@@ -17,6 +19,8 @@ namespace srv::application
         net::socket::resource socket;
         world::state terrain;
         ::scene::state scene;
+        std::vector<std::uint8_t> scene_bytes;
+        std::uint32_t scene_hash = 0;
         std::uint32_t tick = 0;
         bool initialized = false;
     };

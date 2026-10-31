@@ -3,6 +3,13 @@
 #include "srv/shared/net/message.hpp"
 #include "srv/shared/net/socket.hpp"
 
+#include "srv/shared/net/scene_stream.hpp"
+
+#include <cstring>
+#include <memory>
+#include <mutex>
+#include <vector>
+
 #include <algorithm>
 #include <chrono>
 #include <iostream>
@@ -25,13 +32,21 @@ namespace clt::connection
         return &data;
     }
 
+    std::shared_ptr<const scene::state> snapshot()
+    {
+        std::lock_guard<std::mutex> lock(get()->scene_mutex);
+        return get()->scene;
+    }
+
     void init()
     {
         if (get()->initialized || get()->worker.joinable())
         {
             throw std::runtime_error("clt::connection already initialized");
         }
-
+        
+        std::lock_guard<std::mutex> lock(get()->scene_mutex);
+        get()->scene.reset();
         get()->stop.store(false, std::memory_order_relaxed);
         get()->connected.store(false, std::memory_order_relaxed);
         get()->server_tick.store(0, std::memory_order_relaxed);
@@ -47,6 +62,9 @@ namespace clt::connection
         {
             get()->worker.join();
         }
+        
+        std::lock_guard<std::mutex> lock(get()->scene_mutex);
+        get()->scene.reset();
 
         net::socket::destroy(get()->socket);
         get()->connected.store(false, std::memory_order_relaxed);
@@ -71,10 +89,27 @@ namespace clt::connection
                 std::uint32_t last_accepted = 0;
                 bool waiting = false;
 
+                std::vector<std::uint8_t> scene_bytes;
+                std::uint32_t scene_fragment = 0;
+                std::uint32_t scene_hash = 0;
+                bool scene_ready = false;
+
                 auto next_send = clock::now();
+                auto next_scene_send = next_send;
                 auto last_received = next_send;
                 auto retry = 250ms;
-                std::array<std::uint8_t, net::message::packet_size + 1> buffer{};
+                std::array<std::uint8_t, net::scene_stream::packet_size + 1> buffer{};
+                
+                auto clear_scene = [&]
+                {
+                    scene_bytes.clear();
+                    scene_fragment = 0;
+                    scene_hash = 0;
+                    scene_ready = false;
+
+                    std::lock_guard<std::mutex> lock(data.scene_mutex);
+                    data.scene.reset();
+                };
 
                 auto send = [&](net::message::type type)
                 {
@@ -90,8 +125,7 @@ namespace clt::connection
                     for (int budget = 0; budget < 64; ++budget)
                     {
                         net::endpoint::resource peer;
-                        const auto size =
-                            net::socket::receive(data.socket, peer, buffer.data(), buffer.size());
+                        const auto size = net::socket::receive(data.socket, peer, buffer.data(), buffer.size());
 
                         if (!size)
                         {
@@ -100,8 +134,70 @@ namespace clt::connection
 
                         const auto message = net::message::decode(buffer.data(), *size);
 
-                        if (!message || !net::endpoint::equal(peer, server) ||
-                            message->token != token ||
+                        net::scene_stream::fragment fragment;
+
+                        if (net::endpoint::equal(peer, server) &&
+                            net::scene_stream::decode_fragment(buffer.data(),*size, fragment))
+                        {
+                            if (!data.connected.load(std::memory_order_relaxed) || scene_ready ||
+                                fragment.token != token ||
+                                fragment.index != scene_fragment)
+                            {
+                                continue;
+                            }
+
+                            if (scene_fragment == 0)
+                            {
+                                scene_bytes.resize(fragment.total);
+                                scene_hash = fragment.checksum;
+                            }
+                            else if (fragment.total != scene_bytes.size() || fragment.checksum != scene_hash)
+                            {
+                                clear_scene();
+                                next_scene_send = now;
+                                continue;
+                            }
+
+                            std::memcpy(
+                                scene_bytes.data() + std::size_t(scene_fragment) * net::scene_stream::fragment_size,
+                                fragment.data,
+                                fragment.size
+                            );
+
+                            ++scene_fragment;
+                            next_scene_send = now;
+
+                            if (std::size_t(scene_fragment) * net::scene_stream::fragment_size >= scene_bytes.size())
+                            {
+                                scene::state received;
+
+                                if (net::scene_stream::checksum(scene_bytes) == scene_hash &&
+                                    net::scene_stream::deserialize(scene_bytes, received))
+                                {
+                                    auto completed = std::make_shared<::scene::state>(std::move(received));
+
+                                    std::cout << "Scene received: "
+                                              << completed->meshes.size() << " meshes, "
+                                              << completed->instances.size() << " instances\n";
+
+                                    {
+                                        std::lock_guard<std::mutex> lock(data.scene_mutex);
+                                        data.scene = std::move(completed);
+                                    }
+
+                                    scene_ready = true;
+                                    scene_bytes.clear();
+                                }
+                                else
+                                {
+                                    clear_scene();
+                                }
+                            }
+
+                            continue;
+                        }
+
+                        if (!message || !net::endpoint::equal(peer, server) || message->token != token ||
                             !net::message::newer(message->sequence, last_accepted) ||
                             net::message::newer(message->sequence, outstanding) || !waiting)
                         {
@@ -129,6 +225,7 @@ namespace clt::connection
                     if (data.connected.load(std::memory_order_relaxed) && now - last_received > 3s)
                     {
                         data.connected.store(false, std::memory_order_relaxed);
+                        clear_scene();
                         waiting = false;
                         next_send = now;
                         retry = 250ms;
@@ -136,8 +233,7 @@ namespace clt::connection
 
                     if (now >= next_send)
                     {
-                        send(
-                            data.connected.load(std::memory_order_relaxed)
+                        send(data.connected.load(std::memory_order_relaxed)
                                 ? net::message::type::ping
                                 : net::message::type::hello
                         );
@@ -153,10 +249,37 @@ namespace clt::connection
                         next_send = now + retry;
                     }
 
+                    if (data.connected.load(std::memory_order_relaxed) && !scene_ready && now >= next_scene_send)
+                    {
+                        const auto packet = net::message::encode({
+                            net::message::type::scene_request,
+                            ++sequence,
+                            token,
+                            scene_fragment
+                        });
+
+                        net::socket::send(
+                            data.socket,
+                            server,
+                            packet.data(),
+                            packet.size()
+                        );
+
+                        next_scene_send = now + 100ms;
+                    }
+
+                    const auto wake = data.connected.load(std::memory_order_relaxed) && !scene_ready
+                            ? std::min(next_send, next_scene_send)
+                            : next_send;
+
                     const auto delay = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        next_send - clock::now()
+                        wake - clock::now()
                     );
-                    net::socket::wait_readable(data.socket, std::clamp(delay, 1ms, 50ms));
+
+                    net::socket::wait_readable(
+                        data.socket,
+                        std::clamp(delay, 1ms, 50ms)
+                    );
                 }
 
                 if (data.connected.load(std::memory_order_relaxed))

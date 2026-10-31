@@ -7,17 +7,16 @@
 
 namespace net::message
 {
-    enum class type : std::uint8_t
-    {
+    enum class type : std::uint8_t {
         hello = 1,
         welcome,
         ping,
         state,
-        goodbye
+        goodbye,
+        scene_request
     };
 
-    struct resource
-    {
+    struct resource {
         message::type type;
         std::uint32_t sequence = 0;
         std::uint32_t token = 0;

@@ -3,6 +3,8 @@
 #include "srv/game/application.hpp"
 #include "srv/network/session.hpp"
 
+#include "srv/shared/net/scene_stream.hpp"
+
 #include "srv/scene/test.hpp"
 
 #include <iostream>
@@ -42,6 +44,8 @@ namespace srv::application
         get()->socket = net::socket::create(get()->options.port, get()->options.bind_host);
         session::init();
         scene::build_test(get()->scene);
+        get()->scene_bytes = net::scene_stream::serialize(get()->scene);
+        get()->scene_hash = net::scene_stream::checksum(get()->scene_bytes);
         world::init(get()->terrain, 123456789ULL);
         get()->tick = 0;
         get()->initialized = true;
@@ -107,6 +111,8 @@ namespace srv::application
     {
         net::socket::destroy(get()->socket);
         session::shutdown();
+        get()->scene_bytes.clear();
+        get()->scene_hash = 0;
         get()->scene = {};
         get()->terrain = {};
         get()->tick = 0;
@@ -198,6 +204,19 @@ namespace srv::application
                 existing->has_sequence = true;
                 existing->last_seen = clock::now();
                 reply(peer, net::message::type::state, message);
+            }
+            else if (message.type == net::message::type::scene_request)
+            {
+                existing->last_seen = clock::now();
+
+                net::scene_stream::packet packet;
+
+                const auto size = net::scene_stream::encode_fragment(get()->scene_bytes, message.token, message.value, get()->scene_hash, packet);
+                
+                if (size)
+                {
+                    net::socket::send(get()->socket, peer, packet.data(), size);
+                }
             }
         }
 

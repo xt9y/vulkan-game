@@ -75,10 +75,17 @@ namespace clt::application
             }
 
             const bool connected = connection::get()->connected.load(std::memory_order_relaxed);
-            std::cout << (connected ? "connected" : "disconnected") << ", server tick: "
-                      << connection::get()->server_tick.load(std::memory_order_relaxed) << '\n';
+            const auto scene = connection::snapshot();
 
-            return connected ? 0 : 1;
+            std::cout
+                << (connected ? "connected" : "disconnected")
+                << ", server tick: "
+                << connection::get()->server_tick.load(std::memory_order_relaxed)
+                << ", meshes: " << (scene ? scene->meshes.size() : 0)
+                << ", instances: " << (scene ? scene->instances.size() : 0)
+                << '\n';
+
+            return connected && scene ? 0 : 1;
         }
 
         window::init();
