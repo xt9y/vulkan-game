@@ -46,7 +46,7 @@ namespace clt::renderer
         return &data;
     }
 
-    void init()
+    void init(const char* vertex_path, const char* fragment_path)
     {
         if (get()->initialized)
         {
@@ -219,7 +219,7 @@ namespace clt::renderer
             get()->frame_fence =
                 device.createFence(vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled));
                 
-            scene_renderer::init();
+            scene_renderer::init(vertex_path, fragment_path);
 
             resize();
         }
