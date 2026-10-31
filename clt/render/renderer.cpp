@@ -218,6 +218,8 @@ namespace clt::renderer
             get()->image_ready = device.createSemaphore({});
             get()->frame_fence =
                 device.createFence(vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled));
+                
+            scene_renderer::init();
 
             resize();
         }

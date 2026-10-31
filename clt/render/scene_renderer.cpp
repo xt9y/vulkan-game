@@ -44,6 +44,8 @@ namespace clt::scene_renderer
 
             std::vector<vk::ImageView> views;
             std::vector<vk::Framebuffer> framebuffers;
+
+            std::vector<const char*> shaders;
         };
 
         state& get()
@@ -63,12 +65,18 @@ namespace clt::scene_renderer
             meshes.clear();
         }
 
-        void create_pipeline(const char* path_mesh_vert_spv, const char* path_mesh_frag_spv)
+        void init()
+        {
+            get().shaders[0] = "shd/mesh.vert.spv";
+            get().shaders[1] = "shd/mesh.frag.spv";
+        }
+
+        void create_pipeline()
         {
             auto& data = get();
 
-            const auto vertex_code = vk::shader::read(path_mesh_vert_spv);
-            const auto fragment_code = vk::shader::read(path_mesh_frag_spv);
+            const auto vertex_code = vk::shader::read(data.shaders[0]);
+            const auto fragment_code = vk::shader::read(data.shaders[1]);
 
             vk::ShaderModule vertex_shader{};
             vk::ShaderModule fragment_shader{};
@@ -358,7 +366,7 @@ namespace clt::scene_renderer
                 );
             }
 
-            create_pipeline("shd/mesh.vert.spv", "shd/mesh.frag.spv");
+            create_pipeline();
         }
         catch (...)
         {
