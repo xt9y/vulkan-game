@@ -9,7 +9,9 @@
 #include "clt/render/renderer.hpp"
 #include "srv/game/application.hpp"
 
+#include <atomic>
 #include <chrono>
+#include <exception>
 #include <iostream>
 #include <stdexcept>
 #include <thread>
@@ -100,30 +102,65 @@ namespace clt::application
         renderer::init("shd/mesh.vert.spv", "shd/mesh.frag.spv");
         bool connected = false;
 
-        while (running() && !window::should_close())
+        std::atomic<bool> render_stop{false};
+        std::exception_ptr render_error;
+        std::thread render_thread([&]
         {
-            window::poll_events();
-
-            const auto frame = input::poll();
-            camera::look(frame.mouse_x, frame.mouse_y);
-            prediction::controls(frame.buttons, camera::get()->yaw);
-
-            const bool current = connection::get()->connected.load(std::memory_order_relaxed);
-
-            if (current != connected)
+            try
             {
-                window::set_connected(current);
-                connected = current;
+                while (!render_stop.load(std::memory_order_relaxed))
+                {
+                    if (!window::minimized())
+                    {
+                        renderer::draw_frame();
+                    }
+                    else
+                    {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    }
+                }
             }
+            catch (...)
+            {
+                render_error = std::current_exception();
+                render_stop.store(true, std::memory_order_relaxed);
+            }
+        });
 
-            if (window::minimized())
+        try
+        {
+            while (running() && !window::should_close() &&
+                   !render_stop.load(std::memory_order_relaxed))
             {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                window::poll_events();
+
+                const auto frame = input::poll();
+                camera::look(frame.mouse_x, frame.mouse_y);
+                prediction::controls(frame.buttons, camera::get()->yaw);
+
+                const bool current = connection::get()->connected.load(std::memory_order_relaxed);
+                if (current != connected)
+                {
+                    window::set_connected(current);
+                    connected = current;
+                }
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
-            else
-            {
-                renderer::draw_frame();
-            }
+        }
+        catch (...)
+        {
+            render_stop.store(true, std::memory_order_relaxed);
+            render_thread.join();
+            throw;
+        }
+
+        render_stop.store(true, std::memory_order_relaxed);
+        render_thread.join();
+
+        if (render_error)
+        {
+            std::rethrow_exception(render_error);
         }
 
         return 0;

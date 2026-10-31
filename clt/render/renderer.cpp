@@ -14,7 +14,7 @@ namespace clt::renderer
 {
     namespace
     {
-        static vk::Extent2D framebuffer_extent(GLFWwindow* window, vk::SurfaceCapabilitiesKHR caps)
+        static vk::Extent2D framebuffer_extent(vk::SurfaceCapabilitiesKHR caps)
         {
             if (caps.currentExtent.width != UINT32_MAX)
             {
@@ -22,7 +22,7 @@ namespace clt::renderer
             }
 
             int width, height;
-            glfwGetFramebufferSize(window, &width, &height);
+            window::framebuffer_size(width, height);
 
             return {
                 std::clamp(
@@ -276,7 +276,7 @@ namespace clt::renderer
 
         info.imageFormat = format.format;
         info.imageColorSpace = format.colorSpace;
-        info.imageExtent = framebuffer_extent(window::get()->handle, caps);
+        info.imageExtent = framebuffer_extent(caps);
         info.imageArrayLayers = 1;
         info.imageUsage = vk::ImageUsageFlagBits::eColorAttachment;
         info.imageSharingMode = vk::SharingMode::eExclusive;
@@ -299,14 +299,14 @@ namespace clt::renderer
 
         auto device = vk::device::get()->handle;
         int width, height;
-        glfwGetFramebufferSize(window::get()->handle, &width, &height);
+        window::framebuffer_size(width, height);
 
         if (!width || !height)
         {
             return;
         }
 
-        if (framebuffer_extent(window::get()->handle, vk::surface::capabilities()) !=
+        if (framebuffer_extent(vk::surface::capabilities()) !=
             vk::swapchain::get()->extent)
         {
             resize();

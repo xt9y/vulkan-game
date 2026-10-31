@@ -4,10 +4,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <mutex>
 
 namespace clt::camera
 {
     using namespace vk::util::math;
+    namespace
+    {
+        std::mutex camera_mutex;
+    } // namespace
 
     state* get()
     {
@@ -22,6 +27,7 @@ namespace clt::camera
 
     void look(float dx, float dy)
     {
+        std::lock_guard<std::mutex> lock(camera_mutex);
         auto& camera = *get();
 
         camera.yaw = std::remainder(
@@ -38,6 +44,7 @@ namespace clt::camera
 
     mat4 view()
     {
+        std::lock_guard<std::mutex> lock(camera_mutex);
         const auto& camera = *get();
 
         const vec3 eye = prediction::position() + vec3{0, 1.65f, 0};
@@ -53,6 +60,7 @@ namespace clt::camera
 
     mat4 projection(float aspect)
     {
+        std::lock_guard<std::mutex> lock(camera_mutex);
         return perspective(get()->fov, aspect, 0.1f, 1000.0f);
     }
 } // namespace clt::camera
