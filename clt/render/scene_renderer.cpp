@@ -1,6 +1,7 @@
 #include "scene_renderer.hpp"
 
 #include "clt/network/connection.hpp"
+#include "clt/render/upload.hpp"
 #include "clt/view/camera.hpp"
 #include "srv/shared/spatial/index.hpp"
 #include "srv/shared/scene/scene.hpp"
@@ -505,30 +506,16 @@ namespace clt::scene_renderer
                     const auto index_bytes =
                         mesh.indices.size() * sizeof(std::uint32_t);
 
-                    result.vertices = vk::buffer::create(
-                        vertex_bytes,
-                        vk::BufferUsageFlagBits::eVertexBuffer,
-                        vk::MemoryPropertyFlagBits::eHostVisible |
-                        vk::MemoryPropertyFlagBits::eHostCoherent
-                    );
-
-                    result.indices = vk::buffer::create(
-                        index_bytes,
-                        vk::BufferUsageFlagBits::eIndexBuffer,
-                        vk::MemoryPropertyFlagBits::eHostVisible |
-                        vk::MemoryPropertyFlagBits::eHostCoherent
-                    );
-
-                    vk::buffer::write(
-                        result.vertices,
+                    result.vertices = upload::static_buffer(
                         mesh.vertices.data(),
-                        vertex_bytes
+                        vertex_bytes,
+                        vk::BufferUsageFlagBits::eVertexBuffer
                     );
 
-                    vk::buffer::write(
-                        result.indices,
+                    result.indices = upload::static_buffer(
                         mesh.indices.data(),
-                        index_bytes
+                        index_bytes,
+                        vk::BufferUsageFlagBits::eIndexBuffer
                     );
 
                     if (!mesh.vertices.empty())
