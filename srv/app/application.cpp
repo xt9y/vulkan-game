@@ -67,16 +67,9 @@ namespace srv::application
     void begin_stream()
     {
         auto& data = *get();
-        if (data.scene_batches.empty())
-        {
-            data.scene_bytes = net::scene_stream::serialize(data.scene);
-            data.scene_hash = net::scene_stream::checksum(data.scene_bytes);
-            data.scene_batches.push_back({data.scene_bytes, data.scene_hash, false});
-        }
-        else
-        {
-            data.scene_batches.back().final = false;
-        }
+        data.scene_bytes = net::scene_stream::serialize(data.scene);
+        data.scene_hash = net::scene_stream::checksum(data.scene_bytes);
+        data.scene_batches = {{data.scene_bytes, data.scene_hash, false}};
     }
 
     void append_scene(::scene::state patch, bool final)
