@@ -140,9 +140,12 @@ namespace clt::connection
                 std::deque<::player::input> unacknowledged;
 
                 std::vector<std::uint8_t> scene_bytes;
+                std::vector<std::uint8_t> scene_received;
                 std::uint32_t scene_fragment = 0;
                 std::uint32_t scene_batch = 0;
                 std::uint32_t scene_hash = 0;
+                std::uint32_t requested_until = 0;
+                bool scene_last = false;
                 bool scene_ready = false;
 
                 auto next_send = clock::now();
@@ -155,9 +158,12 @@ namespace clt::connection
                 auto clear_scene = [&]
                 {
                     scene_bytes.clear();
+                    scene_received.clear();
                     scene_fragment = 0;
                     scene_batch = 0;
                     scene_hash = 0;
+                    requested_until = 0;
+                    scene_last = false;
                     scene_ready = false;
                     data.scene_complete.store(false, std::memory_order_relaxed);
 
@@ -220,39 +226,64 @@ namespace clt::connection
                         net::scene_stream::fragment fragment;
 
                         if (net::endpoint::equal(peer, server) &&
-                            net::scene_stream::decode_fragment(buffer.data(),*size, fragment))
+                            net::scene_stream::decode_fragment(buffer.data(), *size, fragment))
                         {
                             if (!data.connected.load(std::memory_order_relaxed) || scene_ready ||
-                                fragment.token != token ||
-                                fragment.index != ((scene_batch << 16) | scene_fragment))
+                                fragment.token != token || (fragment.index >> 16) != scene_batch)
                             {
                                 continue;
                             }
 
                             last_received = now;
+                            const auto index = fragment.index & 0xffffu;
 
-                            if (scene_fragment == 0)
+                            if (scene_bytes.empty())
                             {
                                 scene_bytes.resize(fragment.total);
+                                scene_received.assign(
+                                    (fragment.total + net::scene_stream::fragment_size - 1) /
+                                    net::scene_stream::fragment_size, 0
+                                );
                                 scene_hash = fragment.checksum;
+                                scene_last = fragment.final;
                             }
-                            else if (fragment.total != scene_bytes.size() || fragment.checksum != scene_hash)
+                            else if (fragment.total != scene_bytes.size() ||
+                                     fragment.checksum != scene_hash ||
+                                     fragment.final != scene_last)
                             {
                                 clear_scene();
                                 next_scene_send = now;
                                 continue;
                             }
 
-                            std::memcpy(
-                                scene_bytes.data() + std::size_t(scene_fragment) * net::scene_stream::fragment_size,
-                                fragment.data,
-                                fragment.size
-                            );
+                            if (index >= scene_received.size())
+                            {
+                                continue;
+                            }
 
-                            ++scene_fragment;
-                            next_scene_send = now;
+                            if (!scene_received[index])
+                            {
+                                std::memcpy(
+                                    scene_bytes.data() +
+                                        std::size_t(index) * net::scene_stream::fragment_size,
+                                    fragment.data, fragment.size
+                                );
+                                scene_received[index] = 1;
 
-                            if (std::size_t(scene_fragment) * net::scene_stream::fragment_size >= scene_bytes.size())
+                                while (scene_fragment < scene_received.size() &&
+                                       scene_received[scene_fragment])
+                                {
+                                    ++scene_fragment;
+                                }
+
+                                // A complete burst unlocks the next window immediately.
+                                if (scene_fragment >= requested_until)
+                                {
+                                    next_scene_send = now;
+                                }
+                            }
+
+                            if (scene_fragment == scene_received.size())
                             {
                                 scene::state received;
 
@@ -279,11 +310,14 @@ namespace clt::connection
                                         data.scene = std::move(completed);
                                     }
 
-                                    scene_ready = fragment.final;
+                                    scene_ready = scene_last;
                                     data.scene_complete.store(scene_ready, std::memory_order_relaxed);
                                     ++scene_batch;
                                     scene_fragment = 0;
+                                    requested_until = 0;
                                     scene_hash = 0;
+                                    scene_last = false;
+                                    scene_received.clear();
                                     scene_bytes.clear();
                                     next_scene_send = now;
 
@@ -396,7 +430,8 @@ namespace clt::connection
                             packet.size()
                         );
 
-                        next_scene_send = now + 100ms;
+                        requested_until = scene_fragment + 32;
+                        next_scene_send = now + 40ms;
                     }
 
                     std::deque<::player::input> inputs;
