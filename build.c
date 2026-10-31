@@ -30,11 +30,7 @@ void build(C_Build *b)
     c_dep_cmake_option(glfw, "-DGLFW_BUILD_WAYLAND=OFF");
 #endif
     c_dep_include(glfw, "include");
-#ifdef _WIN32
     c_dep_link(glfw, "glfw3");
-#else
-    c_dep_link(glfw, "glfw");
-#endif
     c_use(game, glfw);
 
 #ifdef __APPLE__
