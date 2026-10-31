@@ -172,8 +172,19 @@ namespace srv::application
                             return value.sequence == incoming.sequence;
                         });
 
-                        if (duplicate == client.inputs.end() && client.inputs.size() < 128)
+                        if (duplicate == client.inputs.end())
                         {
+                            // Always admit the earliest missing input. Otherwise a full
+                            // out-of-order queue could permanently block reconciliation.
+                            if (client.inputs.size() >= 128)
+                            {
+                                if (incoming.sequence != client.processed_input + 1)
+                                {
+                                    break;
+                                }
+                                client.inputs.pop_back();
+                            }
+
                             const auto position = std::find_if(client.inputs.begin(), client.inputs.end(), [&](const player::input& value){
                                 return net::message::newer(value.sequence, incoming.sequence);
                             });

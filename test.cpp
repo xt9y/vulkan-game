@@ -176,6 +176,25 @@ namespace
     {
         auto& server = *srv::application::get();
 
+        // Only the workload scene gets an extended floor. The real test scene
+        // remains small, while the player can walk through the entire benchmark.
+        const float extent = std::max(
+            500.0f, 100.0f + float((count + 199) / 200) * 1.6f
+        );
+        for (auto& mesh : server.scene.meshes)
+        {
+            if (mesh.id != 1)
+            {
+                continue;
+            }
+
+            for (auto& vertex : mesh.vertices)
+            {
+                vertex.position.x = std::copysign(extent, vertex.position.x);
+                vertex.position.z = std::copysign(extent, vertex.position.z);
+            }
+        }
+
         // Reuse the existing cube mesh. This stresses the real indexed drawing
         // path, transforms, depth, scene transfer and collision cache.
         for (std::size_t i = 0; i < count; ++i)

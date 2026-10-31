@@ -126,7 +126,7 @@ namespace clt::connection
             {
                 data.socket = net::socket::create();
                 const auto server = net::endpoint::resolve(host, port);
-                const std::uint32_t token = std::random_device{}() | 1u;
+                std::uint32_t token = std::random_device{}() | 1u;
 
                 std::uint32_t sequence = 0;
                 std::uint32_t outstanding = 0;
@@ -183,9 +183,17 @@ namespace clt::connection
                         if (const auto update = net::movement::decode_snapshot(buffer.data(), *size))
                         {
                             if (net::endpoint::equal(peer, server) && update->token == token &&
-                                data.connected.load(std::memory_order_relaxed) &&
-                                net::message::newer(update->tick, last_player_tick))
+                                data.connected.load(std::memory_order_relaxed))
                             {
+                                // Valid movement traffic proves the server is still alive even
+                                // when heartbeat replies are delayed or lost.
+                                last_received = now;
+
+                                if (!net::message::newer(update->tick, last_player_tick))
+                                {
+                                    continue;
+                                }
+
                                 last_player_tick = update->tick;
                                 data.player_snapshots.fetch_add(1, std::memory_order_relaxed);
                                 while (!unacknowledged.empty() &&
@@ -214,6 +222,8 @@ namespace clt::connection
                             {
                                 continue;
                             }
+
+                            last_received = now;
 
                             if (scene_fragment == 0)
                             {
@@ -296,9 +306,22 @@ namespace clt::connection
                         data.connected.store(false, std::memory_order_relaxed);
                         clear_scene();
 
+                        // A reconnect is a new player session. Reset the network token so
+                        // the server cannot keep the old input acknowledgement sequence.
+                        const auto old_token = token;
+                        do
+                        {
+                            token = std::random_device{}() | 1u;
+                        } while (token == old_token);
+
+                        sequence = 0;
+                        outstanding = 0;
+                        last_accepted = 0;
                         last_player_tick = 0;
                         unacknowledged.clear();
                         next_move_send = now;
+                        next_scene_send = now;
+                        last_received = now;
                         {
                             std::lock_guard<std::mutex> lock(data.player_mutex);
                             data.outgoing.clear();
