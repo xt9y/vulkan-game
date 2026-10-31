@@ -9,6 +9,8 @@
 #include <mutex>
 #include <thread>
 
+#include <cmath>
+
 namespace clt::prediction
 {
     namespace
@@ -20,6 +22,8 @@ namespace clt::prediction
 
             std::atomic<std::uint32_t> buttons{0};
             std::atomic<float> yaw{0};
+            std::atomic<std::uint64_t> ticks{0};
+            std::atomic<float> error{0};
 
             std::mutex pose_mutex;
             vk::util::math::vec3 pose{0, 0, 4};
@@ -41,6 +45,7 @@ namespace clt::prediction
             ::player::collision_world colliders;
 
             ::player::state avatar;
+            vk::util::math::vec3 visual_offset{};
             std::deque<::player::input> pending;
 
             std::uint32_t sequence = 0;
@@ -65,6 +70,7 @@ namespace clt::prediction
                         : ::player::collision_world{};
 
                     avatar = {};
+                    visual_offset = {};
                     pending.clear();
 
                     sequence = 0;
@@ -78,6 +84,8 @@ namespace clt::prediction
                     {
                         if (!ready || net::message::newer(update->tick, last_server_tick))
                         {
+                            const auto previous = avatar.position;
+                            const bool was_ready = ready;
                             avatar = update->player;
                             last_server_tick = update->tick;
                             ready = true;
@@ -89,11 +97,22 @@ namespace clt::prediction
 
                             for (const auto& command : pending)
                             {
-                                ::player::step(
-                                    avatar,
-                                    command,
-                                    colliders
-                                );
+                                ::player::step(avatar, command, colliders);
+                            }
+
+                            if (was_ready)
+                            {
+                                const auto delta = previous - avatar.position;
+                                const auto distance = vk::util::math::length(delta);
+                                data.error.store(distance, std::memory_order_relaxed);
+                                if (distance < 2.0f)
+                                {
+                                    visual_offset = visual_offset + delta;
+                                }
+                                else
+                                {
+                                    visual_offset = {};
+                                }
                             }
                         }
                     }
@@ -116,6 +135,7 @@ namespace clt::prediction
                             data.yaw.load(std::memory_order_relaxed);
 
                         ::player::step(avatar, input, colliders);
+                        data.ticks.fetch_add(1, std::memory_order_relaxed);
 
                         pending.push_back(input);
 
@@ -128,9 +148,10 @@ namespace clt::prediction
                     }
                 }
 
+                visual_offset = visual_offset * 0.8f;
                 {
                     std::lock_guard<std::mutex> lock(data.pose_mutex);
-                    data.pose = avatar.position;
+                    data.pose = avatar.position + visual_offset;
                 }
 
                 next += tick;
@@ -152,6 +173,8 @@ namespace clt::prediction
         data.stop.store(false, std::memory_order_relaxed);
         data.buttons.store(0, std::memory_order_relaxed);
         data.yaw.store(0, std::memory_order_relaxed);
+        data.ticks.store(0, std::memory_order_relaxed);
+        data.error.store(0, std::memory_order_relaxed);
 
         data.worker = std::thread(run);
     }
@@ -168,6 +191,16 @@ namespace clt::prediction
 
         std::lock_guard<std::mutex> lock(data.pose_mutex);
         return data.pose;
+    }
+
+    std::uint64_t ticks()
+    {
+        return get().ticks.load(std::memory_order_relaxed);
+    }
+
+    float correction()
+    {
+        return get().error.load(std::memory_order_relaxed);
     }
 
     void shutdown()

@@ -85,6 +85,7 @@ namespace clt::connection
         get()->stop.store(false, std::memory_order_relaxed);
         get()->connected.store(false, std::memory_order_relaxed);
         get()->server_tick.store(0, std::memory_order_relaxed);
+        get()->player_snapshots.store(0, std::memory_order_relaxed);
         get()->worker = std::thread(run, get()->host, get()->port);
         get()->initialized = true;
     }
@@ -133,7 +134,7 @@ namespace clt::connection
                 bool waiting = false;
                 
                 std::uint32_t last_player_tick = 0;
-                std::deque<::player::input> recent_inputs;
+                std::deque<::player::input> unacknowledged;
 
                 std::vector<std::uint8_t> scene_bytes;
                 std::uint32_t scene_fragment = 0;
@@ -142,6 +143,7 @@ namespace clt::connection
 
                 auto next_send = clock::now();
                 auto next_scene_send = next_send;
+                auto next_move_send = next_send;
                 auto last_received = next_send;
                 auto retry = 250ms;
                 std::array<std::uint8_t, net::scene_stream::packet_size + 1> buffer{};
@@ -185,6 +187,13 @@ namespace clt::connection
                                 net::message::newer(update->tick, last_player_tick))
                             {
                                 last_player_tick = update->tick;
+                                data.player_snapshots.fetch_add(1, std::memory_order_relaxed);
+                                while (!unacknowledged.empty() &&
+                                       !net::message::newer(unacknowledged.front().sequence,
+                                                            update->sequence))
+                                {
+                                    unacknowledged.pop_front();
+                                }
                                 std::lock_guard<std::mutex> lock(data.player_mutex);
                                 data.authority = *update;
                             }
@@ -288,7 +297,8 @@ namespace clt::connection
                         clear_scene();
 
                         last_player_tick = 0;
-                        recent_inputs.clear();
+                        unacknowledged.clear();
+                        next_move_send = now;
                         {
                             std::lock_guard<std::mutex> lock(data.player_mutex);
                             data.outgoing.clear();
@@ -353,34 +363,43 @@ namespace clt::connection
                     {
                         for (const auto& input : inputs)
                         {
-                            recent_inputs.push_back(input);
+                            unacknowledged.push_back(input);
+                        }
 
-                            if (recent_inputs.size() > 3)
+                        if (!unacknowledged.empty() && now >= next_move_send)
+                        {
+                            auto transmit = [&](const ::player::input& input)
                             {
-                                recent_inputs.pop_front();
+                                const auto packet = net::movement::encode(token, input);
+                                net::socket::send(data.socket, server, packet.data(), packet.size());
+                            };
+
+                            // Recover missing early ticks while transmitting current input.
+                            for (std::size_t i = 0; i < std::min<std::size_t>(8, unacknowledged.size()); ++i)
+                            {
+                                transmit(unacknowledged[i]);
                             }
 
-                            for (const auto& value : recent_inputs)
+                            if (unacknowledged.size() > 8)
                             {
-                                const auto packet = net::movement::encode(token, value);
-
-                                net::socket::send(
-                                    data.socket,
-                                    server,
-                                    packet.data(),
-                                    packet.size()
-                                );
+                                transmit(unacknowledged.back());
                             }
+
+                            next_move_send = now + 16ms;
                         }
                     }
                     else
                     {
-                        recent_inputs.clear();
+                        unacknowledged.clear();
                     }
 
-                    const auto wake = data.connected.load(std::memory_order_relaxed) && !scene_ready
+                    auto wake = data.connected.load(std::memory_order_relaxed) && !scene_ready
                             ? std::min(next_send, next_scene_send)
                             : next_send;
+                    if (!unacknowledged.empty())
+                    {
+                        wake = std::min(wake, next_move_send);
+                    }
 
                     const auto delay = std::chrono::duration_cast<std::chrono::milliseconds>(
                         wake - clock::now()
