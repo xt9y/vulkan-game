@@ -1,5 +1,10 @@
 #include <cbuild.h>
 
+/*  Shader 
+ *  glslangValidator -V shd/mesh.vert -o shd/mesh.vert.spv
+    glslangValidator -V shd/mesh.frag -o shd/mesh.frag.spv
+*/
+
 void build(C_Build* b)
 {
     C_Target* game = c_executable(b, "vulkan-game");
