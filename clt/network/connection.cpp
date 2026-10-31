@@ -337,6 +337,47 @@ namespace clt::connection
                         next_scene_send = now + 100ms;
                     }
 
+                    std::deque<::player::input> inputs;
+
+                    {
+                        std::lock_guard<std::mutex> lock(data.player_mutex);
+
+                        for (int i = 0; i < 8 && !data.outgoing.empty(); ++i)
+                        {
+                            inputs.push_back(data.outgoing.front());
+                            data.outgoing.pop_front();
+                        }
+                    }
+
+                    if (data.connected.load(std::memory_order_relaxed))
+                    {
+                        for (const auto& input : inputs)
+                        {
+                            recent_inputs.push_back(input);
+
+                            if (recent_inputs.size() > 3)
+                            {
+                                recent_inputs.pop_front();
+                            }
+
+                            for (const auto& value : recent_inputs)
+                            {
+                                const auto packet = net::movement::encode(token, value);
+
+                                net::socket::send(
+                                    data.socket,
+                                    server,
+                                    packet.data(),
+                                    packet.size()
+                                );
+                            }
+                        }
+                    }
+                    else
+                    {
+                        recent_inputs.clear();
+                    }
+
                     const auto wake = data.connected.load(std::memory_order_relaxed) && !scene_ready
                             ? std::min(next_send, next_scene_send)
                             : next_send;
@@ -347,7 +388,11 @@ namespace clt::connection
 
                     net::socket::wait_readable(
                         data.socket,
-                        std::clamp(delay, 1ms, 50ms)
+                        std::clamp(
+                            delay,
+                            1ms,
+                            data.connected.load(std::memory_order_relaxed) ? 5ms : 50ms
+                        )
                     );
                 }
 

@@ -1,6 +1,9 @@
 #include "application.hpp"
 
+#include "clt/input/input.hpp"
 #include "clt/network/connection.hpp"
+#include "clt/player/prediction.hpp"
+#include "clt/view/camera.hpp"
 #include "clt/platform/vulkan_loader.hpp"
 #include "clt/platform/window.hpp"
 #include "clt/render/renderer.hpp"
@@ -89,12 +92,22 @@ namespace clt::application
         }
 
         window::init();
+
+        input::init();
+        camera::init();
+        prediction::init();
+
         renderer::init("shd/mesh.vert.spv", "shd/mesh.frag.spv");
         bool connected = false;
 
         while (running() && !window::should_close())
         {
             window::poll_events();
+
+            const auto frame = input::poll();
+            camera::look(frame.mouse_x, frame.mouse_y);
+            prediction::controls(frame.buttons, camera::get()->yaw);
+
             const bool current = connection::get()->connected.load(std::memory_order_relaxed);
 
             if (current != connected)
@@ -118,8 +131,12 @@ namespace clt::application
 
     void shutdown() noexcept
     {
+        prediction::shutdown();
         renderer::shutdown();
+
+        input::shutdown();
         window::shutdown();
+
         vulkan_loader::shutdown();
         connection::shutdown();
         get()->initialized = false;

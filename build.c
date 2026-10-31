@@ -15,11 +15,15 @@ void build(C_Build* b)
     c_sources(game, "srv/app/*.cpp");
     c_sources(game, "srv/network/*.cpp");
     c_sources(game, "srv/shared/net/*.cpp");
+    c_sources(game, "srv/shared/player/*.cpp");
 
     c_sources(game, "clt/app/*.cpp");
     c_sources(game, "clt/network/*.cpp");
     c_sources(game, "clt/platform/*.cpp");
     c_sources(game, "clt/render/*.cpp");
+    c_sources(game, "clt/input/*.cpp");
+    c_sources(game, "clt/view/*.cpp");
+    c_sources(game, "clt/player/*.cpp");
 
     c_include(game, ".");
     c_warnings_strict(game);

@@ -1,6 +1,7 @@
 #include "scene_renderer.hpp"
 
 #include "clt/network/connection.hpp"
+#include "clt/view/camera.hpp"
 #include "srv/shared/scene/scene.hpp"
 
 #include <algorithm>
@@ -500,19 +501,10 @@ namespace clt::scene_renderer
 
         if (data.snapshot)
         {
-            const auto projection = perspective(
-                1.04719755f,
-                float(extent.width) / float(extent.height),
-                0.1f,
-                100.0f
-            );
-
-            const auto view = look_at(
-                {8.0f, 6.0f, 12.0f},
-                {0.0f, 0.0f, 0.0f}
-            );
-
-            const auto view_projection = projection * view;
+            const auto view_projection =
+                camera::projection(
+                    float(extent.width) / float(extent.height)
+                ) * camera::view();
 
             for (const auto& instance : data.snapshot->instances)
             {
