@@ -1,6 +1,7 @@
+# Generated build output, dependency metadata and editor caches.
 build/
 .cbuild/
 .cache/
-.DS_Store
 c.lock
 compile_commands.json
+.DS_Store
