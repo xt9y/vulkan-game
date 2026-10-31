@@ -324,27 +324,45 @@ namespace srv::application
             {
                 existing->last_seen = clock::now();
 
-                net::scene_stream::packet packet;
-
                 const auto batch_id = message.value >> 16;
                 const auto fragment_id = message.value & 0xffffu;
 
                 if (batch_id < get()->scene_batches.size())
                 {
                     const auto& batch = get()->scene_batches[batch_id];
-                    const auto size = net::scene_stream::encode_fragment(
-                        batch.bytes, message.token, fragment_id,
-                        batch.hash, packet, batch.final
-                    );
+                    const auto count = (batch.bytes.size() +
+                        net::scene_stream::fragment_size - 1) /
+                        net::scene_stream::fragment_size;
 
-                    if (size)
+                    // A bounded burst amortizes UDP round trips. The client
+                    // still checks every fragment and requests any missing one.
+                    for (std::size_t i = fragment_id;
+                         i < std::min<std::size_t>(count, fragment_id + 8); ++i)
                     {
-                        // Keep the batch number in the fragment acknowledgement.
-                        packet[16] = std::uint8_t(message.value >> 24);
-                        packet[17] = std::uint8_t(message.value >> 16);
-                        packet[18] = std::uint8_t(message.value >> 8);
-                        packet[19] = std::uint8_t(message.value);
-                        net::socket::send(get()->socket, peer, packet.data(), size);
+                        net::scene_stream::packet packet;
+                        const auto size = net::scene_stream::encode_fragment(
+                            batch.bytes, message.token,
+                            static_cast<std::uint32_t>(i), batch.hash,
+                            packet, batch.final
+                        );
+
+                        if (!size)
+                        {
+                            break;
+                        }
+
+                        const auto index = (batch_id << 16) |
+                            static_cast<std::uint32_t>(i);
+                        packet[16] = std::uint8_t(index >> 24);
+                        packet[17] = std::uint8_t(index >> 16);
+                        packet[18] = std::uint8_t(index >> 8);
+                        packet[19] = std::uint8_t(index);
+
+                        if (!net::socket::send(
+                            get()->socket, peer, packet.data(), size))
+                        {
+                            break;
+                        }
                     }
                 }
             }
