@@ -27,6 +27,7 @@ namespace srv::application
     namespace
     {
         void receive_messages();
+        void send_scene_fragments();
         void handle(const net::endpoint::resource& peer, const net::message::resource& message);
         void reply(
             const net::endpoint::resource& peer,
@@ -154,17 +155,32 @@ namespace srv::application
 
             session::expire(now);
 
+            // Process input and simulation before bulk scene data. Bound the
+            // amount of network work done inside one authoritative tick.
             receive_messages();
             tick_players();
-            generation::commit();
-            next += interval;
+            send_scene_fragments();
 
-            if (next < clock::now())
+            // Streaming generation may be expensive; commit only when there is
+            // room before the next tick, without blocking player simulation.
+            if (clock::now() + 2ms < next + interval)
             {
-                next = clock::now(); // Skip missed ticks rather than accumulate catch-up work.
+                generation::commit();
             }
 
-            std::this_thread::sleep_until(next);
+            next += interval;
+            const auto completed = clock::now();
+
+            // Recover up to one missed tick on wakeup jitter rather than
+            // permanently shifting the 60 Hz schedule behind real time.
+            if (completed > next + interval)
+            {
+                next = completed - interval;
+            }
+            if (next > completed)
+            {
+                std::this_thread::sleep_until(next);
+            }
         }
 
         return 0;
@@ -193,7 +209,8 @@ namespace srv::application
             // truncation.
             std::array<std::uint8_t, 25> buffer{};
 
-            for (int budget = 0; budget < 256; ++budget)
+            const auto deadline = clock::now() + 2ms;
+            for (int budget = 0; budget < 96 && clock::now() < deadline; ++budget)
             {
                 net::endpoint::resource peer;
                 const auto size = net::socket::receive(get()->socket, peer, buffer.data(), buffer.size());
@@ -323,47 +340,67 @@ namespace srv::application
             else if (message.type == net::message::type::scene_request)
             {
                 existing->last_seen = clock::now();
+                // One pending request per session; never spend physics time
+                // transmitting bulk scene packets from the receive loop.
+                existing->scene_request = message.value;
+                existing->scene_pending = true;
+            }
+        }
 
-                const auto batch_id = message.value >> 16;
-                const auto fragment_id = message.value & 0xffffu;
+        void send_scene_fragments()
+        {
+            constexpr int max_fragments = 32;
+            const auto deadline = clock::now() + 2ms;
+            int remaining = max_fragments;
 
-                if (batch_id < get()->scene_batches.size())
+            for (auto& client : session::get()->clients)
+            {
+                if (!client.active || !client.scene_pending || !remaining ||
+                    clock::now() >= deadline)
                 {
-                    const auto& batch = get()->scene_batches[batch_id];
-                    const auto count = (batch.bytes.size() +
-                        net::scene_stream::fragment_size - 1) /
-                        net::scene_stream::fragment_size;
+                    continue;
+                }
+                client.scene_pending = false;
 
-                    // A bounded burst amortizes UDP round trips. The client
-                    // still checks every fragment and requests any missing one.
-                    for (std::size_t i = fragment_id;
-                         i < std::min<std::size_t>(count, fragment_id + 32); ++i)
+                const auto batch_id = client.scene_request >> 16;
+                const auto fragment_id = client.scene_request & 0xffffu;
+                if (batch_id >= get()->scene_batches.size())
+                {
+                    continue;
+                }
+
+                const auto& batch = get()->scene_batches[batch_id];
+                const auto count = (batch.bytes.size() +
+                    net::scene_stream::fragment_size - 1) /
+                    net::scene_stream::fragment_size;
+
+                for (std::size_t i = fragment_id;
+                     i < std::min<std::size_t>(count, fragment_id + 32) &&
+                     remaining && clock::now() < deadline; ++i)
+                {
+                    net::scene_stream::packet packet;
+                    const auto size = net::scene_stream::encode_fragment(
+                        batch.bytes, client.token, static_cast<std::uint32_t>(i),
+                        batch.hash, packet, batch.final
+                    );
+                    if (!size)
                     {
-                        net::scene_stream::packet packet;
-                        const auto size = net::scene_stream::encode_fragment(
-                            batch.bytes, message.token,
-                            static_cast<std::uint32_t>(i), batch.hash,
-                            packet, batch.final
-                        );
-
-                        if (!size)
-                        {
-                            break;
-                        }
-
-                        const auto index = (batch_id << 16) |
-                            static_cast<std::uint32_t>(i);
-                        packet[16] = std::uint8_t(index >> 24);
-                        packet[17] = std::uint8_t(index >> 16);
-                        packet[18] = std::uint8_t(index >> 8);
-                        packet[19] = std::uint8_t(index);
-
-                        if (!net::socket::send(
-                            get()->socket, peer, packet.data(), size))
-                        {
-                            break;
-                        }
+                        break;
                     }
+
+                    const auto index = (batch_id << 16) |
+                        static_cast<std::uint32_t>(i);
+                    packet[16] = std::uint8_t(index >> 24);
+                    packet[17] = std::uint8_t(index >> 16);
+                    packet[18] = std::uint8_t(index >> 8);
+                    packet[19] = std::uint8_t(index);
+
+                    if (!net::socket::send(
+                        get()->socket, client.endpoint, packet.data(), size))
+                    {
+                        break; // The client retries from its missing index.
+                    }
+                    --remaining;
                 }
             }
         }

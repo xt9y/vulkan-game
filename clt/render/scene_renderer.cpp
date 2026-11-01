@@ -10,6 +10,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstring>
 #include <cstdlib>
 #include <filesystem>
 #include <cmath>
@@ -59,6 +60,8 @@ namespace clt::scene_renderer
             vk::DescriptorSetLayout instance_layout{};
             vk::DescriptorPool instance_pool{};
             draw_stats timings{};
+            mat4 cached_view_projection{};
+            bool visibility_valid = false;
 
             vk::RenderPass render_pass{};
             vk::PipelineLayout layout{};
@@ -756,6 +759,7 @@ namespace clt::scene_renderer
                 }
             }
             data.snapshot = source;
+            data.visibility_valid = false;
             return;
         }
 
@@ -893,6 +897,7 @@ namespace clt::scene_renderer
         data.instance_pool = new_pool;
         data.meshes = std::move(meshes);
         data.snapshot = source;
+        data.visibility_valid = false;
     }
 
     void draw(vk::CommandBuffer command, std::uint32_t image)
@@ -954,37 +959,55 @@ namespace clt::scene_renderer
                 0, sizeof(view_projection), &view_projection
             );
 
+            // Exact matrix equality is safe: any camera, projection or scene
+            // change invalidates visibility. Never reuse stale culling results.
+            const bool recull = !data.visibility_valid ||
+                std::memcmp(data.cached_view_projection.data(),
+                            view_projection.data(), sizeof(mat4)) != 0;
+
             for (auto& mesh : data.meshes)
             {
-                const auto start = clock::now();
-                mesh.visible.clear();
+                if (recull)
+                {
+                    const auto start = clock::now();
+                    mesh.visible.clear();
 
-                const auto stats = mesh.visibility_index.query_frustum_fast(
-                    visibility_planes,
-                    [&](std::uint32_t id)
+                    const auto stats = mesh.visibility_index.query_frustum_ranges(
+                        visibility_planes,
+                        [&](const std::uint32_t* first, std::size_t count)
+                        {
+                            mesh.visible.insert(mesh.visible.end(), first, first + count);
+                        }
+                    );
+
+                    data.timings.cull_ms += std::chrono::duration<double, std::milli>(
+                        clock::now() - start).count();
+                    data.timings.tested_nodes += stats.tested_nodes;
+                    data.timings.accepted_groups += stats.accepted_groups;
+
+                    if (!mesh.visible.empty())
                     {
-                        mesh.visible.push_back(id);
+                        const auto upload_begin = clock::now();
+                        vk::buffer::write(
+                            mesh.visible_buffer, mesh.visible.data(),
+                            mesh.visible.size() * sizeof(std::uint32_t)
+                        );
+                        data.timings.index_upload_ms += std::chrono::duration<double, std::milli>(
+                            clock::now() - upload_begin).count();
+                        data.timings.uploaded_bytes +=
+                            mesh.visible.size() * sizeof(std::uint32_t);
                     }
-                );
+                }
+                else
+                {
+                    ++data.timings.cache_hits;
+                }
 
-                data.timings.cull_ms += std::chrono::duration<double, std::milli>(
-                    clock::now() - start).count();
-                data.timings.tested_nodes += stats.tested_nodes;
-                data.timings.accepted_groups += stats.accepted_groups;
                 data.timings.visible_instances += mesh.visible.size();
-
                 if (mesh.visible.empty())
                 {
                     continue;
                 }
-
-                const auto upload_begin = clock::now();
-                vk::buffer::write(
-                    mesh.visible_buffer, mesh.visible.data(),
-                    mesh.visible.size() * sizeof(std::uint32_t)
-                );
-                data.timings.index_upload_ms += std::chrono::duration<double, std::milli>(
-                    clock::now() - upload_begin).count();
 
                 const auto record_begin = clock::now();
                 const std::array<vk::Buffer, 2> buffers{
@@ -1004,6 +1027,12 @@ namespace clt::scene_renderer
                     clock::now() - record_begin).count();
                 ++data.timings.draw_calls;
             }
+
+            if (recull)
+            {
+                data.cached_view_projection = view_projection;
+                data.visibility_valid = true;
+            }
         }
 
         command.endRenderPass();
@@ -1015,6 +1044,7 @@ namespace clt::scene_renderer
 
         destroy_meshes(data.meshes);
         data.snapshot.reset();
+        data.visibility_valid = false;
         if (data.instance_pool)
         {
             vk::device::get()->handle.destroyDescriptorPool(data.instance_pool);
