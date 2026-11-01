@@ -580,6 +580,8 @@ namespace
         std::vector<double> cull_ms;
         std::vector<double> index_upload_ms;
         std::vector<double> commands_ms;
+        std::size_t cached_frames = 0;
+        std::uint64_t uploaded_bytes = 0;
         std::size_t tested_nodes = 0;
         std::size_t accepted_groups = 0;
         std::size_t gpu_visible = 0;
@@ -616,7 +618,8 @@ namespace
         bool render_stall,
         gpu_profiler& gpu,
         const visibility_probe& visibility,
-        const collision_probe& collision
+        const collision_probe& collision,
+        bool stationary = false
     )
     {
         proxy.loss.store(loss, std::memory_order_relaxed);
@@ -662,7 +665,8 @@ namespace
             }
 
             clt::prediction::controls(
-                (frame / 120) % 2 ? ::player::left : ::player::forward, 0
+                stationary ? 0 :
+                ((frame / 120) % 2 ? ::player::left : ::player::forward), 0
             );
 
             const auto before = clock::now();
@@ -679,6 +683,8 @@ namespace
                 output.tested_nodes = measured.scene.tested_nodes;
                 output.accepted_groups = measured.scene.accepted_groups;
                 output.gpu_visible = measured.scene.visible_instances;
+                output.cached_frames += std::size_t(measured.scene.cache_hits > 0);
+                output.uploaded_bytes += measured.scene.uploaded_bytes;
                 if (measured.gpu_ms >= 0)
                 {
                     output.gpu_ms.push_back(measured.gpu_ms);
@@ -773,7 +779,10 @@ namespace
                   << " commands_ms=" << average(value.commands_ms)
                   << " gpu_visible=" << value.gpu_visible
                   << " bvh_nodes=" << value.tested_nodes
-                  << " accepted_groups=" << value.accepted_groups << '\n';
+                  << " accepted_groups=" << value.accepted_groups
+                  << " cache_frames=" << value.cached_frames
+                  << "/" << value.record_ms.size()
+                  << " uploaded_kib=" << (value.uploaded_bytes / 1024) << '\n';
     }
 } // namespace
 
@@ -955,6 +964,12 @@ int main()
         );
         std::cout << "COLLISION query_ms=" << collision.query_ms
                   << " step_ms=" << collision.step_ms << '\n';
+
+        const auto stationary = measure(
+            "stationary", 2.0, proxy, generation_ops, 0, 0, false,
+            gpu, visibility, collision, true
+        );
+        report(stationary);
 
         const auto baseline = measure(
             "baseline", 4.0, proxy, generation_ops, 0, 0, false,
