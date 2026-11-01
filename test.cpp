@@ -641,8 +641,8 @@ namespace
         summary sample() const
         {
             const auto extent = vk::swapchain::get()->extent;
-            const mat4 m = clt::camera::projection(
-                float(extent.width) / float(extent.height)) * clt::camera::view();
+            const mat4 m = clt::camera::view_projection(
+                float(extent.width) / float(extent.height));
 
             struct plane { vec3 n; float d; float len; };
             const auto make = [&](int row, float sign)

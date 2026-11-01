@@ -5,7 +5,9 @@
 
 #include "srv/shared/net/movement.hpp"
 
+#include <chrono>
 #include <deque>
+#include <vector>
 #include <exception>
 #include <optional>
 
@@ -32,6 +34,8 @@ namespace clt::connection
 
         std::mutex scene_mutex;
         std::shared_ptr<const ::scene::state> scene;
+        std::vector<::scene::state> pending_scene;
+        std::chrono::steady_clock::time_point last_publish{};
 
         std::mutex error_mutex;
         std::exception_ptr worker_error;

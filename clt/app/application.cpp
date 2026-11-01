@@ -135,7 +135,7 @@ namespace clt::application
                 if (frame.toggle_tonemapping)
                     postprocess::toggle(postprocess::effect::tonemapping);
                 camera::look(frame.mouse_x, frame.mouse_y);
-                prediction::controls(frame.buttons, camera::get()->yaw);
+                prediction::controls(frame.buttons, camera::snapshot().yaw);
 
                 const bool current = connection::get()->connected.load(std::memory_order_relaxed);
                 if (current != connected)

@@ -3,6 +3,7 @@
 #include "scene_renderer.hpp"
 #include "postprocess.hpp"
 #include "passes.hpp"
+#include "upload.hpp"
 
 #include "clt/platform/vulkan_loader.hpp"
 #include "clt/platform/window.hpp"
@@ -12,6 +13,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <stdexcept>
+#include <thread>
 
 namespace clt::renderer
 {
@@ -250,6 +252,7 @@ namespace clt::renderer
 
         auto device = vk::device::get()->handle;
         vk::device::idle();
+        upload::retire(true);
 
         passes::release();
         postprocess::release();
@@ -360,15 +363,23 @@ namespace clt::renderer
             throw std::runtime_error("Frame fence wait failed");
         }
 
+        // Resource replacements are only applied once all older submissions
+        // have finished. Never block the render thread waiting on every frame.
+        upload::retire();
         if (scene_renderer::needs_sync())
         {
+            bool safe = upload::ready();
             for (const auto& context : data.frames)
             {
-                if (device.waitForFences(context.fence, true, UINT64_MAX) !=
-                    vk::Result::eSuccess)
+                if (device.getFenceStatus(context.fence) != vk::Result::eSuccess)
                 {
-                    throw std::runtime_error("Scene update frame fence failed");
+                    safe = false;
                 }
+            }
+            if (!safe)
+            {
+                std::this_thread::yield();
+                return;
             }
             scene_renderer::synchronize();
         }
@@ -452,6 +463,7 @@ namespace clt::renderer
             try
             {
                 vk::device::idle();
+                upload::retire(true);
             }
             catch (...)
             {
