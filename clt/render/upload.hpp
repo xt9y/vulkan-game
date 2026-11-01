@@ -16,6 +16,7 @@ namespace clt::upload
         vk::CommandBuffer command{};
         std::vector<vk::buffer::resource> staging;
         vk::Fence fence{};
+        bool submitted = false;
 
     public:
         batch() = default;
@@ -103,6 +104,7 @@ namespace clt::upload
             submit.commandBufferCount = 1;
             submit.pCommandBuffers = &command;
             vk::submit::queue(vk::queue::get()->graphics, {submit}, fence);
+            submitted = true;
             if (device.waitForFences(fence, true, UINT64_MAX) != vk::Result::eSuccess)
                 throw std::runtime_error("Mesh upload fence failed");
 
@@ -125,13 +127,14 @@ namespace clt::upload
                 vk::device::get()->handle.destroyFence(fence);
                 fence = nullptr;
             }
+            submitted = false;
         }
 
         ~batch()
         {
             // The caller must call finish() for pending copies. The destructor
             // releases unsubmitted work during exception unwinding.
-            if (fence)
+            if (submitted && fence)
             {
                 try
                 {
