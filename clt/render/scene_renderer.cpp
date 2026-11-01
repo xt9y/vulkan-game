@@ -58,6 +58,12 @@ namespace clt::scene_renderer
         static_assert(sizeof(instance_data) == 128);
         static_assert(sizeof(::scene::vertex) == 32);
 
+        struct cull_parameters {
+            std::array<vec4, 6> planes{};
+            std::uint32_t count = 0;
+        };
+        static_assert(sizeof(cull_parameters) <= 128);
+
         struct state {
             std::shared_ptr<const ::scene::state> snapshot;
             std::vector<gpu_mesh> meshes;
@@ -456,19 +462,69 @@ namespace clt::scene_renderer
             throw std::invalid_argument("Scene shader paths must not be empty");
         }
 
-        get().shaders = {vertex_path, fragment_path};
+        auto& data = get();
+        data.shaders = {vertex_path, fragment_path};
 
-        vk::DescriptorSetLayoutBinding binding{};
-        binding.binding = 0;
-        binding.descriptorType = vk::DescriptorType::eStorageBuffer;
-        binding.descriptorCount = 1;
-        binding.stageFlags = vk::ShaderStageFlagBits::eVertex;
+        const auto* requested = std::getenv("VK_GPU_CULL");
+        const auto family = vk::queue::get()->graphics_family;
+        const auto families =
+            vk::physical_device::get()->handle.getQueueFamilyProperties();
+        data.gpu_culling = requested && requested[0] == '1' &&
+            requested[1] == '\0' && family < families.size() &&
+            bool(families[family].queueFlags & vk::QueueFlagBits::eCompute);
 
+        std::array<vk::DescriptorSetLayoutBinding, 4> bindings{};
+        for (std::uint32_t i = 0; i < bindings.size(); ++i)
+        {
+            bindings[i].binding = i;
+            bindings[i].descriptorType = vk::DescriptorType::eStorageBuffer;
+            bindings[i].descriptorCount = 1;
+            bindings[i].stageFlags = i == 0
+                ? vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eCompute
+                : vk::ShaderStageFlagBits::eCompute;
+        }
+
+        const auto device = vk::device::get()->handle;
         vk::DescriptorSetLayoutCreateInfo info{};
-        info.bindingCount = 1;
-        info.pBindings = &binding;
-        get().instance_layout =
-            vk::device::get()->handle.createDescriptorSetLayout(info);
+        info.bindingCount = data.gpu_culling ? 4 : 1;
+        info.pBindings = bindings.data();
+        data.instance_layout = device.createDescriptorSetLayout(info);
+
+        if (data.gpu_culling)
+        {
+            update_shader("shd/cull.comp.spv");
+
+            vk::PushConstantRange range{};
+            range.stageFlags = vk::ShaderStageFlagBits::eCompute;
+            range.offset = 0;
+            range.size = sizeof(cull_parameters);
+
+            vk::PipelineLayoutCreateInfo layout{};
+            layout.setLayoutCount = 1;
+            layout.pSetLayouts = &data.instance_layout;
+            layout.pushConstantRangeCount = 1;
+            layout.pPushConstantRanges = &range;
+            data.cull_layout = device.createPipelineLayout(layout);
+
+            const auto code = vk::shader::read("shd/cull.comp.spv");
+            auto module = vk::shader::create(code);
+            try
+            {
+                vk::ComputePipelineCreateInfo pipeline{};
+                pipeline.stage.stage = vk::ShaderStageFlagBits::eCompute;
+                pipeline.stage.module = module;
+                pipeline.stage.pName = "main";
+                pipeline.layout = data.cull_layout;
+                data.cull_pipeline = vk::pipeline::compute(pipeline);
+            }
+            catch (...)
+            {
+                vk::shader::destroy(module);
+                throw;
+            }
+            vk::shader::destroy(module);
+            std::cout << "GPU-driven frustum culling enabled\n";
+        }
     }
 
     draw_stats last_stats()
@@ -595,7 +651,10 @@ namespace clt::scene_renderer
 
     void bind_instances(gpu_mesh& mesh)
     {
-        if (!mesh.instance_set || !mesh.instance_buffer.handle)
+        if (!mesh.instance_set || !mesh.instance_buffer.handle ||
+            (get().gpu_culling && (!mesh.bounds_buffer.handle ||
+                                   !mesh.visible_buffer.handle ||
+                                   !mesh.indirect_buffer.handle)))
         {
             return;
         }
@@ -621,9 +680,10 @@ namespace clt::scene_renderer
             writes[i].descriptorType = vk::DescriptorType::eStorageBuffer;
             writes[i].pBufferInfo = &infos[i];
         }
-        vk::device::get()->handle.updateDescriptorSets(
-            {writes.data(), count}, {}
+        std::vector<vk::WriteDescriptorSet> updates(
+            writes.begin(), writes.begin() + count
         );
+        vk::device::get()->handle.updateDescriptorSets(updates, {});
     }
 
     void refresh_instances(gpu_mesh& mesh, std::size_t first = 0)
@@ -1136,6 +1196,16 @@ namespace clt::scene_renderer
 
         release_frame_resources();
 
+        if (data.cull_pipeline)
+        {
+            vk::pipeline::destroy(data.cull_pipeline);
+            data.cull_pipeline = nullptr;
+        }
+        if (data.cull_layout)
+        {
+            vk::device::get()->handle.destroyPipelineLayout(data.cull_layout);
+            data.cull_layout = nullptr;
+        }
         if (data.instance_layout)
         {
             vk::device::get()->handle.destroyDescriptorSetLayout(data.instance_layout);
