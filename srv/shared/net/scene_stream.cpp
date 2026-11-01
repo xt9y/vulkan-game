@@ -214,6 +214,9 @@ namespace net::scene_stream
             add(bytes, instance.mesh_id);
             add(bytes, instance.animation);
             add(bytes, instance.animation_tick);
+            add(bytes, instance.overlay_animation);
+            add(bytes, instance.overlay_root);
+            add_float(bytes, instance.overlay_weight);
             add_vec3(bytes, instance.pose.position);
             add_vec3(bytes, instance.pose.scale);
 
@@ -403,6 +406,10 @@ namespace net::scene_stream
                 !input.take(instance.mesh_id) ||
                 !input.take(instance.animation) ||
                 !input.take(instance.animation_tick) ||
+                !input.take(instance.overlay_animation) ||
+                !input.take(instance.overlay_root) ||
+                !input.take_float(instance.overlay_weight) ||
+                instance.overlay_weight < 0.f || instance.overlay_weight > 1.f ||
                 !take_vec3(input, instance.pose.position) ||
                 !take_vec3(input, instance.pose.scale) ||
                 !input.take_float(instance.pose.rotation.x) ||
