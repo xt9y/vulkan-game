@@ -99,7 +99,16 @@ namespace clt::passes
         }
         catch (...)
         {
-            release();  // Profiling is optional, not a renderer requirement.
+            // Timestamp support is optional; image layouts are not. Keep
+            // per-image transition state even if query allocation fails.
+            for (auto pool : data.queries)
+            {
+                if (pool) vk::query::destroy(pool);
+            }
+            data.queries.clear();
+            data.written.clear();
+            data.valid_bits = 0;
+            data.period = 0;
         }
     }
 
