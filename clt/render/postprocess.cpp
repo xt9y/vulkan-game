@@ -133,7 +133,7 @@ namespace clt::postprocess
             vk::ImageCreateInfo info{};
             info.imageType = vk::ImageType::e2D;
             info.format = format;
-            info.extent = {extent.width, extent.height, 1};
+            info.extent = vk::Extent3D{extent.width, extent.height, 1};
             info.mipLevels = 1;
             info.arrayLayers = 1;
             info.samples = vk::SampleCountFlagBits::e1;

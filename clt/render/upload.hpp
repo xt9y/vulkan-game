@@ -138,7 +138,7 @@ namespace clt::upload
             {
                 try
                 {
-                    vk::device::get()->handle.waitForFences(fence, true, UINT64_MAX);
+                    (void)vk::device::get()->handle.waitForFences(fence, true, UINT64_MAX);
                 }
                 catch (...)
                 {

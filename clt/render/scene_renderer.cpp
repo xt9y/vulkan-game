@@ -376,7 +376,7 @@ namespace clt::scene_renderer
                     vk::ImageCreateInfo image{};
                     image.imageType = vk::ImageType::e2D;
                     image.format = color_formats[i];
-                    image.extent = {extent.width, extent.height, 1};
+                    image.extent = vk::Extent3D{extent.width, extent.height, 1};
                     image.mipLevels = 1;
                     image.arrayLayers = 1;
                     image.samples = vk::SampleCountFlagBits::e1;
@@ -398,7 +398,7 @@ namespace clt::scene_renderer
                 vk::ImageCreateInfo depth{};
                 depth.imageType = vk::ImageType::e2D;
                 depth.format = depth_format();
-                depth.extent = {extent.width, extent.height, 1};
+                depth.extent = vk::Extent3D{extent.width, extent.height, 1};
                 depth.mipLevels = 1;
                 depth.arrayLayers = 1;
                 depth.samples = vk::SampleCountFlagBits::e1;
