@@ -74,9 +74,11 @@ namespace srv::application
             if (!generation::submit([path = std::string(model)]() -> generation::completion
             {
                 auto imported = assets::load(path);
-                return [imported = std::move(imported)]() mutable
+                return [imported = std::make_shared<::scene::state>(
+                    std::move(imported))]() mutable
                 {
-                    append_scene(std::move(imported), true);
+                    get()->importing = std::move(imported);
+                    get()->next_texture = 0;
                 };
             }))
             {
@@ -166,6 +168,29 @@ namespace srv::application
             // amount of network work done inside one authoritative tick.
             receive_messages();
             tick_players();
+
+            // Publish at most one CPU asset batch per authoritative tick.
+            if (get()->importing)
+            {
+                auto& imported = *get()->importing;
+                ::scene::state patch;
+                if (get()->next_texture < imported.textures.size())
+                {
+                    patch.textures.push_back(
+                        std::move(imported.textures[get()->next_texture++])
+                    );
+                }
+                else
+                {
+                    patch.meshes = std::move(imported.meshes);
+                    patch.instances = std::move(imported.instances);
+                }
+                const bool final = get()->next_texture == imported.textures.size() &&
+                    !patch.meshes.empty();
+                append_scene(std::move(patch), final);
+                if (final) get()->importing.reset();
+            }
+
             send_scene_fragments();
 
             // Streaming generation may be expensive; commit only when there is
@@ -203,6 +228,8 @@ namespace srv::application
         get()->colliders.clear();
         get()->scene_hash = 0;
         get()->scene = {};
+        get()->importing.reset();
+        get()->next_texture = 0;
         get()->terrain = {};
         get()->tick = 0;
         get()->initialized = false;
