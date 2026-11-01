@@ -305,7 +305,7 @@ namespace net::scene_stream
         output[1] = 'S';
         output[2] = 'C';
         output[3] = 'N';
-        output[4] = 1;
+        output[4] = 2;
         output[5] = final ? 1 : 0;
 
         write(output.data() + 8, token);
@@ -323,7 +323,7 @@ namespace net::scene_stream
         if (size <= header_size || size > packet_size ||
             bytes[0] != 'V' || bytes[1] != 'S' ||
             bytes[2] != 'C' || bytes[3] != 'N' ||
-            bytes[4] != 1 || bytes[5] > 1 ||
+            bytes[4] != 2 || bytes[5] > 1 ||
             bytes[6] || bytes[7])
         {
             return false;

@@ -77,11 +77,58 @@ namespace clt::prediction
                 }
                 else if (source != cached_scene)
                 {
-                    // An appended scene batch changes collision geometry, not
-                    // the player's network identity or prediction timeline.
+                    // New batches add collision geometry without resetting
+                    // the player's input sequence or rebuilding old BVH nodes.
+                    bool appended = cached_scene &&
+                        source->meshes.size() == cached_scene->meshes.size() &&
+                        source->instances.size() >= cached_scene->instances.size();
+
+                    if (appended)
+                    {
+                        for (std::size_t i = 0; i < source->meshes.size(); ++i)
+                        {
+                            if (source->meshes[i].id != cached_scene->meshes[i].id)
+                            {
+                                appended = false;
+                                break;
+                            }
+                        }
+                    }
+                    if (appended)
+                    {
+                        for (std::size_t i = 0; i < cached_scene->instances.size(); ++i)
+                        {
+                            if (source->instances[i].id != cached_scene->instances[i].id ||
+                                source->instances[i].mesh_id != cached_scene->instances[i].mesh_id)
+                            {
+                                appended = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (appended)
+                    {
+                        const auto start = cached_scene->instances.size();
+                        std::vector<::scene::instance> incoming(
+                            source->instances.begin() + start, source->instances.end()
+                        );
+                        auto added = ::player::build_colliders(source->meshes, incoming);
+                        std::vector<spatial::bounds> boxes;
+                        boxes.reserve(added.size());
+                        for (const auto& box : added)
+                        {
+                            boxes.push_back({box.min, box.max});
+                        }
+                        colliders.insert(colliders.end(), added.begin(), added.end());
+                        collision_index.append(boxes);
+                    }
+                    else
+                    {
+                        colliders = ::player::build_colliders(*source);
+                        collision_index = ::player::build_index(colliders);
+                    }
                     cached_scene = source;
-                    colliders = ::player::build_colliders(*source);
-                    collision_index = ::player::build_index(colliders);
                 }
 
                 if (connected && source)

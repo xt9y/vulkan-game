@@ -771,7 +771,7 @@ int main()
         const auto now = clock::now();
         std::cout << "STARTUP " << label << " "
                   << std::chrono::duration<double, std::milli>(
-                         now - startup_mark).count() << " ms\n";
+                         now - startup_mark).count() << " ms\n" << std::flush;
         startup_mark = now;
     };
 
@@ -821,6 +821,7 @@ int main()
             }
         }
 
+        milestone("generation_jobs_queued");
         std::cout << "WORKLOAD actual Vulkan + UDP + movement + generation\n"
                   << "  target_instances=" << (count + 4)
                   << " initial_scene_bytes=" << srv::application::get()->scene_bytes.size()
@@ -858,6 +859,7 @@ int main()
             }
         });
 
+        milestone("server_proxy_threads_started");
         clt::connection::get()->host = "127.0.0.1";
         clt::connection::get()->port = proxy_port;
         clt::connection::init();
@@ -880,22 +882,38 @@ int main()
                 clt::prediction::ticks() < 10) && clock::now() < deadline)
         {
             clt::window::poll_events();
-            clt::renderer::draw_frame();
 
             if (clock::now() >= next_progress)
             {
                 const auto partial = clt::connection::snapshot();
-                std::cout << "STREAM rendered_instances="
+                visibility_probe::summary counts{};
+                if (partial)
+                {
+                    counts = visibility_probe(*partial).sample();
+                }
+
+                std::cout << "STREAM received="
                           << (partial ? partial->instances.size() : 0)
-                          << "/" << (count + 4) << '\n';
+                          << "/" << (count + 4)
+                          << " visible=" << counts.visible
+                          << " draw_calls=" << counts.draw_calls
+                          << " complete=" << clt::connection::get()->scene_complete.load(
+                              std::memory_order_relaxed) << '\n' << std::flush;
                 next_progress = clock::now() + 1s;
             }
+
+            clt::renderer::draw_frame();
         }
 
         if (!clt::connection::get()->scene_complete.load(std::memory_order_relaxed) ||
             clt::prediction::ticks() < 10)
         {
             throw std::runtime_error("Scene stream did not finish before startup deadline");
+        }
+        const auto complete_scene = clt::connection::snapshot();
+        if (!complete_scene || complete_scene->instances.size() != count + 4)
+        {
+            throw std::runtime_error("Scene transfer completed without the expected instances");
         }
         milestone("progressive_scene_stream+gpu_upload+first_player_ticks");
         std::cout << "STARTUP total "
