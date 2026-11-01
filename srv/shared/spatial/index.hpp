@@ -104,8 +104,6 @@ namespace spatial
 
             if (count <= 8)
             {
-                nodes[id].first = first;
-                nodes[id].count = count;
                 return id;
             }
 

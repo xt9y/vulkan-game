@@ -208,17 +208,8 @@ namespace clt::scene_renderer
                     near, make(2, -1)};
         }
 
-        bool visible(const std::array<plane, 6>& planes, vec3 center, float radius)
-        {
-            for (const auto& p : planes)
-            {
-                if (dot(p.normal, center) + p.offset < -radius * p.magnitude)
-                {
-                    return false;
-                }
-            }
-            return true;
-        }
+        // Visibility is tested by the shared spatial index, including
+        // whole-subtree acceptance and conservative leaf bounds.
 
         void create_pipeline()
         {
