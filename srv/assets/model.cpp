@@ -81,7 +81,8 @@ namespace srv::assets
     } // namespace
 
     ::scene::state load(const std::filesystem::path& path,
-                        std::uint32_t first_mesh, std::uint32_t first_instance)
+                        std::uint32_t first_mesh, std::uint32_t first_instance,
+                        std::uint32_t first_texture, std::uint32_t first_skin)
     {
         auto bytes = fastgltf::MappedGltfFile::FromPath(path);
         if (!bytes) throw std::runtime_error("Could not open glTF: " + path.string());
@@ -99,14 +100,14 @@ namespace srv::assets
 
         auto asset = std::move(parsed.get());
         ::scene::state result;
-        result.textures = images(asset, 1000);
+        result.textures = images(asset, first_texture);
         std::vector<std::vector<std::uint32_t>> remaps;
         remaps.reserve(asset.skins.size());
         for (std::size_t i = 0; i < asset.skins.size(); ++i)
         {
             auto imported = import_rig(asset, i);
             remaps.push_back(std::move(imported.skin_joints));
-            result.skins.push_back(serialize_rig(asset, i, 1000 + std::uint32_t(i)));
+            result.skins.push_back(serialize_rig(asset, i, first_skin + std::uint32_t(i)));
         }
         if (asset.scenes.empty()) return result;
 
@@ -139,8 +140,8 @@ namespace srv::assets
 
                 ::scene::mesh mesh;
                 mesh.id = first_mesh++;
-                mesh.skin_id = skinned ? 1000 + std::uint32_t(*node.skinIndex) : 0;
-                mesh.surface = material(asset, primitive, 1000);
+                mesh.skin_id = skinned ? first_skin + std::uint32_t(*node.skinIndex) : 0;
+                mesh.surface = material(asset, primitive, first_texture);
                 mesh.vertices.resize(positions.count);
 
                 for (std::size_t i = 0; i < positions.count; ++i)
