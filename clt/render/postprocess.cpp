@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
-#include <filesystem>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -59,23 +58,7 @@ namespace clt::postprocess
 
         vk::ShaderModule shader(const char* filename)
         {
-            const std::filesystem::path binary(filename);
-            auto source = binary;
-            source.replace_extension();
-            if (!std::filesystem::exists(binary) ||
-                (std::filesystem::exists(source) &&
-                 std::filesystem::last_write_time(source) >
-                 std::filesystem::last_write_time(binary)))
-            {
-                const std::string command =
-                    "glslangValidator -V \"" + source.string() +
-                    "\" -o \"" + binary.string() + "\"";
-                if (std::system(command.c_str()) != 0)
-                {
-                    throw std::runtime_error("Shader compilation failed: " + source.string());
-                }
-            }
-            return vk::shader::create(vk::shader::read(binary.string()));
+            return vk::shader::create(vk::shader::read(filename));
         }
 
         vk::DescriptorSetLayout layout(

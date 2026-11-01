@@ -112,89 +112,6 @@ namespace clt::scene_renderer
             meshes.clear();
         }
 
-        // The checked-in SPIR-V can be older than the GLSL source even when
-        // its file timestamp is newer (for example after git checkout).
-        bool has_instance_inputs(const std::string& path)
-        {
-            if (!std::filesystem::exists(path))
-            {
-                return false;
-            }
-
-            const auto words = vk::shader::read(path);
-            bool model = false;
-            bool normal = false;
-
-            for (std::size_t i = 5; i < words.size();)
-            {
-                const auto count = words[i] >> 16;
-                const auto opcode = words[i] & 0xffffu;
-                if (!count || count > words.size() - i)
-                {
-                    return false;
-                }
-
-                // SPIR-V OpDecorate with Location decoration (30).
-                if (opcode == 71 && count >= 4 && words[i + 2] == 30)
-                {
-                    model |= words[i + 3] == 2;
-                    normal |= words[i + 3] == 6;
-                }
-                i += count;
-            }
-
-            // The new shader reads matrices from a storage buffer; location
-            // 2 is a single uint and location 6 must no longer be present.
-            return model && !normal;
-        }
-
-        void update_shader(const std::string& name, bool instanced = false)
-        {
-            const std::filesystem::path binary(name);
-            if (binary.extension() != ".spv")
-            {
-                return;
-            }
-
-            auto source = binary;
-            source.replace_extension();
-            const bool valid = std::filesystem::exists(binary) &&
-                (!instanced || has_instance_inputs(name));
-
-            if (!std::filesystem::exists(source))
-            {
-                if (!valid)
-                {
-                    throw std::runtime_error("Missing compatible shader: " + name);
-                }
-                return;
-            }
-
-            if (valid && std::filesystem::last_write_time(binary) >=
-                         std::filesystem::last_write_time(source))
-            {
-                return;
-            }
-
-            // Configured shader paths are local application resources.
-            if (name.find_first_of("\"'$;`\\") != std::string::npos)
-            {
-                throw std::runtime_error("Unsupported shader path characters");
-            }
-
-            const std::string command =
-                "glslangValidator -V \"" + source.string() + "\" -o \"" + name + "\"";
-            if (std::system(command.c_str()) != 0)
-            {
-                throw std::runtime_error("Shader compilation failed: " + source.string());
-            }
-
-            if (instanced && !has_instance_inputs(name))
-            {
-                throw std::runtime_error("Compiled shader lacks instance attributes: " + name);
-            }
-        }
-
         struct plane {
             vec3 normal;
             float offset;
@@ -226,8 +143,6 @@ namespace clt::scene_renderer
         {
             auto& data = get();
 
-            update_shader(data.shaders[0], true);
-            update_shader(data.shaders[1]);
             const auto vertex_code = vk::shader::read(data.shaders[0]);
             const auto fragment_code = vk::shader::read(data.shaders[1]);
 
@@ -544,7 +459,6 @@ namespace clt::scene_renderer
         info.pBindings = bindings.data();
         data.instance_layout = device.createDescriptorSetLayout(info);
 
-        update_shader("shd/cull.comp.spv");
 
         vk::PushConstantRange range{};
         range.stageFlags = vk::ShaderStageFlagBits::eCompute;

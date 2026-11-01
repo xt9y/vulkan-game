@@ -1,12 +1,46 @@
 #include <cbuild.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/stat.h>
 
-/*  Shader 
- *  glslangValidator -V shd/mesh.vert -o shd/mesh.vert.spv
-    glslangValidator -V shd/mesh.frag -o shd/mesh.frag.spv
-*/
+static void compile_shaders(void)
+{
+    static const char* sources[] = {
+        "shd/mesh.vert", "shd/mesh.frag", "shd/cull.comp",
+        "shd/light.comp", "shd/tone.comp",
+        "shd/fullscreen.vert", "shd/present.frag"
+    };
+    for (size_t i = 0; i < sizeof(sources) / sizeof(sources[0]); ++i)
+    {
+        char binary[256];
+        char command[640];
+        struct stat input;
+        struct stat output;
+        snprintf(binary, sizeof(binary), "%s.spv", sources[i]);
+
+        if (stat(sources[i], &input) != 0)
+        {
+            fprintf(stderr, "Missing shader source: %s\n", sources[i]);
+            exit(1);
+        }
+        if (stat(binary, &output) == 0 && output.st_mtime > input.st_mtime)
+        {
+            continue;
+        }
+
+        snprintf(command, sizeof(command),
+                 "glslangValidator -V \"%s\" -o \"%s\"", sources[i], binary);
+        if (system(command) != 0)
+        {
+            fprintf(stderr, "Shader compilation failed: %s\n", sources[i]);
+            exit(1);
+        }
+    }
+}
 
 void build(C_Build* b)
 {
+    compile_shaders();
     C_Target* game = c_executable(b, "vulkan-game");
     c_sources(game, "main.cpp");
     c_sources(game, "srv/world/*.cpp");
