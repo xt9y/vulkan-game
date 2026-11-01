@@ -1,4 +1,5 @@
 #include "model.hpp"
+#include "image.hpp"
 
 #include <fastgltf/core.hpp>
 #include <fastgltf/tools.hpp>
@@ -14,7 +15,7 @@ namespace srv::assets
     namespace
     {
         ::scene::material material(const fastgltf::Asset& asset,
-                                   const fastgltf::Primitive& primitive)
+                                   const fastgltf::Primitive& primitive, std::uint32_t first_texture)
         {
             ::scene::material result;
             if (!primitive.materialIndex) return result;
@@ -28,6 +29,24 @@ namespace srv::assets
             result.alpha_cutoff = float(source.alphaCutoff);
             result.alpha_mode = std::uint32_t(source.alphaMode);
             result.double_sided = source.doubleSided;
+            const auto id = [&](std::size_t texture_index) -> std::uint32_t
+            {
+                const auto& ref = asset.textures.at(texture_index);
+                if (!ref.imageIndex)
+                    throw std::runtime_error("Unsupported compressed glTF texture");
+                return first_texture + std::uint32_t(*ref.imageIndex);
+            };
+            if (source.pbrData.baseColorTexture)
+                result.base_color_texture = id(source.pbrData.baseColorTexture->textureIndex);
+            if (source.pbrData.metallicRoughnessTexture)
+                result.metallic_roughness_texture = id(
+                    source.pbrData.metallicRoughnessTexture->textureIndex);
+            if (source.normalTexture)
+                result.normal_texture = id(source.normalTexture->textureIndex);
+            if (source.occlusionTexture)
+                result.occlusion_texture = id(source.occlusionTexture->textureIndex);
+            if (source.emissiveTexture)
+                result.emissive_texture = id(source.emissiveTexture->textureIndex);
             return result;
         }
 
@@ -68,6 +87,7 @@ namespace srv::assets
 
         fastgltf::Parser parser(fastgltf::Extensions::KHR_mesh_quantization);
         constexpr auto options = fastgltf::Options::LoadExternalBuffers |
+            fastgltf::Options::LoadExternalImages |
             fastgltf::Options::GenerateMeshIndices |
             fastgltf::Options::DecomposeNodeMatrices;
 
@@ -78,6 +98,7 @@ namespace srv::assets
 
         auto asset = std::move(parsed.get());
         ::scene::state result;
+        result.textures = images(asset, 1000);
         if (asset.scenes.empty()) return result;
 
         const auto scene_index = asset.defaultScene.value_or(std::size_t(0));
@@ -106,7 +127,7 @@ namespace srv::assets
 
                 ::scene::mesh mesh;
                 mesh.id = first_mesh++;
-                mesh.surface = material(asset, primitive);
+                mesh.surface = material(asset, primitive, 1000);
                 mesh.vertices.resize(positions.count);
 
                 for (std::size_t i = 0; i < positions.count; ++i)
