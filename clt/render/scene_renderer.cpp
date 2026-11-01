@@ -53,6 +53,7 @@ namespace clt::scene_renderer
         struct cull_parameters {
             std::array<vec4, 6> planes{};
             std::uint32_t count = 0;
+            std::uint32_t index_count = 0;
         };
         static_assert(sizeof(cull_parameters) <= 128);
 
@@ -680,7 +681,8 @@ namespace clt::scene_renderer
                 auto replacement = vk::buffer::create(
                     std::max<vk::DeviceSize>(visible_bytes, frame.visible.size * 2),
                     vk::BufferUsageFlagBits::eVertexBuffer |
-                    vk::BufferUsageFlagBits::eStorageBuffer,
+                    vk::BufferUsageFlagBits::eStorageBuffer |
+                    vk::BufferUsageFlagBits::eTransferSrc,
                     vk::MemoryPropertyFlagBits::eDeviceLocal
                 );
                 if (frame.visible.handle) vk::buffer::destroy(frame.visible);
@@ -693,13 +695,10 @@ namespace clt::scene_renderer
                     sizeof(vk::DrawIndexedIndirectCommand),
                     vk::BufferUsageFlagBits::eStorageBuffer |
                     vk::BufferUsageFlagBits::eIndirectBuffer |
-                    vk::BufferUsageFlagBits::eTransferDst,
-                    vk::MemoryPropertyFlagBits::eHostVisible |
-                    vk::MemoryPropertyFlagBits::eHostCoherent
+                    vk::BufferUsageFlagBits::eTransferDst |
+                    vk::BufferUsageFlagBits::eTransferSrc,
+                    vk::MemoryPropertyFlagBits::eDeviceLocal
                 );
-                vk::DrawIndexedIndirectCommand draw{};
-                draw.indexCount = mesh.index_count;
-                vk::buffer::write(frame.indirect, &draw, sizeof(draw));
             }
         }
 
@@ -1038,6 +1037,7 @@ namespace clt::scene_renderer
                 }
 
                 params.count = static_cast<std::uint32_t>(mesh.transforms.size());
+                params.index_count = mesh.index_count;
                 command.bindDescriptorSets(
                     vk::PipelineBindPoint::eCompute,
                     data.cull_layout, 0, {mesh.frames.at(image).set}, {}
