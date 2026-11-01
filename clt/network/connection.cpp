@@ -111,6 +111,16 @@ namespace clt::connection
         return it->second;
     }
 
+    std::vector<net::animation::attachment_event> take_attachment_events()
+    {
+        auto& data = *get();
+        std::lock_guard<std::mutex> lock(data.animation_mutex);
+        std::vector<net::animation::attachment_event> events(
+            data.attachment_events.begin(), data.attachment_events.end());
+        data.attachment_events.clear();
+        return events;
+    }
+
     void check_error()
     {
         std::exception_ptr error;
@@ -269,6 +279,8 @@ namespace clt::connection
                     {
                         std::lock_guard<std::mutex> animation_lock(data.animation_mutex);
                         data.animations.clear();
+                        data.attachment_events.clear();
+                        data.last_attachment_sequence = 0;
                     }
                 };
 
@@ -293,6 +305,26 @@ namespace clt::connection
                             break;
                         }
                         
+                        if (const auto event = net::animation::decode_event(
+                                buffer.data(), *size))
+                        {
+                            if (net::endpoint::equal(peer, server) && event->token == token &&
+                                data.connected.load(std::memory_order_relaxed))
+                            {
+                                std::lock_guard<std::mutex> lock(data.animation_mutex);
+                                if (net::message::newer(event->sequence,
+                                                        data.last_attachment_sequence))
+                                {
+                                    data.last_attachment_sequence = event->sequence;
+                                    if (data.attachment_events.size() >= 128)
+                                        data.attachment_events.pop_front();
+                                    data.attachment_events.push_back(*event);
+                                }
+                                last_received = now;
+                            }
+                            continue;
+                        }
+
                         if (const auto state = net::animation::decode(buffer.data(), *size))
                         {
                             if (net::endpoint::equal(peer, server) && state->token == token &&
