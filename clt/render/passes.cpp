@@ -2,6 +2,7 @@
 #include "postprocess.hpp"
 #include "scene_renderer.hpp"
 
+#include <stdexcept>
 #include <vector>
 
 namespace clt::passes
@@ -90,8 +91,13 @@ namespace clt::passes
         }
 
         const auto& list = ordered();
+        std::uint32_t available = resource::scene;
         for (std::uint32_t i = 0; i < list.size(); ++i)
         {
+            if ((list[i].reads & available) != list[i].reads)
+            {
+                throw std::runtime_error("Render pass has an unsatisfied resource dependency");
+            }
             if (pool)
             {
                 command.writeTimestamp(
@@ -99,6 +105,7 @@ namespace clt::passes
                 );
             }
             list[i].record(command, image);
+            available |= list[i].writes;
             if (pool)
             {
                 command.writeTimestamp(
