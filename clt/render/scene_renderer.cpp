@@ -966,6 +966,9 @@ namespace clt::scene_renderer
         auto& data = get();
         const auto extent = vk::swapchain::get()->extent;
         data.last_image = image;
+        const auto view_projection = camera::projection(
+            float(extent.width) / float(extent.height)
+        ) * camera::view();
 
         std::array<vk::ClearValue, 4> clear{};
         for (std::size_t i = 0; i < 3; ++i)
@@ -986,9 +989,6 @@ namespace clt::scene_renderer
         // Compute visibility and compact instance IDs for indirect graphics draws.
         if (data.snapshot)
         {
-            const auto view_projection = camera::projection(
-                float(extent.width) / float(extent.height)
-            ) * camera::view();
             const auto camera_planes = frustum(view_projection);
             cull_parameters params;
             for (std::size_t i = 0; i < params.planes.size(); ++i)
@@ -1082,11 +1082,6 @@ namespace clt::scene_renderer
 
         if (data.snapshot)
         {
-            const auto view_projection =
-                camera::projection(
-                    float(extent.width) / float(extent.height)
-                ) * camera::view();
-
             command.pushConstants(
                 data.layout, vk::ShaderStageFlagBits::eVertex,
                 0, sizeof(view_projection), &view_projection
