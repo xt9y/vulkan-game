@@ -27,7 +27,6 @@ namespace clt::postprocess
             vk::DescriptorSet lighting{};
             vk::DescriptorSet tone{};
             vk::DescriptorSet presentation{};
-            bool initialized = false;
         };
 
         struct state {
@@ -251,35 +250,6 @@ namespace clt::postprocess
             }
         }
 
-        void transition(vk::CommandBuffer command, image_target& target)
-        {
-            vk::ImageMemoryBarrier barrier{};
-            barrier.oldLayout = vk::ImageLayout::eUndefined;
-            barrier.newLayout = vk::ImageLayout::eGeneral;
-            barrier.image = target.image.handle;
-            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-            barrier.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
-            command.pipelineBarrier(
-                vk::PipelineStageFlagBits::eTopOfPipe,
-                vk::PipelineStageFlagBits::eComputeShader,
-                {}, {}, {}, {barrier}
-            );
-        }
-
-        void barrier(vk::CommandBuffer command,
-                     vk::PipelineStageFlags destination, vk::AccessFlags access)
-        {
-            vk::MemoryBarrier memory{};
-            memory.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
-            memory.dstAccessMask = access;
-            command.pipelineBarrier(
-                vk::PipelineStageFlagBits::eComputeShader, destination,
-                {}, {memory}, {}, {}
-            );
-        }
-
         void compute(vk::CommandBuffer command, vk::Pipeline pipeline,
                      vk::PipelineLayout layout, vk::DescriptorSet set,
                      bool enabled)
@@ -498,23 +468,21 @@ namespace clt::postprocess
         data = {};
     }
 
+    targets images(std::uint32_t image)
+    {
+        const auto& frame = get().frames.at(image);
+        return {frame.hdr.image.handle, frame.ldr.image.handle};
+    }
+
     void lighting(vk::CommandBuffer command, std::uint32_t image)
     {
-        auto& current = get().frames.at(image);
-        if (!current.initialized)
-        {
-            transition(command, current.hdr);
-            transition(command, current.ldr);
-            current.initialized = true;
-        }
+        const auto& current = get().frames.at(image);
         compute(command, get().lighting_pipeline, get().lighting_layout,
                 current.lighting, enabled(effect::lighting));
     }
 
     void tonemap(vk::CommandBuffer command, std::uint32_t image)
     {
-        barrier(command, vk::PipelineStageFlagBits::eComputeShader,
-                vk::AccessFlagBits::eShaderRead);
         const auto& current = get().frames.at(image);
         compute(command, get().tone_pipeline, get().tone_layout,
                 current.tone, enabled(effect::tonemapping));
@@ -522,9 +490,6 @@ namespace clt::postprocess
 
     void present(vk::CommandBuffer command, std::uint32_t image)
     {
-        barrier(command, vk::PipelineStageFlagBits::eFragmentShader,
-                vk::AccessFlagBits::eShaderRead);
-
         const auto extent = vk::swapchain::get()->extent;
         vk::ClearValue clear{};
         clear.color = vk::ClearColorValue(std::array<float, 4>{0, 0, 0, 1});

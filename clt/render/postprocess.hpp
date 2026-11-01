@@ -10,6 +10,12 @@ namespace clt::postprocess
     void set(effect value, bool enabled);
     void toggle(effect value);
     void set_exposure(float exposure);
+    struct targets {
+        vk::Image hdr{};
+        vk::Image ldr{};
+    };
+
+    targets images(std::uint32_t image);
     void create();
     void release();
     void lighting(vk::CommandBuffer command, std::uint32_t image);
