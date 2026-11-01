@@ -338,6 +338,7 @@ namespace clt::scene_renderer
             barriers[1].srcSubpass = 0;
             barriers[1].dstSubpass = VK_SUBPASS_EXTERNAL;
             barriers[1].srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput |
+                vk::PipelineStageFlagBits::eEarlyFragmentTests |
                 vk::PipelineStageFlagBits::eLateFragmentTests;
             barriers[1].dstStageMask = vk::PipelineStageFlagBits::eComputeShader;
             barriers[1].srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite |
@@ -810,65 +811,65 @@ namespace clt::scene_renderer
             upload::batch transfers;
             try
             {
-            for (const auto& mesh : source->meshes)
-            {
-                gpu_mesh result;
-                result.id = mesh.id;
-                result.index_count =
-                    static_cast<std::uint32_t>(mesh.indices.size());
-
-                try
+                for (const auto& mesh : source->meshes)
                 {
-                    const auto vertex_bytes =
-                        mesh.vertices.size() * sizeof(::scene::vertex);
+                    gpu_mesh result;
+                    result.id = mesh.id;
+                    result.index_count =
+                        static_cast<std::uint32_t>(mesh.indices.size());
 
-                    const auto index_bytes =
-                        mesh.indices.size() * sizeof(std::uint32_t);
-
-                    result.vertices = transfers.add(
-                        mesh.vertices.data(),
-                        vertex_bytes,
-                        vk::BufferUsageFlagBits::eVertexBuffer
-                    );
-
-                    result.indices = transfers.add(
-                        mesh.indices.data(),
-                        index_bytes,
-                        vk::BufferUsageFlagBits::eIndexBuffer
-                    );
-
-                    if (!mesh.vertices.empty())
+                    try
                     {
-                        vec3 low = mesh.vertices.front().position;
-                        vec3 high = low;
-                        for (const auto& vertex : mesh.vertices)
+                        const auto vertex_bytes =
+                            mesh.vertices.size() * sizeof(::scene::vertex);
+
+                        const auto index_bytes =
+                            mesh.indices.size() * sizeof(std::uint32_t);
+
+                        result.vertices = transfers.add(
+                            mesh.vertices.data(),
+                            vertex_bytes,
+                            vk::BufferUsageFlagBits::eVertexBuffer
+                        );
+
+                        result.indices = transfers.add(
+                            mesh.indices.data(),
+                            index_bytes,
+                            vk::BufferUsageFlagBits::eIndexBuffer
+                        );
+
+                        if (!mesh.vertices.empty())
                         {
-                            const auto p = vertex.position;
-                            low = {std::min(low.x, p.x), std::min(low.y, p.y), std::min(low.z, p.z)};
-                            high = {std::max(high.x, p.x), std::max(high.y, p.y), std::max(high.z, p.z)};
+                            vec3 low = mesh.vertices.front().position;
+                            vec3 high = low;
+                            for (const auto& vertex : mesh.vertices)
+                            {
+                                const auto p = vertex.position;
+                                low = {std::min(low.x, p.x), std::min(low.y, p.y), std::min(low.z, p.z)};
+                                high = {std::max(high.x, p.x), std::max(high.y, p.y), std::max(high.z, p.z)};
+                            }
+                            result.center = (low + high) * 0.5f;
+                            result.radius = length((high - low) * 0.5f);
                         }
-                        result.center = (low + high) * 0.5f;
-                        result.radius = length((high - low) * 0.5f);
-                    }
 
-                    meshes.push_back(result);
-                }
-                catch (...)
-                {
-                    if (result.vertices.handle)
+                        meshes.push_back(result);
+                    }
+                    catch (...)
                     {
-                        vk::buffer::destroy(result.vertices);
-                    }
+                        if (result.vertices.handle)
+                        {
+                            vk::buffer::destroy(result.vertices);
+                        }
 
-                    if (result.indices.handle)
-                    {
-                        vk::buffer::destroy(result.indices);
-                    }
+                        if (result.indices.handle)
+                        {
+                            vk::buffer::destroy(result.indices);
+                        }
 
-                    destroy_meshes(meshes);
-                    throw;
+                        destroy_meshes(meshes);
+                        throw;
+                    }
                 }
-            }
             transfers.finish();
             }
             catch (...)
