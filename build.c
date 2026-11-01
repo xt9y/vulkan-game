@@ -57,6 +57,7 @@ void build(C_Build* b)
     C_Target* game = c_executable(b, "vulkan-game");
     c_sources(game, "main.cpp");
     c_sources(game, "srv/world/*.cpp");
+    c_sources(game, "srv/assets/*.cpp");
     c_sources(game, "srv/scene/*.cpp");
     c_sources(game, "srv/game/*.cpp");
     c_sources(game, "srv/app/*.cpp");
@@ -171,6 +172,7 @@ void build(C_Build* b)
     C_Target* workload = c_test(b, "workload");
     c_sources(workload, "test.cpp");
     c_sources(workload, "srv/world/*.cpp");
+    c_sources(workload, "srv/assets/*.cpp");
     c_sources(workload, "srv/scene/*.cpp");
     c_sources(workload, "srv/game/*.cpp");
     c_sources(workload, "srv/app/*.cpp");
