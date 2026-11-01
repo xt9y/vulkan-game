@@ -61,6 +61,10 @@ namespace srv::application
         get()->scene_batches = {{get()->scene_bytes, get()->scene_hash, true}};
         world::init(get()->terrain, 123456789ULL);
         get()->tick = 0;
+        get()->diagnostic_ticks.store(0, std::memory_order_relaxed);
+        get()->diagnostic_work_us.store(0, std::memory_order_relaxed);
+        get()->diagnostic_max_work_us.store(0, std::memory_order_relaxed);
+        get()->diagnostic_overruns.store(0, std::memory_order_relaxed);
         get()->initialized = true;
     }
 
@@ -151,6 +155,23 @@ namespace srv::application
 
             next += interval;
             const auto completed = clock::now();
+
+            const auto work_us = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    completed - now).count()
+            );
+            get()->diagnostic_work_us.fetch_add(work_us, std::memory_order_relaxed);
+            auto previous = get()->diagnostic_max_work_us.load(std::memory_order_relaxed);
+            while (previous < work_us &&
+                   !get()->diagnostic_max_work_us.compare_exchange_weak(
+                       previous, work_us, std::memory_order_relaxed))
+            {
+            }
+            if (completed > next)
+            {
+                get()->diagnostic_overruns.fetch_add(1, std::memory_order_relaxed);
+            }
+            get()->diagnostic_ticks.fetch_add(1, std::memory_order_relaxed);
 
             // Recover up to one missed tick on wakeup jitter rather than
             // permanently shifting the 60 Hz schedule behind real time.

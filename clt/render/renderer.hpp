@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <vector>
 #include <array>
 #include <vk/vk.hpp>
@@ -24,6 +25,15 @@ namespace clt::renderer
         bool initialized = false;
     };
 
+    struct diagnostics {
+        std::atomic<std::uint64_t> frames{0};
+        std::atomic<std::uint64_t> deferred{0};
+        std::atomic<std::uint64_t> scene_updates{0};
+        std::atomic<std::uint64_t> fence_wait_us{0};
+        std::atomic<std::uint64_t> max_fence_wait_us{0};
+    };
+
+    diagnostics& stats();
     state* get();
     void init(const char* vertex_path, const char* fragment_path);
     void resize();
