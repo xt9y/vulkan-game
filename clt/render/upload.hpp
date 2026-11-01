@@ -2,6 +2,7 @@
 
 #include <vk/vk.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <stdexcept>
 #include <vector>
@@ -22,7 +23,8 @@ namespace clt::upload
         batch& operator=(const batch&) = delete;
 
         vk::buffer::resource add(const void* data, std::size_t bytes,
-                                 vk::BufferUsageFlags usage)
+                                 vk::BufferUsageFlags usage,
+                                 vk::DeviceSize capacity = 0)
         {
             if (!data || !bytes)
                 throw std::invalid_argument("Invalid static mesh upload");
@@ -38,7 +40,8 @@ namespace clt::upload
                 );
                 vk::buffer::write(source, data, bytes);
                 destination = vk::buffer::create(
-                    bytes, usage | vk::BufferUsageFlagBits::eTransferDst,
+                    std::max<vk::DeviceSize>(bytes, capacity),
+                    usage | vk::BufferUsageFlagBits::eTransferDst,
                     vk::MemoryPropertyFlagBits::eDeviceLocal
                 );
                 if (!command) command = vk::command::begin_one_time();
@@ -53,6 +56,36 @@ namespace clt::upload
             {
                 if (source.handle) vk::buffer::destroy(source);
                 if (destination.handle) vk::buffer::destroy(destination);
+                throw;
+            }
+        }
+
+        void write(vk::buffer::resource& target, const void* data,
+                   std::size_t bytes, std::size_t offset = 0)
+        {
+            if (!data || !bytes || offset > target.size || bytes > target.size - offset)
+            {
+                throw std::invalid_argument("Invalid staged buffer update");
+            }
+
+            auto source = vk::buffer::create(
+                bytes, vk::BufferUsageFlagBits::eTransferSrc,
+                vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent
+            );
+            try
+            {
+                vk::buffer::write(source, data, bytes);
+                if (!command) command = vk::command::begin_one_time();
+                vk::BufferCopy copy{};
+                copy.size = bytes;
+                copy.dstOffset = offset;
+                command.copyBuffer(source.handle, target.handle, {copy});
+                staging.push_back(source);
+            }
+            catch (...)
+            {
+                vk::buffer::destroy(source);
                 throw;
             }
         }
