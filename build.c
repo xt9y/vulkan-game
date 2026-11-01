@@ -15,11 +15,15 @@ void build(C_Build* b)
     c_sources(game, "srv/app/*.cpp");
     c_sources(game, "srv/network/*.cpp");
     c_sources(game, "srv/shared/net/*.cpp");
+    c_sources(game, "srv/shared/player/*.cpp");
 
     c_sources(game, "clt/app/*.cpp");
     c_sources(game, "clt/network/*.cpp");
     c_sources(game, "clt/platform/*.cpp");
     c_sources(game, "clt/render/*.cpp");
+    c_sources(game, "clt/input/*.cpp");
+    c_sources(game, "clt/view/*.cpp");
+    c_sources(game, "clt/player/*.cpp");
 
     c_include(game, ".");
     c_warnings_strict(game);
@@ -72,6 +76,52 @@ void build(C_Build* b)
     c_link_system(game, "user32");
     c_link_system(game, "gdi32");
     c_link_system(game, "shell32");
+#endif
+
+    // Standalone end-to-end benchmark; no changes to the production game.
+    C_Target* workload = c_test(b, "workload");
+    c_sources(workload, "test.cpp");
+    c_sources(workload, "srv/world/*.cpp");
+    c_sources(workload, "srv/scene/*.cpp");
+    c_sources(workload, "srv/game/*.cpp");
+    c_sources(workload, "srv/app/*.cpp");
+    c_sources(workload, "srv/network/*.cpp");
+    c_sources(workload, "srv/shared/net/*.cpp");
+    c_sources(workload, "srv/shared/player/*.cpp");
+    c_sources(workload, "clt/app/*.cpp");
+    c_sources(workload, "clt/network/*.cpp");
+    c_sources(workload, "clt/platform/*.cpp");
+    c_sources(workload, "clt/render/*.cpp");
+    c_sources(workload, "clt/input/*.cpp");
+    c_sources(workload, "clt/view/*.cpp");
+    c_sources(workload, "clt/player/*.cpp");
+    c_include(workload, ".");
+    c_warnings_strict(workload);
+    c_flag(workload, "-std=c++17");
+    c_use(workload, engine);
+    c_use(workload, headers);
+    c_use(workload, glfw);
+#ifdef __APPLE__
+    c_framework(workload, "Cocoa");
+    c_framework(workload, "IOKit");
+    c_framework(workload, "CoreFoundation");
+    c_framework(workload, "QuartzCore");
+    c_link_system(workload, "c++");
+#elif defined(__linux__)
+    c_link_system(workload, "X11");
+    c_link_system(workload, "Xrandr");
+    c_link_system(workload, "Xi");
+    c_link_system(workload, "Xcursor");
+    c_link_system(workload, "Xinerama");
+    c_link_system(workload, "dl");
+    c_link_system(workload, "pthread");
+    c_link_system(workload, "m");
+    c_link_system(workload, "stdc++");
+#else
+    c_link_system(workload, "ws2_32");
+    c_link_system(workload, "user32");
+    c_link_system(workload, "gdi32");
+    c_link_system(workload, "shell32");
 #endif
 
     c_default_target(b, game);

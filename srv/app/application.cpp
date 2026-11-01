@@ -162,7 +162,8 @@ namespace srv::application
                         }
                         
                         const auto& incoming = command->input;
-                        if (!net::message::newer(incoming.sequence, client.processed_input))
+                        if (!net::message::newer(incoming.sequence, client.processed_input) ||
+                            incoming.sequence - client.processed_input > 256)
                         {
                             break;
                         }
@@ -285,15 +286,19 @@ namespace srv::application
                     continue;
                 }
 
-                player::input input;
-                if (!client.inputs.empty()) 
+                // Apply contiguous inputs only. Never simulate a phantom input tick.
+                for (int budget = 0; budget < 4 && !client.inputs.empty(); ++budget)
                 {
-                    input = client.inputs.front();
+                    if (client.inputs.front().sequence != client.processed_input + 1)
+                    {
+                        break;
+                    }
+
+                    const auto input = client.inputs.front();
                     client.inputs.pop_front();
+                    player::step(client.avatar, input, get()->colliders);
                     client.processed_input = input.sequence;
                 }
-
-                player::step(client.avatar, input, get()->colliders);
 
                 net::movement::snapshot snapshot;
                 snapshot.token = client.token;

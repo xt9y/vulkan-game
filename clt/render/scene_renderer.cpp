@@ -1,11 +1,15 @@
 #include "scene_renderer.hpp"
 
 #include "clt/network/connection.hpp"
+#include "clt/view/camera.hpp"
 #include "srv/shared/scene/scene.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdlib>
+#include <filesystem>
+#include <cmath>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -17,19 +21,30 @@ namespace clt::scene_renderer
     {
         using namespace vk::util::math;
 
+        struct instance_data {
+            mat4 model;
+            mat4 normal;
+        };
+
+        struct prepared_instance {
+            instance_data transforms;
+            vec3 center;
+            float radius = 0;
+        };
+
         struct gpu_mesh {
             std::uint32_t id = 0;
             vk::buffer::resource vertices;
             vk::buffer::resource indices;
+            vk::buffer::resource instance_buffer;
+            std::vector<prepared_instance> instances;
+            std::vector<instance_data> visible;
+            vec3 center;
+            float radius = 0;
             std::uint32_t index_count = 0;
         };
 
-        struct push_constants {
-            mat4 mvp;
-            mat4 normal;
-        };
-
-        static_assert(sizeof(push_constants) == 128);
+        static_assert(sizeof(instance_data) == 128);
         static_assert(sizeof(::scene::vertex) == 32);
 
         struct state {
@@ -61,15 +76,92 @@ namespace clt::scene_renderer
             {
                 vk::buffer::destroy(mesh.vertices);
                 vk::buffer::destroy(mesh.indices);
+                if (mesh.instance_buffer.handle)
+                {
+                    vk::buffer::destroy(mesh.instance_buffer);
+                }
             }
 
             meshes.clear();
+        }
+
+        void update_shader(const std::string& name)
+        {
+            const std::filesystem::path binary(name);
+            if (binary.extension() != ".spv")
+            {
+                return;
+            }
+
+            auto source = binary;
+            source.replace_extension();
+            if (!std::filesystem::exists(source) ||
+                (std::filesystem::exists(binary) &&
+                 std::filesystem::last_write_time(binary) >=
+                     std::filesystem::last_write_time(source)))
+            {
+                return;
+            }
+
+            // Configured shader paths are local application resources.
+            if (name.find_first_of("\"'$;`\\") != std::string::npos)
+            {
+                throw std::runtime_error("Unsupported shader path characters");
+            }
+
+            const std::string command =
+                "glslangValidator -V \"" + source.string() + "\" -o \"" + name + "\"";
+            if (std::system(command.c_str()) != 0)
+            {
+                throw std::runtime_error("Shader compilation failed: " + source.string());
+            }
+        }
+
+        struct plane {
+            vec3 normal;
+            float offset;
+            float magnitude;
+        };
+
+        std::array<plane, 6> frustum(const mat4& m)
+        {
+            const auto make = [&](int row, float sign)
+            {
+                plane p{
+                    {m(3, 0) + sign * m(row, 0),
+                     m(3, 1) + sign * m(row, 1),
+                     m(3, 2) + sign * m(row, 2)},
+                    m(3, 3) + sign * m(row, 3), 0
+                };
+                p.magnitude = length(p.normal);
+                return p;
+            };
+            plane near{
+                {m(2, 0), m(2, 1), m(2, 2)}, m(2, 3), 0
+            };
+            near.magnitude = length(near.normal);
+            return {make(0, 1), make(0, -1), make(1, 1), make(1, -1),
+                    near, make(2, -1)};
+        }
+
+        bool visible(const std::array<plane, 6>& planes, vec3 center, float radius)
+        {
+            for (const auto& p : planes)
+            {
+                if (dot(p.normal, center) + p.offset < -radius * p.magnitude)
+                {
+                    return false;
+                }
+            }
+            return true;
         }
 
         void create_pipeline()
         {
             auto& data = get();
 
+            update_shader(data.shaders[0]);
+            update_shader(data.shaders[1]);
             const auto vertex_code = vk::shader::read(data.shaders[0]);
             const auto fragment_code = vk::shader::read(data.shaders[1]);
 
@@ -84,7 +176,7 @@ namespace clt::scene_renderer
                 vk::PushConstantRange range{};
                 range.stageFlags = vk::ShaderStageFlagBits::eVertex;
                 range.offset = 0;
-                range.size = sizeof(push_constants);
+                range.size = sizeof(mat4);
 
                 vk::PipelineLayoutCreateInfo layout_info{};
                 layout_info.pushConstantRangeCount = 1;
@@ -102,26 +194,26 @@ namespace clt::scene_renderer
                 stages[1].module = fragment_shader;
                 stages[1].pName = "main";
 
-                vk::VertexInputBindingDescription binding{};
-                binding.binding = 0;
-                binding.stride = sizeof(::scene::vertex);
-                binding.inputRate = vk::VertexInputRate::eVertex;
+                std::array<vk::VertexInputBindingDescription, 2> bindings{};
+                bindings[0] = vk::VertexInputBindingDescription{0, sizeof(::scene::vertex), vk::VertexInputRate::eVertex};
+                bindings[1] = vk::VertexInputBindingDescription{1, sizeof(instance_data), vk::VertexInputRate::eInstance};
 
-                std::array<vk::VertexInputAttributeDescription, 2> attributes{};
-
-                attributes[0].location = 0;
-                attributes[0].binding = 0;
-                attributes[0].format = vk::Format::eR32G32B32Sfloat;
-                attributes[0].offset = offsetof(::scene::vertex, position);
-
-                attributes[1].location = 1;
-                attributes[1].binding = 0;
-                attributes[1].format = vk::Format::eR32G32B32Sfloat;
-                attributes[1].offset = offsetof(::scene::vertex, normal);
+                std::array<vk::VertexInputAttributeDescription, 10> attributes{};
+                attributes[0] = vk::VertexInputAttributeDescription{0, 0, vk::Format::eR32G32B32Sfloat,
+                                 offsetof(::scene::vertex, position)};
+                attributes[1] = vk::VertexInputAttributeDescription{1, 0, vk::Format::eR32G32B32Sfloat,
+                                 offsetof(::scene::vertex, normal)};
+                for (std::uint32_t i = 0; i < 8; ++i)
+                {
+                    attributes[i + 2] = vk::VertexInputAttributeDescription{
+                        i + 2, 1, vk::Format::eR32G32B32A32Sfloat,
+                        std::uint32_t(i * sizeof(vec4))
+                    };
+                }
 
                 vk::PipelineVertexInputStateCreateInfo vertex_input{};
-                vertex_input.vertexBindingDescriptionCount = 1;
-                vertex_input.pVertexBindingDescriptions = &binding;
+                vertex_input.vertexBindingDescriptionCount = bindings.size();
+                vertex_input.pVertexBindingDescriptions = bindings.data();
                 vertex_input.vertexAttributeDescriptionCount = attributes.size();
                 vertex_input.pVertexAttributeDescriptions = attributes.data();
 
@@ -437,6 +529,20 @@ namespace clt::scene_renderer
                         index_bytes
                     );
 
+                    if (!mesh.vertices.empty())
+                    {
+                        vec3 low = mesh.vertices.front().position;
+                        vec3 high = low;
+                        for (const auto& vertex : mesh.vertices)
+                        {
+                            const auto p = vertex.position;
+                            low = {std::min(low.x, p.x), std::min(low.y, p.y), std::min(low.z, p.z)};
+                            high = {std::max(high.x, p.x), std::max(high.y, p.y), std::max(high.z, p.z)};
+                        }
+                        result.center = (low + high) * 0.5f;
+                        result.radius = length((high - low) * 0.5f);
+                    }
+
                     meshes.push_back(result);
                 }
                 catch (...)
@@ -455,6 +561,63 @@ namespace clt::scene_renderer
                     throw;
                 }
             }
+        }
+
+        try
+        {
+            if (source)
+            {
+                for (const auto& instance : source->instances)
+                {
+                    const auto it = std::find_if(meshes.begin(), meshes.end(),
+                        [&](const gpu_mesh& mesh) { return mesh.id == instance.mesh_id; });
+                    if (it == meshes.end() || !it->index_count)
+                    {
+                        continue;
+                    }
+
+                    const auto& pose = instance.pose;
+                    const vec3 center{
+                        it->center.x * pose.scale.x,
+                        it->center.y * pose.scale.y,
+                        it->center.z * pose.scale.z
+                    };
+                    const vec3 inverse{
+                        pose.scale.x ? 1.0f / pose.scale.x : 0.0f,
+                        pose.scale.y ? 1.0f / pose.scale.y : 0.0f,
+                        pose.scale.z ? 1.0f / pose.scale.z : 0.0f
+                    };
+                    const float max_scale = std::max({
+                        std::abs(pose.scale.x), std::abs(pose.scale.y), std::abs(pose.scale.z)
+                    });
+                    it->instances.push_back({
+                        {trs(pose.position, pose.rotation, pose.scale),
+                         rotation(pose.rotation) * scale(inverse)},
+                        pose.position + rotate(pose.rotation, center),
+                        it->radius * max_scale
+                    });
+                }
+
+                for (auto& mesh : meshes)
+                {
+                    if (mesh.instances.empty())
+                    {
+                        continue;
+                    }
+                    mesh.visible.reserve(mesh.instances.size());
+                    mesh.instance_buffer = vk::buffer::create(
+                        mesh.instances.size() * sizeof(instance_data),
+                        vk::BufferUsageFlagBits::eVertexBuffer,
+                        vk::MemoryPropertyFlagBits::eHostVisible |
+                        vk::MemoryPropertyFlagBits::eHostCoherent
+                    );
+                }
+            }
+        }
+        catch (...)
+        {
+            destroy_meshes(meshes);
+            throw;
         }
 
         destroy_meshes(data.meshes);
@@ -500,76 +663,46 @@ namespace clt::scene_renderer
 
         if (data.snapshot)
         {
-            const auto projection = perspective(
-                1.04719755f,
-                float(extent.width) / float(extent.height),
-                0.1f,
-                100.0f
+            const auto view_projection =
+                camera::projection(
+                    float(extent.width) / float(extent.height)
+                ) * camera::view();
+
+            const auto planes = frustum(view_projection);
+            command.pushConstants(
+                data.layout, vk::ShaderStageFlagBits::eVertex,
+                0, sizeof(view_projection), &view_projection
             );
 
-            const auto view = look_at(
-                {8.0f, 6.0f, 12.0f},
-                {0.0f, 0.0f, 0.0f}
-            );
-
-            const auto view_projection = projection * view;
-
-            for (const auto& instance : data.snapshot->instances)
+            for (auto& mesh : data.meshes)
             {
-                const auto it = std::find_if(
-                    data.meshes.begin(),
-                    data.meshes.end(),
-                    [&](const gpu_mesh& mesh)
+                mesh.visible.clear();
+                for (const auto& instance : mesh.instances)
+                {
+                    if (visible(planes, instance.center, instance.radius))
                     {
-                        return mesh.id == instance.mesh_id;
+                        mesh.visible.push_back(instance.transforms);
                     }
-                );
-
-                if (it == data.meshes.end())
+                }
+                if (mesh.visible.empty())
                 {
                     continue;
                 }
 
-                const auto& pose = instance.pose;
-
-                const auto model = trs(
-                    pose.position,
-                    pose.rotation,
-                    pose.scale
+                vk::buffer::write(
+                    mesh.instance_buffer, mesh.visible.data(),
+                    mesh.visible.size() * sizeof(instance_data)
                 );
 
-                const vec3 inverse_scale{
-                    pose.scale.x != 0 ? 1.0f / pose.scale.x : 0.0f,
-                    pose.scale.y != 0 ? 1.0f / pose.scale.y : 0.0f,
-                    pose.scale.z != 0 ? 1.0f / pose.scale.z : 0.0f
+                const std::array<vk::Buffer, 2> buffers{
+                    mesh.vertices.handle, mesh.instance_buffer.handle
                 };
-
-                const push_constants constants{
-                    view_projection * model,
-                    rotation(pose.rotation) * scale(inverse_scale)
-                };
-
-                command.bindVertexBuffers(
-                    0,
-                    it->vertices.handle,
-                    vk::DeviceSize(0)
+                const std::array<vk::DeviceSize, 2> offsets{0, 0};
+                command.bindVertexBuffers(0, buffers, offsets);
+                command.bindIndexBuffer(mesh.indices.handle, 0, vk::IndexType::eUint32);
+                command.drawIndexed(
+                    mesh.index_count, static_cast<std::uint32_t>(mesh.visible.size()), 0, 0, 0
                 );
-
-                command.bindIndexBuffer(
-                    it->indices.handle,
-                    0,
-                    vk::IndexType::eUint32
-                );
-
-                command.pushConstants(
-                    data.layout,
-                    vk::ShaderStageFlagBits::eVertex,
-                    0,
-                    sizeof(constants),
-                    &constants
-                );
-
-                command.drawIndexed(it->index_count, 1, 0, 0, 0);
             }
         }
 

@@ -1,12 +1,17 @@
 #include "application.hpp"
 
+#include "clt/input/input.hpp"
 #include "clt/network/connection.hpp"
+#include "clt/player/prediction.hpp"
+#include "clt/view/camera.hpp"
 #include "clt/platform/vulkan_loader.hpp"
 #include "clt/platform/window.hpp"
 #include "clt/render/renderer.hpp"
 #include "srv/game/application.hpp"
 
+#include <atomic>
 #include <chrono>
+#include <exception>
 #include <iostream>
 #include <stdexcept>
 #include <thread>
@@ -89,28 +94,73 @@ namespace clt::application
         }
 
         window::init();
+
+        input::init();
+        camera::init();
+        prediction::init();
+
         renderer::init("shd/mesh.vert.spv", "shd/mesh.frag.spv");
         bool connected = false;
 
-        while (running() && !window::should_close())
+        std::atomic<bool> render_stop{false};
+        std::exception_ptr render_error;
+        std::thread render_thread([&]
         {
-            window::poll_events();
-            const bool current = connection::get()->connected.load(std::memory_order_relaxed);
+            try
+            {
+                while (!render_stop.load(std::memory_order_relaxed))
+                {
+                    if (!window::minimized())
+                    {
+                        renderer::draw_frame();
+                    }
+                    else
+                    {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    }
+                }
+            }
+            catch (...)
+            {
+                render_error = std::current_exception();
+                render_stop.store(true, std::memory_order_relaxed);
+            }
+        });
 
-            if (current != connected)
+        try
+        {
+            while (running() && !window::should_close() &&
+                   !render_stop.load(std::memory_order_relaxed))
             {
-                window::set_connected(current);
-                connected = current;
-            }
+                window::poll_events();
 
-            if (window::minimized())
-            {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                const auto frame = input::poll();
+                camera::look(frame.mouse_x, frame.mouse_y);
+                prediction::controls(frame.buttons, camera::get()->yaw);
+
+                const bool current = connection::get()->connected.load(std::memory_order_relaxed);
+                if (current != connected)
+                {
+                    window::set_connected(current);
+                    connected = current;
+                }
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
-            else
-            {
-                renderer::draw_frame();
-            }
+        }
+        catch (...)
+        {
+            render_stop.store(true, std::memory_order_relaxed);
+            render_thread.join();
+            throw;
+        }
+
+        render_stop.store(true, std::memory_order_relaxed);
+        render_thread.join();
+
+        if (render_error)
+        {
+            std::rethrow_exception(render_error);
         }
 
         return 0;
@@ -118,8 +168,12 @@ namespace clt::application
 
     void shutdown() noexcept
     {
+        prediction::shutdown();
         renderer::shutdown();
+
+        input::shutdown();
         window::shutdown();
+
         vulkan_loader::shutdown();
         connection::shutdown();
         get()->initialized = false;

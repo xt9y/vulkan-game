@@ -2,10 +2,26 @@
 
 #include "vulkan_loader.hpp"
 
+#include <atomic>
 #include <stdexcept>
 
 namespace clt::window
 {
+    namespace
+    {
+        std::atomic<int> framebuffer_width{1280};
+        std::atomic<int> framebuffer_height{720};
+
+        void update_framebuffer_size()
+        {
+            int width = 0;
+            int height = 0;
+            glfwGetFramebufferSize(get()->handle, &width, &height);
+            framebuffer_width.store(width, std::memory_order_relaxed);
+            framebuffer_height.store(height, std::memory_order_relaxed);
+        }
+    } // namespace
+
     state* get()
     {
         static state data;
@@ -41,6 +57,8 @@ namespace clt::window
             shutdown();
             throw std::runtime_error("Window creation failed");
         }
+
+        update_framebuffer_size();
     }
 
     bool should_close()
@@ -48,17 +66,23 @@ namespace clt::window
         return glfwWindowShouldClose(get()->handle);
     }
 
+    void framebuffer_size(int& width, int& height)
+    {
+        width = framebuffer_width.load(std::memory_order_relaxed);
+        height = framebuffer_height.load(std::memory_order_relaxed);
+    }
+
     bool minimized()
     {
         int width, height;
-        glfwGetFramebufferSize(get()->handle, &width, &height);
-
+        framebuffer_size(width, height);
         return width == 0 || height == 0;
     }
 
     void poll_events()
     {
         glfwPollEvents();
+        update_framebuffer_size();
     }
 
     void set_connected(bool connected)
