@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #ifdef _WIN32
 #include <direct.h>
 #else
@@ -30,6 +31,18 @@ static void compile_shaders(void)
         const char* name = strrchr(sources[i], '/');
         snprintf(binary, sizeof(binary), "build/shaders/%s.spv",
                  name ? name + 1 : sources[i]);
+        struct stat input_info;
+        struct stat output_info;
+        if (stat(sources[i], &input_info) != 0)
+        {
+            fprintf(stderr, "Missing shader: %s\n", sources[i]);
+            exit(1);
+        }
+        if (stat(binary, &output_info) == 0 &&
+            output_info.st_mtime >= input_info.st_mtime)
+        {
+            continue;
+        }
         snprintf(command, sizeof(command),
                  "glslangValidator -V \"%s\" -o \"%s\"", sources[i], binary);
         if (system(command) != 0)
