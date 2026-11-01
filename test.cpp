@@ -460,8 +460,48 @@ namespace
         for (const auto& mesh : data.meshes)
         {
 
+            // GPU outputs are device-local. Copy them into benchmark-only
+            // staging buffers after the caller's GPU idle/fence synchronization.
+            const auto device = vk::device::get()->handle;
+            auto indirect = vk::buffer::create(
+                sizeof(vk::DrawIndexedIndirectCommand),
+                vk::BufferUsageFlagBits::eTransferDst,
+                vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent
+            );
+            auto visible = vk::buffer::create(
+                std::max<std::size_t>(
+                    mesh.bounds->size() * sizeof(std::uint32_t), sizeof(std::uint32_t)
+                ),
+                vk::BufferUsageFlagBits::eTransferDst,
+                vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent
+            );
+            const auto command = vk::command::begin_one_time();
+            vk::BufferCopy command_copy{};
+            command_copy.size = sizeof(vk::DrawIndexedIndirectCommand);
+            command.copyBuffer(mesh.indirect->handle, indirect.handle, {command_copy});
+            vk::BufferCopy ids_copy{};
+            ids_copy.size = mesh.bounds->size() * sizeof(std::uint32_t);
+            if (ids_copy.size)
+            {
+                command.copyBuffer(mesh.visible->handle, visible.handle, {ids_copy});
+            }
+            command.end();
+            const auto fence = device.createFence({});
+            vk::SubmitInfo submit{};
+            submit.commandBufferCount = 1;
+            submit.pCommandBuffers = &command;
+            vk::submit::queue(vk::queue::get()->graphics, {submit}, fence);
+            if (device.waitForFences(fence, true, UINT64_MAX) != vk::Result::eSuccess)
+            {
+                throw std::runtime_error("GPU visibility readback fence failed");
+            }
+            device.destroyFence(fence);
+            vk::command::free({command});
+
             const auto* draw = static_cast<const vk::DrawIndexedIndirectCommand*>(
-                vk::buffer::map(*mesh.indirect)
+                vk::buffer::map(indirect)
             );
             const std::size_t actual = draw->instanceCount;
             result.actual += actual;
@@ -491,7 +531,7 @@ namespace
             }
 
             const auto* ids = static_cast<const std::uint32_t*>(
-                vk::buffer::map(*mesh.visible)
+                vk::buffer::map(visible)
             );
             const std::size_t readable = std::min(actual, mesh.bounds->size());
             result.out_of_range += actual - readable;
@@ -521,6 +561,9 @@ namespace
             {
                 result.missing += value == 1;
             }
+
+            vk::buffer::destroy(visible);
+            vk::buffer::destroy(indirect);
         }
 
         return result;
