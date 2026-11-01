@@ -54,12 +54,62 @@ namespace srv::application
         session::init();
         scene::build_test(get()->scene);
         get()->colliders = player::build_colliders(get()->scene);
+        get()->collision_index = player::build_index(get()->colliders);
         srv::generation::init();
         get()->scene_bytes = net::scene_stream::serialize(get()->scene);
         get()->scene_hash = net::scene_stream::checksum(get()->scene_bytes);
+        get()->scene_batches = {{get()->scene_bytes, get()->scene_hash, true}};
         world::init(get()->terrain, 123456789ULL);
         get()->tick = 0;
         get()->initialized = true;
+    }
+
+    void begin_stream()
+    {
+        auto& data = *get();
+        data.scene_bytes = net::scene_stream::serialize(data.scene);
+        data.scene_hash = net::scene_stream::checksum(data.scene_bytes);
+        data.scene_batches = {{data.scene_bytes, data.scene_hash, false}};
+    }
+
+    void append_scene(::scene::state patch, bool final)
+    {
+        auto& data = *get();
+        if (!data.initialized || data.scene_batches.empty() || data.scene_batches.back().final)
+        {
+            throw std::runtime_error("Scene stream not accepting batches");
+        }
+        if (data.scene_batches.size() >= 65535)
+        {
+            throw std::runtime_error("Too many scene batches");
+        }
+
+        auto bytes = net::scene_stream::serialize(patch);
+        auto hash = net::scene_stream::checksum(bytes);
+
+        for (auto& mesh : patch.meshes)
+        {
+            data.scene.meshes.push_back(std::move(mesh));
+        }
+
+        // Only the new geometry needs collision bounds and a new BVH root.
+        auto added_colliders = player::build_colliders(data.scene.meshes, patch.instances);
+        std::vector<spatial::bounds> boxes;
+        boxes.reserve(added_colliders.size());
+        for (const auto& collider : added_colliders)
+        {
+            boxes.push_back({collider.min, collider.max});
+        }
+
+        for (auto& instance : patch.instances)
+        {
+            data.scene.instances.push_back(std::move(instance));
+        }
+        data.colliders.insert(
+            data.colliders.end(), added_colliders.begin(), added_colliders.end()
+        );
+        data.collision_index.append(boxes);
+        data.scene_batches.push_back({std::move(bytes), hash, final});
     }
 
     int run()
@@ -126,6 +176,7 @@ namespace srv::application
         session::shutdown();
         generation::shutdown();
         get()->scene_bytes.clear();
+        get()->scene_batches.clear();
         get()->colliders.clear();
         get()->scene_hash = 0;
         get()->scene = {};
@@ -172,8 +223,19 @@ namespace srv::application
                             return value.sequence == incoming.sequence;
                         });
 
-                        if (duplicate == client.inputs.end() && client.inputs.size() < 128)
+                        if (duplicate == client.inputs.end())
                         {
+                            // Always admit the earliest missing input. Otherwise a full
+                            // out-of-order queue could permanently block reconciliation.
+                            if (client.inputs.size() >= 128)
+                            {
+                                if (incoming.sequence != client.processed_input + 1)
+                                {
+                                    break;
+                                }
+                                client.inputs.pop_back();
+                            }
+
                             const auto position = std::find_if(client.inputs.begin(), client.inputs.end(), [&](const player::input& value){
                                 return net::message::newer(value.sequence, incoming.sequence);
                             });
@@ -224,7 +286,10 @@ namespace srv::application
 
                 if (!client->active || client->token != message.token)
                 {
-                    *client = session::resource{peer, message.token, 0, false, true, clock::now()};
+                    *client = session::resource{};
+                    client->endpoint = peer;
+                    client->token = message.token;
+                    client->active = true;
                 }
 
                 client->last_seen = clock::now();
@@ -261,11 +326,26 @@ namespace srv::application
 
                 net::scene_stream::packet packet;
 
-                const auto size = net::scene_stream::encode_fragment(get()->scene_bytes, message.token, message.value, get()->scene_hash, packet);
-                
-                if (size)
+                const auto batch_id = message.value >> 16;
+                const auto fragment_id = message.value & 0xffffu;
+
+                if (batch_id < get()->scene_batches.size())
                 {
-                    net::socket::send(get()->socket, peer, packet.data(), size);
+                    const auto& batch = get()->scene_batches[batch_id];
+                    const auto size = net::scene_stream::encode_fragment(
+                        batch.bytes, message.token, fragment_id,
+                        batch.hash, packet, batch.final
+                    );
+
+                    if (size)
+                    {
+                        // Keep the batch number in the fragment acknowledgement.
+                        packet[16] = std::uint8_t(message.value >> 24);
+                        packet[17] = std::uint8_t(message.value >> 16);
+                        packet[18] = std::uint8_t(message.value >> 8);
+                        packet[19] = std::uint8_t(message.value);
+                        net::socket::send(get()->socket, peer, packet.data(), size);
+                    }
                 }
             }
         }
@@ -296,7 +376,7 @@ namespace srv::application
 
                     const auto input = client.inputs.front();
                     client.inputs.pop_front();
-                    player::step(client.avatar, input, get()->colliders);
+                    player::step(client.avatar, input, get()->colliders, &get()->collision_index);
                     client.processed_input = input.sequence;
                 }
 

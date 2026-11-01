@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <vector>
+#include <numeric>
 
 namespace player
 {
@@ -27,23 +29,31 @@ namespace player
 
     collision_world build_colliders(const ::scene::state& scene)
     {
+        return build_colliders(scene.meshes, scene.instances);
+    }
+
+    collision_world build_colliders(
+        const std::vector<::scene::mesh>& meshes,
+        const std::vector<::scene::instance>& instances
+    )
+    {
         using namespace vk::util::math;
 
         collision_world result;
-        result.reserve(scene.instances.size());
+        result.reserve(instances.size());
 
-        for (const auto& instance : scene.instances)
+        for (const auto& instance : instances)
         {
             const auto mesh = std::find_if(
-                scene.meshes.begin(),
-                scene.meshes.end(),
+                meshes.begin(),
+                meshes.end(),
                 [&](const ::scene::mesh& value)
                 {
                     return value.id == instance.mesh_id;
                 }
             );
 
-            if (mesh == scene.meshes.end() || mesh->vertices.empty())
+            if (mesh == meshes.end() || mesh->vertices.empty())
             {
                 continue;
             }
@@ -78,7 +88,22 @@ namespace player
         return result;
     }
 
-    void step(state& p, const input& input, const collision_world& world)
+    spatial::index build_index(const collision_world &world)
+    {
+        std::vector<spatial::bounds> boxes;
+        boxes.reserve(world.size());
+
+        for (const auto& b : world) 
+        {
+            boxes.push_back({b.min, b.max});
+        }
+
+        spatial::index result;
+        result.rebuild(std::move(boxes));
+        return result;
+    }
+
+    void step(state& p, const input& input, const collision_world& world, const spatial::index* broadphase) 
     {
         using namespace vk::util::math;
 
@@ -109,15 +134,44 @@ namespace player
 
         const vec3 previous = p.position;
 
+        std::vector<std::uint32_t> candidates;
+        if (broadphase)
+        {
+            const float horizontal = radius + 8.0f * dt + 0.01f;
+            const float vertical = std::abs(p.velocity.y) * dt + 20.0f * dt * dt + 0.05f;
+            
+            const spatial::bounds region{
+                {
+                    p.position.x - horizontal,
+                    p.position.y - vertical,
+                    p.position.z - horizontal
+                },
+                {
+                    p.position.x + horizontal,
+                    p.position.y + 1.8f + vertical,
+                    p.position.z + horizontal
+                }
+            };
+
+            broadphase->query(region, [&](std::uint32_t id){
+                candidates.push_back(id);
+            });
+        }
+        else
+        {
+            candidates.resize(world.size());
+            std::iota(candidates.begin(), candidates.end(), 0u);
+        }
+
         p.position.x += p.velocity.x * dt;
 
-        for (const auto& b : world)
+        for (const auto id : candidates)
         {
+            const auto& b = world[id];
             if (!overlaps_y(p.position.y, b) || !overlaps_xz(p.position, b))
             {
                 continue;
             }
-
             if (p.velocity.x > 0 && previous.x + radius <= b.min.x)
             {
                 p.position.x = b.min.x - radius;
@@ -131,8 +185,9 @@ namespace player
         const float previous_z = p.position.z;
         p.position.z += p.velocity.z * dt;
 
-        for (const auto& b : world)
+        for (const auto id : candidates)
         {
+            const auto& b = world[id];
             if (!overlaps_y(p.position.y, b) || !overlaps_xz(p.position, b))
             {
                 continue;
@@ -152,8 +207,9 @@ namespace player
         p.position.y += p.velocity.y * dt;
         p.grounded = false;
 
-        for (const auto& b : world)
+        for (const auto id : candidates)
         {
+            const auto& b = world[id];
             if (!overlaps_xz(p.position, b))
             {
                 continue;

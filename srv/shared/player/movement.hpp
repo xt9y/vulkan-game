@@ -1,6 +1,7 @@
 #pragma once
 
 #include "srv/shared/scene/scene.hpp"
+#include "srv/shared/spatial/index.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -37,7 +38,12 @@ namespace player
     };
 
     using collision_world = std::vector<box>;
-
+    
+    spatial::index build_index(const collision_world& world);
     collision_world build_colliders(const ::scene::state& scene);
-    void step(state& player, const input& input, const collision_world& world);
+    collision_world build_colliders(
+        const std::vector<::scene::mesh>& meshes,
+        const std::vector<::scene::instance>& instances
+    );
+    void step(state& player, const input& input, const collision_world& world, const spatial::index* broadphase = nullptr);
 } // namespace player

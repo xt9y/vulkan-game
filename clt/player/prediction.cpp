@@ -2,6 +2,7 @@
 
 #include "clt/network/connection.hpp"
 #include "srv/shared/net/message.hpp"
+#include "srv/shared/player/movement.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -43,6 +44,7 @@ namespace clt::prediction
 
             std::shared_ptr<const ::scene::state> cached_scene;
             ::player::collision_world colliders;
+            spatial::index collision_index;
 
             ::player::state avatar;
             vk::util::math::vec3 visual_offset{};
@@ -61,21 +63,25 @@ namespace clt::prediction
                 const auto source = connection::snapshot();
                 const bool connected = connection::get()->connected.load(std::memory_order_relaxed);
 
-                if (!connected || !source || source != cached_scene)
+                if (!connected || !source)
                 {
-                    cached_scene = source;
-
-                    colliders = source
-                        ? ::player::build_colliders(*source)
-                        : ::player::collision_world{};
-
+                    cached_scene.reset();
+                    colliders.clear();
+                    collision_index = {};
                     avatar = {};
                     visual_offset = {};
                     pending.clear();
-
                     sequence = 0;
                     last_server_tick = 0;
                     ready = false;
+                }
+                else if (source != cached_scene)
+                {
+                    // An appended scene batch changes collision geometry, not
+                    // the player's network identity or prediction timeline.
+                    cached_scene = source;
+                    colliders = ::player::build_colliders(*source);
+                    collision_index = ::player::build_index(colliders);
                 }
 
                 if (connected && source)
@@ -97,7 +103,7 @@ namespace clt::prediction
 
                             for (const auto& command : pending)
                             {
-                                ::player::step(avatar, command, colliders);
+                                ::player::step(avatar, command, colliders, &collision_index);
                             }
 
                             if (was_ready)
@@ -134,7 +140,7 @@ namespace clt::prediction
                         input.yaw =
                             data.yaw.load(std::memory_order_relaxed);
 
-                        ::player::step(avatar, input, colliders);
+                        ::player::step(avatar, input, colliders, &collision_index);
                         data.ticks.fetch_add(1, std::memory_order_relaxed);
 
                         pending.push_back(input);

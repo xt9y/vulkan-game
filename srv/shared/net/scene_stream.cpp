@@ -98,10 +98,11 @@ namespace net::scene_stream
 
     std::vector<std::uint8_t> serialize(const ::scene::state& scene)
     {
-        if (scene.meshes.size() > 65536 ||
-            scene.instances.size() > 65536)
+        // The byte budget, not an arbitrary object count, bounds the snapshot.
+        if (scene.meshes.size() > max_scene_bytes / 12 ||
+            scene.instances.size() > max_scene_bytes / 48)
         {
-            throw std::runtime_error("Scene item count exceeds limit");
+            throw std::runtime_error("Scene snapshot exceeds 8 MiB");
         }
 
         std::vector<std::uint8_t> bytes{'S', 'C', 'N', '1'};
@@ -191,8 +192,8 @@ namespace net::scene_stream
 
         if (!input.take(mesh_count) ||
             !input.take(instance_count) ||
-            mesh_count > 65536 ||
-            instance_count > 65536)
+            mesh_count > input.remaining() / 12 ||
+            instance_count > input.remaining() / 48)
         {
             return false;
         }
@@ -287,7 +288,7 @@ namespace net::scene_stream
         return hash;
     }
     
-    std::size_t encode_fragment(const std::vector<std::uint8_t>& bytes, std::uint32_t token, std::uint32_t index, std::uint32_t hash, packet& output)
+    std::size_t encode_fragment(const std::vector<std::uint8_t>& bytes, std::uint32_t token, std::uint32_t index, std::uint32_t hash, packet& output, bool final)
     {
         if (bytes.empty() || bytes.size() > max_scene_bytes ||
             std::size_t(index) >= (bytes.size() + fragment_size - 1) / fragment_size)
@@ -305,6 +306,7 @@ namespace net::scene_stream
         output[2] = 'C';
         output[3] = 'N';
         output[4] = 1;
+        output[5] = final ? 1 : 0;
 
         write(output.data() + 8, token);
         write(output.data() + 12, std::uint32_t(bytes.size()));
@@ -321,7 +323,7 @@ namespace net::scene_stream
         if (size <= header_size || size > packet_size ||
             bytes[0] != 'V' || bytes[1] != 'S' ||
             bytes[2] != 'C' || bytes[3] != 'N' ||
-            bytes[4] != 1 || bytes[5] ||
+            bytes[4] != 1 || bytes[5] > 1 ||
             bytes[6] || bytes[7])
         {
             return false;
@@ -329,10 +331,11 @@ namespace net::scene_stream
 
         const auto total = read(bytes + 12);
         const auto index = read(bytes + 16);
+        const std::size_t part = index & 0xffffu;
 
         if (total == 0 || total > max_scene_bytes ||
-            std::size_t(index) >= (std::size_t(total) + fragment_size - 1) / fragment_size ||
-            size - header_size != std::min(fragment_size, std::size_t(total) - std::size_t(index) * fragment_size))
+            part >= (std::size_t(total) + fragment_size - 1) / fragment_size ||
+            size - header_size != std::min(fragment_size, std::size_t(total) - part * fragment_size))
         {
             return false;
         }
@@ -342,6 +345,7 @@ namespace net::scene_stream
             total,
             index,
             read(bytes + 20),
+            bytes[5] != 0,
             bytes + header_size,
             size - header_size
         };
