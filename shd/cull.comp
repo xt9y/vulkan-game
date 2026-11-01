@@ -1,0 +1,56 @@
+#version 450
+
+layout(local_size_x = 128) in;
+
+struct Instance
+{
+    mat4 model;
+    mat4 normal;
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer Transforms
+{
+    Instance instances[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer Bounds
+{
+    vec4 spheres[];
+};
+
+layout(std430, set = 0, binding = 2) buffer Visible
+{
+    uint visible_ids[];
+};
+
+layout(std430, set = 0, binding = 3) buffer Draw
+{
+    uint index_count;
+    uint instance_count;
+    uint first_index;
+    int vertex_offset;
+    uint first_instance;
+};
+
+layout(push_constant) uniform Culling
+{
+    vec4 planes[6];
+    uint count;
+} pc;
+
+void main()
+{
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= pc.count)
+        return;
+
+    vec4 sphere = spheres[id];
+    for (uint i = 0; i < 6; ++i)
+    {
+        if (dot(pc.planes[i], vec4(sphere.xyz, 1.0)) < -sphere.w)
+            return;
+    }
+
+    uint slot = atomicAdd(instance_count, 1u);
+    visible_ids[slot] = id;
+}
