@@ -93,6 +93,8 @@ namespace
                         std::memory_order_relaxed);
                     const auto fence_max = render.max_fence_wait_us.exchange(
                         0, std::memory_order_relaxed);
+                    const auto frame_max = render.max_frame_us.exchange(
+                        0, std::memory_order_relaxed);
                     const auto deferrals = render.deferred.exchange(
                         0, std::memory_order_relaxed);
                     const auto scene_updates = render.scene_updates.exchange(
@@ -107,6 +109,7 @@ namespace
                               << "Hz"
                               << " net_gap_max=" << double(snapshot_gap) / 1000.0 << "ms"
                               << " correction_max=" << correction_peak << "m"
+                              << " frame_max=" << double(frame_max) / 1000.0 << "ms"
                               << " fence_max=" << double(fence_max) / 1000.0 << "ms"
                               << " deferred=" << deferrals
                               << " scene_updates=" << scene_updates

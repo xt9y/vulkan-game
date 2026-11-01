@@ -76,6 +76,7 @@ namespace clt::renderer
         stats().scene_updates.store(0, std::memory_order_relaxed);
         stats().fence_wait_us.store(0, std::memory_order_relaxed);
         stats().max_fence_wait_us.store(0, std::memory_order_relaxed);
+        stats().max_frame_us.store(0, std::memory_order_relaxed);
 
         if (const auto* setting = std::getenv("VK_UNCAPPED"))
         {
@@ -350,6 +351,7 @@ namespace clt::renderer
 
     void draw_frame()
     {
+        const auto frame_start = std::chrono::steady_clock::now();
         auto& data = *get();
 
         auto device = vk::device::get()->handle;
@@ -472,6 +474,16 @@ namespace clt::renderer
         catch (const vk::OutOfDateKHRError&)
         {
             resize();
+        }
+        const auto frame_us = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - frame_start).count()
+        );
+        auto longest = stats().max_frame_us.load(std::memory_order_relaxed);
+        while (longest < frame_us &&
+               !stats().max_frame_us.compare_exchange_weak(
+                   longest, frame_us, std::memory_order_relaxed))
+        {
         }
         stats().frames.fetch_add(1, std::memory_order_relaxed);
     }
