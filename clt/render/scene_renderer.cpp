@@ -1158,7 +1158,9 @@ namespace clt::scene_renderer
                 {
                     std::vector<animation::matrix> bones;
                     const float time = float(server_tick - instance.animation_tick) / 60.0f;
-                    if (!animation::sample(mesh.skin_id, instance.animation, time, bones) ||
+                    if (!animation::sample(mesh.skin_id, instance.animation, time, bones,
+                        instance.overlay_animation, instance.overlay_weight,
+                        instance.overlay_root) ||
                         bones.size() != mesh.joint_count)
                         throw std::runtime_error("Cannot sample streamed animation");
                     matrices.insert(matrices.end(), bones.begin(), bones.end());
