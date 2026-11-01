@@ -17,6 +17,8 @@
 #include <cstdlib>
 #include <cmath>
 #include <string>
+#include <iterator>
+#include <vector>
 
 #include "srv/scene/test.hpp"
 
@@ -71,14 +73,56 @@ namespace srv::application
 
         // Parse GLB/glTF off-thread, then publish on the authoritative tick.
         // Rendering and Vulkan uploads are exclusively client-side.
-        if (const char* model = std::getenv("VK_MODEL"); model && *model)
+        std::vector<std::string> paths;
+        if (const char* models = std::getenv("VK_MODELS"); models && *models)
+        {
+            const std::string list(models);
+            for (std::size_t offset = 0; offset < list.size();)
+            {
+                const auto end = list.find(';', offset);
+                const auto length = end == std::string::npos ?
+                    list.size() - offset : end - offset;
+                if (length) paths.push_back(list.substr(offset, length));
+                offset += length + 1;
+            }
+        }
+        else if (const char* model = std::getenv("VK_MODEL"); model && *model)
+        {
+            paths.emplace_back(model);
+        }
+
+        if (!paths.empty())
         {
             begin_stream();
-            if (!generation::submit([path = std::string(model)]() -> generation::completion
+            if (!generation::submit([paths = std::move(paths)]() -> generation::completion
             {
-                auto imported = assets::load(path);
+                ::scene::state combined;
+                std::uint32_t mesh_id = 1000, instance_id = 1000;
+                std::uint32_t texture_id = 1000, skin_id = 1000;
+                for (const auto& path : paths)
+                {
+                    auto imported = assets::load(path, mesh_id, instance_id,
+                                                  texture_id, skin_id);
+                    mesh_id += std::uint32_t(imported.meshes.size());
+                    instance_id += std::uint32_t(imported.instances.size());
+                    texture_id += std::uint32_t(imported.textures.size());
+                    skin_id += std::uint32_t(imported.skins.size());
+                    combined.meshes.insert(combined.meshes.end(),
+                        std::make_move_iterator(imported.meshes.begin()),
+                        std::make_move_iterator(imported.meshes.end()));
+                    combined.instances.insert(combined.instances.end(),
+                        std::make_move_iterator(imported.instances.begin()),
+                        std::make_move_iterator(imported.instances.end()));
+                    combined.textures.insert(combined.textures.end(),
+                        std::make_move_iterator(imported.textures.begin()),
+                        std::make_move_iterator(imported.textures.end()));
+                    combined.skins.insert(combined.skins.end(),
+                        std::make_move_iterator(imported.skins.begin()),
+                        std::make_move_iterator(imported.skins.end()));
+                }
+
                 return [imported = std::make_shared<::scene::state>(
-                    std::move(imported))]() mutable
+                    std::move(combined))]() mutable
                 {
                     get()->importing = std::move(imported);
                     get()->next_texture = 0;
