@@ -1,6 +1,8 @@
 #include "renderer.hpp"
 
 #include "scene_renderer.hpp"
+#include "postprocess.hpp"
+#include "passes.hpp"
 
 #include "clt/platform/vulkan_loader.hpp"
 #include "clt/platform/window.hpp"
@@ -244,6 +246,8 @@ namespace clt::renderer
         auto device = vk::device::get()->handle;
         vk::device::idle();
 
+        passes::release();
+        postprocess::release();
         scene_renderer::release_frame_resources();
 
         for (auto semaphore : data.render_ready)
@@ -312,6 +316,8 @@ namespace clt::renderer
         info.clipped = true;
         vk::swapchain::init(info);
         scene_renderer::create_frame_resources();
+        postprocess::create();
+        passes::create();
 
         for (uint32_t i = 0; i < vk::swapchain::get()->size; ++i)
         {
@@ -362,7 +368,7 @@ namespace clt::renderer
         device.resetFences(data.frame_fence);
         data.command.reset();
         data.command.begin(vk::CommandBufferBeginInfo{});
-        scene_renderer::draw(data.command, image);
+        passes::record(data.command, image);
         data.command.end();
 
         vk::PipelineStageFlags wait_stage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
@@ -433,6 +439,8 @@ namespace clt::renderer
                 device.destroySemaphore(get()->image_ready);
             }
 
+            passes::release();
+            postprocess::release();
             scene_renderer::shutdown();
 
             vk::command::shutdown();
