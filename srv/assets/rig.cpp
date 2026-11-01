@@ -86,7 +86,9 @@ namespace srv::assets
         auto append = [&](std::size_t index, auto&& self) -> raw_joint
         {
             raw_joint joint{};
-            joint.name = ("node_" + std::to_string(index)).c_str();
+            const auto& name = asset.nodes[index].name;
+            joint.name = name.empty() ? ("node_" + std::to_string(index)).c_str() :
+                name.c_str();
             joint.transform = transform(asset.nodes[index]);
             ordered.push_back(index);
             for (auto child : asset.nodes[index].children)
