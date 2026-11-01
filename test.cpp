@@ -1074,7 +1074,7 @@ int main()
         clt::input::init();
         clt::camera::init();
         clt::prediction::init();
-        clt::renderer::init("shd/mesh.vert.spv", "shd/mesh.frag.spv");
+        clt::renderer::init("build/shaders/mesh.vert.spv", "build/shaders/mesh.frag.spv");
         const auto mode = clt::renderer::get()->present_mode;
         std::cout << "PRESENT mode="
                   << (mode == vk::PresentModeKHR::eImmediate ? "immediate" :

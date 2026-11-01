@@ -484,7 +484,7 @@ namespace clt::scene_renderer
         layout.pPushConstantRanges = &range;
         data.cull_layout = device.createPipelineLayout(layout);
 
-        const auto code = vk::shader::read("shd/cull.comp.spv");
+        const auto code = vk::shader::read("build/shaders/cull.comp.spv");
         auto module = vk::shader::create(code);
         try
         {
