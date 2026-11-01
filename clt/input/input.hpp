@@ -8,6 +8,8 @@ namespace clt::input
         std::uint32_t buttons = 0;
         float mouse_x = 0;
         float mouse_y = 0;
+        bool toggle_lighting = false;
+        bool toggle_tonemapping = false;
     };
 
     void init();

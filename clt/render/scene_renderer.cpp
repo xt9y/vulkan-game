@@ -359,7 +359,6 @@ namespace clt::scene_renderer
             auto& data = get();
             const auto extent = vk::swapchain::get()->extent;
             state::target target{};
-            const auto device = vk::device::get()->handle;
             try
             {
                 for (std::size_t i = 0; i < color_formats.size(); ++i)
@@ -637,39 +636,26 @@ namespace clt::scene_renderer
             return;
         }
 
+        upload::batch transfers;
         const auto transform_bytes = mesh.transforms.size() * sizeof(instance_data);
-        if (!mesh.instance_buffer.handle ||
-            mesh.instance_buffer.size < transform_bytes)
+        if (!mesh.instance_buffer.handle || mesh.instance_buffer.size < transform_bytes)
         {
-            auto replacement = vk::buffer::create(
-                std::max<vk::DeviceSize>(
-                    static_cast<vk::DeviceSize>(transform_bytes),
-                    mesh.instance_buffer.size * 2
-                ),
+            auto replacement = transfers.add(
+                mesh.transforms.data(), transform_bytes,
                 vk::BufferUsageFlagBits::eStorageBuffer,
-                vk::MemoryPropertyFlagBits::eHostVisible |
-                vk::MemoryPropertyFlagBits::eHostCoherent
+                std::max<vk::DeviceSize>(transform_bytes, mesh.instance_buffer.size * 2)
             );
-            vk::buffer::write(
-                replacement, mesh.transforms.data(), transform_bytes
-            );
-
-            if (mesh.instance_buffer.handle)
-            {
-                vk::buffer::destroy(mesh.instance_buffer);
-            }
+            if (mesh.instance_buffer.handle) vk::buffer::destroy(mesh.instance_buffer);
             mesh.instance_buffer = replacement;
-            bind_instances(mesh);
         }
         else if (first < mesh.transforms.size())
         {
-            vk::buffer::write(
+            transfers.write(
                 mesh.instance_buffer, mesh.transforms.data() + first,
                 (mesh.transforms.size() - first) * sizeof(instance_data),
                 first * sizeof(instance_data)
             );
         }
-
 
         const auto visible_bytes = mesh.bounds.size() * sizeof(std::uint32_t);
         const auto count = vk::swapchain::get()->images.size();
@@ -705,24 +691,23 @@ namespace clt::scene_renderer
         const auto size = mesh.bounds.size() * sizeof(mesh.bounds.front());
         if (!mesh.bounds_buffer.handle || mesh.bounds_buffer.size < size)
         {
-            auto replacement = vk::buffer::create(
-                std::max<vk::DeviceSize>(size, mesh.bounds_buffer.size * 2),
-                vk::BufferUsageFlagBits::eStorageBuffer,
-                vk::MemoryPropertyFlagBits::eHostVisible |
-                vk::MemoryPropertyFlagBits::eHostCoherent
+            auto replacement = transfers.add(
+                mesh.bounds.data(), size, vk::BufferUsageFlagBits::eStorageBuffer,
+                std::max<vk::DeviceSize>(size, mesh.bounds_buffer.size * 2)
             );
-            vk::buffer::write(replacement, mesh.bounds.data(), size);
             if (mesh.bounds_buffer.handle) vk::buffer::destroy(mesh.bounds_buffer);
             mesh.bounds_buffer = replacement;
         }
         else if (first < mesh.bounds.size())
         {
-            vk::buffer::write(
+            transfers.write(
                 mesh.bounds_buffer, mesh.bounds.data() + first,
                 (mesh.bounds.size() - first) * sizeof(mesh.bounds.front()),
                 first * sizeof(mesh.bounds.front())
             );
         }
+
+        transfers.finish();
         bind_instances(mesh);
     }
 
@@ -966,6 +951,9 @@ namespace clt::scene_renderer
         auto& data = get();
         const auto extent = vk::swapchain::get()->extent;
         data.last_image = image;
+        const auto view_projection = camera::projection(
+            float(extent.width) / float(extent.height)
+        ) * camera::view();
 
         std::array<vk::ClearValue, 4> clear{};
         for (std::size_t i = 0; i < 3; ++i)
@@ -986,9 +974,6 @@ namespace clt::scene_renderer
         // Compute visibility and compact instance IDs for indirect graphics draws.
         if (data.snapshot)
         {
-            const auto view_projection = camera::projection(
-                float(extent.width) / float(extent.height)
-            ) * camera::view();
             const auto camera_planes = frustum(view_projection);
             cull_parameters params;
             for (std::size_t i = 0; i < params.planes.size(); ++i)
@@ -1082,11 +1067,6 @@ namespace clt::scene_renderer
 
         if (data.snapshot)
         {
-            const auto view_projection =
-                camera::projection(
-                    float(extent.width) / float(extent.height)
-                ) * camera::view();
-
             command.pushConstants(
                 data.layout, vk::ShaderStageFlagBits::eVertex,
                 0, sizeof(view_projection), &view_projection
