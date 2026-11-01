@@ -19,6 +19,7 @@ layout(push_constant) uniform Draw
     vec4 base_color;
     vec4 surface;
     vec4 emissive;
+    uint joints_per_instance;
 } pc;
 
 vec3 linear_color(vec3 srgb)
