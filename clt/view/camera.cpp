@@ -22,6 +22,7 @@ namespace clt::camera
 
     void init()
     {
+        std::lock_guard<std::mutex> lock(camera_mutex);
         *get() = {};
     }
 
@@ -42,25 +43,39 @@ namespace clt::camera
         );
     }
 
-    mat4 view()
+    state snapshot()
     {
         std::lock_guard<std::mutex> lock(camera_mutex);
-        const auto& camera = *get();
+        return *get();
+    }
 
+    mat4 view()
+    {
+        const auto camera = snapshot();
         const vec3 eye = prediction::position() + vec3{0, 1.65f, 0};
-
         const vec3 direction{
             std::sin(camera.yaw) * std::cos(camera.pitch),
             std::sin(camera.pitch),
             -std::cos(camera.yaw) * std::cos(camera.pitch)
         };
-
         return look_at(eye, eye + direction);
     }
 
     mat4 projection(float aspect)
     {
-        std::lock_guard<std::mutex> lock(camera_mutex);
-        return perspective(get()->fov, aspect, 0.1f, 1000.0f);
+        return perspective(snapshot().fov, aspect, 0.1f, 1000.0f);
+    }
+
+    mat4 view_projection(float aspect)
+    {
+        const auto camera = snapshot();
+        const vec3 eye = prediction::position() + vec3{0, 1.65f, 0};
+        const vec3 direction{
+            std::sin(camera.yaw) * std::cos(camera.pitch),
+            std::sin(camera.pitch),
+            -std::cos(camera.yaw) * std::cos(camera.pitch)
+        };
+        return perspective(camera.fov, aspect, 0.1f, 1000.0f) *
+            look_at(eye, eye + direction);
     }
 } // namespace clt::camera

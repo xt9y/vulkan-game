@@ -969,9 +969,9 @@ namespace clt::scene_renderer
         auto& data = get();
         const auto extent = vk::swapchain::get()->extent;
         data.last_image = image;
-        const auto view_projection = camera::projection(
+        const auto view_projection = camera::view_projection(
             float(extent.width) / float(extent.height)
-        ) * camera::view();
+        );
 
         std::array<vk::ClearValue, 4> clear{};
         for (std::size_t i = 0; i < 3; ++i)
