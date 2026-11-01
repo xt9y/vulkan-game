@@ -241,48 +241,53 @@ namespace spatial
             std::size_t accepted_instances = 0;
         };
 
-        // Whole subtrees inside the frustum skip every individual box test.
-        // The callback receives stable indices into the original bounds.
+        // Emit contiguous ranges of stable instance indices. A fully accepted
+        // subtree is one bulk copy instead of a callback for every instance.
+        // Plane bits already satisfied by a parent are never retested.
         template<class Visit>
-        frustum_stats query_frustum_fast(
+        frustum_stats query_frustum_ranges(
             const std::array<plane, 6>& planes, Visit&& visit
         ) const
         {
             frustum_stats stats;
 
-            auto walk = [&](auto&& self, std::uint32_t id) -> void
+            auto walk = [&](auto&& self, std::uint32_t id,
+                            std::uint8_t mask) -> void
             {
                 const auto& n = nodes[id];
                 ++stats.tested_nodes;
-                bool contained = true;
 
-                for (const auto& p : planes)
+                for (std::uint32_t i = 0; i < 6; ++i)
                 {
-                    const vec3 near_corner{
-                        p.normal.x >= 0 ? n.box.min.x : n.box.max.x,
-                        p.normal.y >= 0 ? n.box.min.y : n.box.max.y,
-                        p.normal.z >= 0 ? n.box.min.z : n.box.max.z
-                    };
+                    const auto bit = std::uint8_t(1u << i);
+                    if (!(mask & bit)) continue;
+
+                    const auto& p = planes[i];
                     const vec3 far_corner{
                         p.normal.x >= 0 ? n.box.max.x : n.box.min.x,
                         p.normal.y >= 0 ? n.box.max.y : n.box.min.y,
                         p.normal.z >= 0 ? n.box.max.z : n.box.min.z
                     };
-
                     if (vk::util::math::dot(p.normal, far_corner) + p.offset < 0)
                     {
                         return;
                     }
-                    contained &= vk::util::math::dot(p.normal, near_corner) + p.offset >= 0;
+
+                    const vec3 near_corner{
+                        p.normal.x >= 0 ? n.box.min.x : n.box.max.x,
+                        p.normal.y >= 0 ? n.box.min.y : n.box.max.y,
+                        p.normal.z >= 0 ? n.box.min.z : n.box.max.z
+                    };
+                    if (vk::util::math::dot(p.normal, near_corner) + p.offset >= 0)
+                    {
+                        mask &= std::uint8_t(~bit);
+                    }
                 }
 
-                if (contained)
+                if (!mask)
                 {
                     ++stats.accepted_groups;
-                    for (std::uint32_t i = 0; i < n.count; ++i)
-                    {
-                        visit(order[n.first + i]);
-                    }
+                    visit(order.data() + n.first, n.count);
                     stats.accepted_instances += n.count;
                     return;
                 }
@@ -294,23 +299,37 @@ namespace spatial
                         const auto object = order[n.first + i];
                         if (visible(boxes[object], planes))
                         {
-                            visit(object);
+                            visit(order.data() + n.first + i, 1);
                             ++stats.accepted_instances;
                         }
                     }
                     return;
                 }
 
-                self(self, n.left);
-                self(self, n.right);
+                self(self, n.left, mask);
+                self(self, n.right, mask);
             };
 
             for (auto root : roots)
             {
-                walk(walk, root);
+                walk(walk, root, 0x3fu);
             }
-
             return stats;
+        }
+
+        template<class Visit>
+        frustum_stats query_frustum_fast(
+            const std::array<plane, 6>& planes, Visit&& visit
+        ) const
+        {
+            return query_frustum_ranges(planes,
+                [&](const std::uint32_t* first, std::size_t count)
+                {
+                    for (std::size_t i = 0; i < count; ++i)
+                    {
+                        visit(first[i]);
+                    }
+                });
         }
     };
 } // namespace spatial
