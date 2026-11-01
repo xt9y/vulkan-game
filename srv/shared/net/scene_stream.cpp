@@ -102,7 +102,7 @@ namespace net::scene_stream
         if (scene.meshes.size() > max_scene_bytes / 12 ||
             scene.instances.size() > max_scene_bytes / 48)
         {
-            throw std::runtime_error("Scene snapshot exceeds 8 MiB");
+            throw std::runtime_error("Scene snapshot exceeds maximum batch size");
         }
 
         std::vector<std::uint8_t> bytes{'S', 'C', 'N', '3'};
@@ -175,7 +175,7 @@ namespace net::scene_stream
 
             if (bytes.size() > max_scene_bytes)
             {
-                throw std::runtime_error("Scene snapshot exceeds 8 MiB");
+                throw std::runtime_error("Scene snapshot exceeds maximum batch size");
             }
         }
 
@@ -194,7 +194,7 @@ namespace net::scene_stream
 
         if (bytes.size() > max_scene_bytes)
         {
-            throw std::runtime_error("Scene snapshot exceeds 8 MiB");
+            throw std::runtime_error("Scene snapshot exceeds maximum batch size");
         }
 
         return bytes;
@@ -262,7 +262,9 @@ namespace net::scene_stream
                 !input.take(indices) ||
                 vertices == 0 || indices == 0 || indices % 3 ||
                 vertices > input.remaining() / 32 ||
-                indices > (input.remaining() - std::size_t(vertices) * 32) / 4)
+                input.remaining() < 72 ||
+                std::uint64_t(vertices) * 32 + std::uint64_t(indices) * 4 >
+                    input.remaining() - 72)
             {
                 return false;
             }
