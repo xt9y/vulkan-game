@@ -795,8 +795,7 @@ namespace clt::scene_renderer
             {
                 const auto& a = source->meshes[i];
                 const auto& b = data.snapshot->meshes[i];
-                if (a.id != b.id || a.vertices.size() != b.vertices.size() ||
-                    a.indices.size() != b.indices.size())
+                if (!::scene::same_mesh(a, b))
                 {
                     appended = false;
                     break;
