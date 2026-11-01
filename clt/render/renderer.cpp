@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
+#include <iostream>
 #include <stdexcept>
 
 namespace clt::renderer
@@ -59,6 +61,11 @@ namespace clt::renderer
         }
 
         get()->initialized = true;
+
+        if (const auto* setting = std::getenv("VK_UNCAPPED"))
+        {
+            get()->uncapped = setting[0] == '1' && setting[1] == '\0';
+        }
 
         try
         {
@@ -283,6 +290,32 @@ namespace clt::renderer
         info.preTransform = caps.currentTransform;
         info.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
         info.presentMode = vk::PresentModeKHR::eFifo;
+        if (data.uncapped)
+        {
+            const auto modes = vk::surface::present_modes();
+            const auto supports = [&](vk::PresentModeKHR mode)
+            {
+                return std::find(modes.begin(), modes.end(), mode) != modes.end();
+            };
+
+            if (supports(vk::PresentModeKHR::eImmediate))
+            {
+                info.presentMode = vk::PresentModeKHR::eImmediate;
+            }
+            else if (supports(vk::PresentModeKHR::eMailbox))
+            {
+                info.presentMode = vk::PresentModeKHR::eMailbox;
+            }
+        }
+
+        data.present_mode = info.presentMode;
+        std::cout << "PRESENT mode="
+                  << (info.presentMode == vk::PresentModeKHR::eImmediate ? "immediate" :
+                      info.presentMode == vk::PresentModeKHR::eMailbox ? "mailbox" :
+                      "fifo")
+                  << " uncapped_requested=" << data.uncapped
+                  << (data.uncapped && info.presentMode == vk::PresentModeKHR::eFifo
+                      ? " (non-VSync modes unavailable)" : "") << '\n';
         info.clipped = true;
         vk::swapchain::init(info);
         scene_renderer::create_frame_resources();

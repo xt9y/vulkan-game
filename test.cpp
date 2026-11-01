@@ -920,6 +920,9 @@ int main()
         clt::connection::init();
         milestone("network_threads");
 
+        // Measure uncapped presentation in the workload. The normal game
+        // stays VSynced unless launched with VK_UNCAPPED=1.
+        clt::renderer::get()->uncapped = true;
         clt::window::init();
         clt::input::init();
         clt::camera::init();
