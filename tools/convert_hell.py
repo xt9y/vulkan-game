@@ -90,10 +90,8 @@ def convert(root, target, model, clips):
         export_format="GLB",
         use_selection=False,
         export_animations=True,
-        export_nla_strips=True,
         export_skins=True,
         export_materials="EXPORT",
-        export_image_format="AUTO",
         export_extras=True,
     )
     print(f"GLB: {original} -> {target}")
