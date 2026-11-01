@@ -22,6 +22,8 @@ namespace srv::session
         ::player::state avatar;
         std::deque<::player::input> inputs;
         std::uint32_t processed_input = 0;
+        std::uint32_t scene_request = 0;
+        bool scene_pending = false;
     };
 
     struct state
