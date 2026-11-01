@@ -163,7 +163,7 @@ namespace srv::application
 
             // Streaming generation may be expensive; commit only when there is
             // room before the next tick, without blocking player simulation.
-            if (clock::now() + 2ms < next + interval)
+            if (clock::now() + 2ms < next + interval || get()->tick % 8 == 0)
             {
                 generation::commit();
             }
