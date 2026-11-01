@@ -19,15 +19,10 @@ namespace clt::passes
         void (*record)(vk::CommandBuffer, std::uint32_t);
     };
 
-    struct timings {
-        std::array<double, 4> milliseconds{};
-        bool valid = false;
-    };
-
     const std::array<description, 4>& ordered();
     void create();
     void release();
     void record(vk::CommandBuffer command, std::uint32_t image);
-    // Caller must have waited for the fence of the previous submission for image.
-    timings read(std::uint32_t image);
+    // Record one pass, including its resource transitions. Call in order.
+    void step(vk::CommandBuffer command, std::uint32_t image, std::uint32_t index);
 }

@@ -211,13 +211,18 @@ namespace
     using vec3 = vk::util::math::vec3;
     using mat4 = vk::util::math::mat4;
 
+    struct pass_timings {
+        std::array<double, 4> milliseconds{};
+        bool valid = false;
+    };
+
     struct render_sample
     {
         double record_ms = 0;
         double fence_ms = 0;
         double upload_ms = 0;
         double gpu_ms = -1;
-        clt::passes::timings stages{};
+        pass_timings stages{};
     };
 
     // Test-only version of the public renderer frame path. Query commands surround
@@ -228,7 +233,6 @@ namespace
         std::uint32_t valid_bits = 0;
         float period = 0;
         bool pending = false;
-        std::uint32_t last_image = 0;
 
         void init()
         {
@@ -248,7 +252,7 @@ namespace
             {
                 vk::QueryPoolCreateInfo info{};
                 info.queryType = vk::QueryType::eTimestamp;
-                info.queryCount = 2;
+                info.queryCount = 10;
                 queries = vk::query::create(info);
             }
             catch (const std::exception&)
@@ -309,9 +313,9 @@ namespace
 
             if (queries && pending)
             {
-                std::array<std::uint64_t, 2> values{};
+                std::array<std::uint64_t, 10> values{};
                 const auto result = device.getQueryPoolResults(
-                    queries, 0, 2, sizeof(values), values.data(),
+                    queries, 0, 10, sizeof(values), values.data(),
                     sizeof(std::uint64_t), vk::QueryResultFlagBits::e64 |
                                            vk::QueryResultFlagBits::eWait
                 );
@@ -321,13 +325,16 @@ namespace
                     const std::uint64_t mask = valid_bits >= 64
                         ? ~std::uint64_t(0)
                         : (std::uint64_t(1) << valid_bits) - 1;
-                    const auto elapsed_ticks = (values[1] - values[0]) & mask;
-                    timing.gpu_ms = double(elapsed_ticks) * double(period) / 1000000.0;
+                    timing.gpu_ms = double((values[9] - values[0]) & mask) *
+                        double(period) / 1000000.0;
+                    for (std::size_t i = 0; i < timing.stages.milliseconds.size(); ++i)
+                    {
+                        timing.stages.milliseconds[i] =
+                            double((values[2 * i + 2] - values[2 * i + 1]) & mask) *
+                            double(period) / 1000000.0;
+                    }
+                    timing.stages.valid = true;
                 }
-            }
-            if (pending)
-            {
-                timing.stages = clt::passes::read(last_image);
             }
             pending = false;
 
@@ -371,21 +378,34 @@ namespace
 
             if (queries)
             {
-                frame.command.resetQueryPool(queries, 0, 2);
+                frame.command.resetQueryPool(queries, 0, 10);
                 frame.command.writeTimestamp(
                     vk::PipelineStageFlagBits::eTopOfPipe, queries, 0);
             }
 
             mark = clock::now();
-            clt::passes::record(frame.command, image);
-            last_image = image;
+            if (queries)
+            {
+                for (std::uint32_t i = 0; i < clt::passes::ordered().size(); ++i)
+                {
+                    frame.command.writeTimestamp(
+                        vk::PipelineStageFlagBits::eTopOfPipe, queries, 2 * i + 1);
+                    clt::passes::step(frame.command, image, i);
+                    frame.command.writeTimestamp(
+                        vk::PipelineStageFlagBits::eBottomOfPipe, queries, 2 * i + 2);
+                }
+            }
+            else
+            {
+                clt::passes::record(frame.command, image);
+            }
             timing.record_ms = std::chrono::duration<double, std::milli>(
                 clock::now() - mark).count();
 
             if (queries)
             {
                 frame.command.writeTimestamp(
-                    vk::PipelineStageFlagBits::eBottomOfPipe, queries, 1);
+                    vk::PipelineStageFlagBits::eBottomOfPipe, queries, 9);
                 pending = true;
             }
 
