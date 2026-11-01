@@ -74,7 +74,7 @@ namespace srv::assets
         auto parsed = parser.loadGltf(bytes.get(), path.parent_path(), options);
         if (parsed.error() != fastgltf::Error::None)
             throw std::runtime_error(std::string("Invalid glTF: ") +
-                                     fastgltf::getErrorMessage(parsed.error()));
+                                     std::string(fastgltf::getErrorMessage(parsed.error())));
 
         auto asset = std::move(parsed.get());
         ::scene::state result;
