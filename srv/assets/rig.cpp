@@ -5,6 +5,8 @@
 #include <ozz/animation/offline/raw_animation.h>
 #include <ozz/animation/offline/raw_skeleton.h>
 #include <ozz/animation/offline/skeleton_builder.h>
+#include <ozz/base/io/archive.h>
+#include <ozz/base/io/stream.h>
 
 #include <algorithm>
 #include <limits>
@@ -31,6 +33,24 @@ namespace srv::assets
             value.scale = {float(trs->scale[0]), float(trs->scale[1]),
                            float(trs->scale[2])};
             return value;
+        }
+    } // namespace
+
+    namespace
+    {
+        template<typename T>
+        std::vector<std::uint8_t> archive(const T& value)
+        {
+            ozz::io::MemoryStream buffer;
+            {
+                ozz::io::OArchive writer(&buffer);
+                writer << value;
+            }
+            std::vector<std::uint8_t> bytes(buffer.Size());
+            if (buffer.Seek(0, ozz::io::Stream::kSet) ||
+                buffer.Read(bytes.data(), bytes.size()) != bytes.size())
+                throw std::runtime_error("Ozz archive could not be serialized");
+            return bytes;
         }
     } // namespace
 
@@ -163,6 +183,38 @@ namespace srv::assets
             result.names.emplace_back(source.name);
             result.clips.push_back(std::move(built));
         }
+        return result;
+    }
+
+    ::scene::skin serialize_rig(const fastgltf::Asset& asset,
+                                std::size_t skin_index, std::uint32_t id)
+    {
+        auto imported = import_rig(asset, skin_index);
+        ::scene::skin result;
+        result.id = id;
+        result.skeleton = archive(*imported.skeleton);
+        result.inverse_bind.resize(imported.skeleton->num_joints());
+        for (auto& m : result.inverse_bind)
+            m = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+
+        const auto& source = asset.skins.at(skin_index);
+        if (source.inverseBindMatrices)
+        {
+            const auto& accessor = asset.accessors.at(*source.inverseBindMatrices);
+            if (accessor.count != imported.skin_joints.size())
+                throw std::runtime_error("Mismatched glTF inverse bind matrices");
+            for (std::size_t i = 0; i < accessor.count; ++i)
+            {
+                const auto matrix = fastgltf::getAccessorElement<fastgltf::math::fmat4x4>(
+                    asset, accessor, i);
+                auto& values = result.inverse_bind[imported.skin_joints[i]];
+                for (int c = 0; c < 4; ++c)
+                    for (int r = 0; r < 4; ++r)
+                        values[c * 4 + r] = matrix[c][r];
+            }
+        }
+        for (std::size_t i = 0; i < imported.clips.size(); ++i)
+            result.clips.push_back({imported.names[i], archive(*imported.clips[i])});
         return result;
     }
 } // namespace srv::assets
