@@ -918,7 +918,7 @@ namespace clt::scene_renderer
             }
             for (std::size_t i = 0; i < data.meshes.size(); ++i)
             {
-                if (data.meshes[i].instances.size() != previous_counts[i])
+                if (data.meshes[i].transforms.size() != previous_counts[i])
                 {
                     refresh_instances(data.meshes[i], previous_counts[i]);
                 }
