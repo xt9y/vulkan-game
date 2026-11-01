@@ -37,8 +37,51 @@ namespace clt::connection
 
     std::shared_ptr<const scene::state> snapshot()
     {
-        std::lock_guard<std::mutex> lock(get()->scene_mutex);
-        return get()->scene;
+        auto& data = *get();
+        std::lock_guard<std::mutex> lock(data.scene_mutex);
+        if (data.pending_scene.empty()) return data.scene;
+
+        const auto now = clock::now();
+        // Keep received batches as independent chunks until publication.
+        // Coalesce bursts without mutating snapshots held by render/physics.
+        if (data.scene && !data.scene_complete.load(std::memory_order_relaxed) &&
+            now - data.last_publish < 16ms)
+        {
+            return data.scene;
+        }
+
+        auto combined = std::make_shared<::scene::state>();
+        std::size_t meshes = data.scene ? data.scene->meshes.size() : 0;
+        std::size_t instances = data.scene ? data.scene->instances.size() : 0;
+        for (const auto& patch : data.pending_scene)
+        {
+            meshes += patch.meshes.size();
+            instances += patch.instances.size();
+        }
+        combined->meshes.reserve(meshes);
+        combined->instances.reserve(instances);
+        if (data.scene)
+        {
+            combined->meshes = data.scene->meshes;
+            combined->instances = data.scene->instances;
+        }
+        for (auto& patch : data.pending_scene)
+        {
+            combined->meshes.insert(
+                combined->meshes.end(),
+                std::make_move_iterator(patch.meshes.begin()),
+                std::make_move_iterator(patch.meshes.end())
+            );
+            combined->instances.insert(
+                combined->instances.end(),
+                std::make_move_iterator(patch.instances.begin()),
+                std::make_move_iterator(patch.instances.end())
+            );
+        }
+        data.scene = std::move(combined);
+        data.pending_scene.clear();
+        data.last_publish = now;
+        return data.scene;
     }
 
     void check_error()
@@ -93,6 +136,8 @@ namespace clt::connection
         {
             std::lock_guard<std::mutex> lock(get()->scene_mutex);
             get()->scene.reset();
+            get()->pending_scene.clear();
+            get()->last_publish = {};
         }
 
         {
@@ -127,6 +172,8 @@ namespace clt::connection
         {
             std::lock_guard<std::mutex> lock(get()->scene_mutex);
             get()->scene.reset();
+            get()->pending_scene.clear();
+            get()->last_publish = {};
         }
 
         net::socket::destroy(get()->socket);
@@ -190,6 +237,8 @@ namespace clt::connection
 
                     std::lock_guard<std::mutex> lock(data.scene_mutex);
                     data.scene.reset();
+                    data.pending_scene.clear();
+                    data.last_publish = {};
                 };
 
                 auto send = [&](net::message::type type)
@@ -311,24 +360,9 @@ namespace clt::connection
                                 if (net::scene_stream::checksum(scene_bytes) == scene_hash &&
                                     net::scene_stream::deserialize(scene_bytes, received))
                                 {
-                                    auto completed = std::make_shared<::scene::state>();
                                     {
                                         std::lock_guard<std::mutex> lock(data.scene_mutex);
-                                        if (data.scene)
-                                        {
-                                            *completed = *data.scene;
-                                        }
-                                        completed->meshes.insert(
-                                            completed->meshes.end(),
-                                            std::make_move_iterator(received.meshes.begin()),
-                                            std::make_move_iterator(received.meshes.end())
-                                        );
-                                        completed->instances.insert(
-                                            completed->instances.end(),
-                                            std::make_move_iterator(received.instances.begin()),
-                                            std::make_move_iterator(received.instances.end())
-                                        );
-                                        data.scene = std::move(completed);
+                                        data.pending_scene.push_back(std::move(received));
                                     }
 
                                     scene_ready = scene_last;
