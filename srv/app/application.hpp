@@ -1,6 +1,8 @@
 #pragma once
 
 #include <vector>
+#include <memory>
+#include <cstddef>
 
 #include "srv/game/options.hpp"
 
@@ -20,6 +22,8 @@ namespace srv::application
         net::socket::resource socket;
         world::state terrain;
         scene::state scene;
+        std::shared_ptr<scene::state> importing;
+        std::size_t next_texture = 0;
         player::collision_world colliders;
         spatial::index collision_index;
         std::vector<std::uint8_t> scene_bytes;
