@@ -784,8 +784,16 @@ namespace
                   << " p95=" << percentile(value.cull_ms, 0.95)
                   << " visible_id_upload_ms=" << average(value.index_upload_ms)
                   << " commands_ms=" << average(value.commands_ms)
-                  << " gpu_visible=" << value.gpu_visible
-                  << " bvh_nodes=" << value.tested_nodes
+                  << " gpu_visible=";
+        if (value.gpu_culling)
+        {
+            std::cout << "gpu_indirect";
+        }
+        else
+        {
+            std::cout << value.gpu_visible;
+        }
+        std::cout << " bvh_nodes=" << value.tested_nodes
                   << " accepted_groups=" << value.accepted_groups
                   << " gpu_mode=" << value.gpu_culling
                   << " gpu_candidates=" << value.gpu_candidates
