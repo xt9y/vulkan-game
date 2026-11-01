@@ -12,7 +12,7 @@ namespace net::scene_stream
     inline constexpr std::size_t fragment_size = 1024;
     inline constexpr std::size_t header_size = 24;
     inline constexpr std::size_t packet_size = header_size + fragment_size;
-    inline constexpr std::size_t max_scene_bytes = 8 * 1024 * 1024;
+    inline constexpr std::size_t max_scene_bytes = 32 * 1024 * 1024;
     // A request encodes a batch and a fragment in its 32-bit value.
     inline constexpr std::uint32_t max_fragments_per_batch = 65536;
 
