@@ -168,6 +168,77 @@ void build(C_Build* b)
     c_link_system(game, "shell32");
 #endif
 
+    // Dedicated server: no window system or graphics dependency.
+    C_Target* server = c_executable(b, "vulkan-server");
+    c_sources(server, "server.cpp");
+    c_sources(server, "srv/world/*.cpp");
+    c_sources(server, "srv/assets/*.cpp");
+    c_sources(server, "srv/scene/*.cpp");
+    c_sources(server, "srv/app/*.cpp");
+    c_sources(server, "srv/network/*.cpp");
+    c_sources(server, "srv/shared/net/*.cpp");
+    c_sources(server, "srv/shared/player/*.cpp");
+    c_sources(server, "srv/game/options.cpp");
+    c_sources(server, "srv/game/state.cpp");
+    c_include(server, ".");
+    c_warnings_strict(server);
+    c_flag(server, "-std=c++20");
+    c_use(server, engine);
+    c_use(server, headers);
+    c_use(server, fastgltf);
+    c_use(server, ozz);
+    c_use(server, stb);
+
+    // Dedicated client: no server world generation or server application.
+    C_Target* client = c_executable(b, "vulkan-client");
+    c_sources(client, "client.cpp");
+    c_sources(client, "clt/app/*.cpp");
+    c_sources(client, "clt/network/*.cpp");
+    c_sources(client, "clt/platform/*.cpp");
+    c_sources(client, "clt/render/*.cpp");
+    c_sources(client, "clt/input/*.cpp");
+    c_sources(client, "clt/view/*.cpp");
+    c_sources(client, "clt/player/*.cpp");
+    c_sources(client, "srv/shared/net/*.cpp");
+    c_sources(client, "srv/shared/player/*.cpp");
+    c_sources(client, "srv/game/options.cpp");
+    c_sources(client, "srv/game/state.cpp");
+    c_include(client, ".");
+    c_warnings_strict(client);
+    c_flag(client, "-std=c++20");
+    c_use(client, engine);
+    c_use(client, headers);
+    c_use(client, glfw);
+    c_use(client, ozz);
+
+#ifdef __APPLE__
+    c_link_system(server, "c++");
+    c_framework(client, "Cocoa");
+    c_framework(client, "IOKit");
+    c_framework(client, "CoreFoundation");
+    c_framework(client, "QuartzCore");
+    c_link_system(client, "c++");
+#elif defined(__linux__)
+    c_link_system(server, "pthread");
+    c_link_system(server, "m");
+    c_link_system(server, "stdc++");
+    c_link_system(client, "X11");
+    c_link_system(client, "Xrandr");
+    c_link_system(client, "Xi");
+    c_link_system(client, "Xcursor");
+    c_link_system(client, "Xinerama");
+    c_link_system(client, "dl");
+    c_link_system(client, "pthread");
+    c_link_system(client, "m");
+    c_link_system(client, "stdc++");
+#else
+    c_link_system(server, "ws2_32");
+    c_link_system(client, "ws2_32");
+    c_link_system(client, "user32");
+    c_link_system(client, "gdi32");
+    c_link_system(client, "shell32");
+#endif
+
     // Standalone end-to-end benchmark; no changes to the production game.
     C_Target* workload = c_test(b, "workload");
     c_sources(workload, "test.cpp");
