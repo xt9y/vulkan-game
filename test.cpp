@@ -217,6 +217,7 @@ namespace
         double fence_ms = 0;
         double upload_ms = 0;
         double gpu_ms = -1;
+        clt::passes::timings stages{};
     };
 
     // Test-only version of the public renderer frame path. Query commands surround
@@ -227,6 +228,7 @@ namespace
         std::uint32_t valid_bits = 0;
         float period = 0;
         bool pending = false;
+        std::uint32_t last_image = 0;
 
         void init()
         {
@@ -322,6 +324,10 @@ namespace
                     timing.gpu_ms = double(elapsed_ticks) * double(period) / 1000000.0;
                 }
             }
+            if (pending)
+            {
+                timing.stages = clt::passes::read(last_image);
+            }
             pending = false;
 
             mark = clock::now();
@@ -353,6 +359,7 @@ namespace
 
             mark = clock::now();
             clt::passes::record(frame.command, image);
+            last_image = image;
             timing.record_ms = std::chrono::duration<double, std::milli>(
                 clock::now() - mark).count();
 
@@ -672,6 +679,7 @@ namespace
         std::vector<double> fence_ms;
         std::vector<double> upload_ms;
         std::vector<double> gpu_ms;
+        std::array<std::vector<double>, 4> pass_ms;
         std::size_t gpu_candidates = 0;
         std::size_t visible_instances = 0;
         std::size_t draw_calls = 0;
@@ -720,6 +728,7 @@ namespace
         output.fence_ms.reserve(10000);
         output.upload_ms.reserve(10000);
         output.gpu_ms.reserve(10000);
+        for (auto& pass : output.pass_ms) pass.reserve(10000);
 
         // Visibility counts are sampled once per phase, not every frame; the
         // audit must not dominate the renderer's actual frame-time measurement.
@@ -768,6 +777,13 @@ namespace
                 if (measured.gpu_ms >= 0)
                 {
                     output.gpu_ms.push_back(measured.gpu_ms);
+                }
+                if (measured.stages.valid)
+                {
+                    for (std::size_t i = 0; i < output.pass_ms.size(); ++i)
+                    {
+                        output.pass_ms[i].push_back(measured.stages.milliseconds[i]);
+                    }
                 }
             }
 
@@ -854,7 +870,15 @@ namespace
                   << " aabb_query_ms=" << value.collision_query_ms
                   << " physics_step_ms=" << value.collision_step_ms << '\n';
         std::cout << "  gpu_candidates=" << value.gpu_candidates
-                  << " visibility=gpu_indirect" << '\n';
+                  << " visibility=gpu_indirect";
+        const auto& passes = clt::passes::ordered();
+        for (std::size_t i = 0; i < value.pass_ms.size(); ++i)
+        {
+            std::cout << " " << passes[i].name << "_gpu_ms=";
+            if (value.pass_ms[i].empty()) std::cout << "n/a";
+            else std::cout << average(value.pass_ms[i]);
+        }
+        std::cout << '\n';
     }
 } // namespace
 
