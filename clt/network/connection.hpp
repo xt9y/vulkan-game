@@ -36,6 +36,8 @@ namespace clt::connection
 
         std::mutex animation_mutex;
         std::unordered_map<std::uint32_t, net::animation::resource> animations;
+        std::deque<net::animation::attachment_event> attachment_events;
+        std::uint32_t last_attachment_sequence = 0;
 
         std::mutex scene_mutex;
         std::shared_ptr<const ::scene::state> scene;
@@ -57,6 +59,7 @@ namespace clt::connection
     state* get();
     std::shared_ptr<const ::scene::state> snapshot();
     std::optional<net::animation::resource> animation(std::uint32_t instance_id);
+    std::vector<net::animation::attachment_event> take_attachment_events();
     void check_error();
     void send_input(const ::player::input& input);
     std::optional<net::movement::snapshot> take_authority();
