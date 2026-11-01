@@ -478,6 +478,13 @@ namespace
                 vk::MemoryPropertyFlagBits::eHostCoherent
             );
             const auto command = vk::command::begin_one_time();
+            vk::MemoryBarrier ready{};
+            ready.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
+            ready.dstAccessMask = vk::AccessFlagBits::eTransferRead;
+            command.pipelineBarrier(
+                vk::PipelineStageFlagBits::eComputeShader,
+                vk::PipelineStageFlagBits::eTransfer, {}, {ready}, {}, {}
+            );
             vk::BufferCopy command_copy{};
             command_copy.size = sizeof(vk::DrawIndexedIndirectCommand);
             command.copyBuffer(mesh.indirect->handle, indirect.handle, {command_copy});
