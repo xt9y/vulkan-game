@@ -19,6 +19,7 @@ namespace scene
 
     struct state {
         std::vector<mesh> meshes;
+        std::vector<texture> textures;
         std::vector<instance> instances;
     };
 
