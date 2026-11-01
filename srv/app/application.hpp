@@ -24,6 +24,7 @@ namespace srv::application
         scene::state scene;
         std::shared_ptr<scene::state> importing;
         std::size_t next_texture = 0;
+        std::size_t animation_cursor = 0;
         player::collision_world colliders;
         spatial::index collision_index;
         std::vector<std::uint8_t> scene_bytes;
@@ -44,6 +45,10 @@ namespace srv::application
     // Background jobs return a completion that invokes append_scene().
     void begin_stream();
     void append_scene(::scene::state patch, bool final = false);
+    // Call on the authoritative server tick (not from an import worker).
+    bool play_animation(std::uint32_t instance_id, std::uint32_t clip,
+                        std::uint32_t overlay = UINT32_MAX, float blend = 0.0f,
+                        std::uint32_t mask_root = UINT32_MAX);
     int run();
     void shutdown() noexcept;
 } // namespace srv::application
