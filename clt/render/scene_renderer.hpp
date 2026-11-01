@@ -13,6 +13,8 @@ namespace clt::scene_renderer
         double commands_ms = 0;
         std::size_t tested_nodes = 0;
         std::size_t accepted_groups = 0;
+        std::size_t cache_hits = 0;
+        std::size_t uploaded_bytes = 0;
         std::size_t visible_instances = 0;
         std::size_t draw_calls = 0;
     };
