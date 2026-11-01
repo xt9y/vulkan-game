@@ -4,6 +4,7 @@
 #include "srv/shared/scene/scene.hpp"
 
 #include "srv/shared/net/movement.hpp"
+#include "srv/shared/net/animation.hpp"
 
 #include <chrono>
 #include <deque>
@@ -17,6 +18,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 
 namespace clt::connection
 {
@@ -31,6 +33,9 @@ namespace clt::connection
         std::atomic<std::uint32_t> server_tick{0};
         std::atomic<std::uint64_t> player_snapshots{0};
         std::atomic<bool> scene_complete{false};
+
+        std::mutex animation_mutex;
+        std::unordered_map<std::uint32_t, net::animation::resource> animations;
 
         std::mutex scene_mutex;
         std::shared_ptr<const ::scene::state> scene;
@@ -51,6 +56,7 @@ namespace clt::connection
 
     state* get();
     std::shared_ptr<const ::scene::state> snapshot();
+    std::optional<net::animation::resource> animation(std::uint32_t instance_id);
     void check_error();
     void send_input(const ::player::input& input);
     std::optional<net::movement::snapshot> take_authority();
