@@ -216,7 +216,6 @@ namespace
         double fence_ms = 0;
         double upload_ms = 0;
         double gpu_ms = -1;
-        clt::scene_renderer::draw_stats scene{};
     };
 
     // Test-only version of the public renderer frame path. Query commands surround
@@ -353,7 +352,6 @@ namespace
 
             mark = clock::now();
             clt::scene_renderer::draw(frame.command, image);
-            timing.scene = clt::scene_renderer::last_stats();
             timing.record_ms = std::chrono::duration<double, std::milli>(
                 clock::now() - mark).count();
 
@@ -404,6 +402,102 @@ namespace
             return timing;
         }
     };
+
+    struct gpu_validation {
+        bool available = false;
+        std::size_t expected = 0;
+        std::size_t actual = 0;
+        std::size_t missing = 0;
+        std::size_t unexpected = 0;
+        std::size_t duplicates = 0;
+        std::size_t out_of_range = 0;
+        std::size_t bad_commands = 0;
+
+        bool passed() const
+        {
+            return available && expected == actual && !missing &&
+                !unexpected && !duplicates && !out_of_range && !bad_commands;
+        }
+    };
+
+    gpu_validation validate_gpu_visibility()
+    {
+        const auto data = clt::scene_renderer::culling_data();
+        gpu_validation result;
+        if (!data.valid)
+        {
+            return result;
+        }
+        result.available = true;
+
+        for (const auto& mesh : data.meshes)
+        {
+
+            const auto* draw = static_cast<const vk::DrawIndexedIndirectCommand*>(
+                vk::buffer::map(*mesh.indirect)
+            );
+            const std::size_t actual = draw->instanceCount;
+            result.actual += actual;
+            if (draw->indexCount != mesh.index_count || draw->firstIndex ||
+                draw->vertexOffset || draw->firstInstance)
+            {
+                ++result.bad_commands;
+            }
+
+            std::vector<std::uint8_t> expected(mesh.bounds->size(), 0);
+            for (std::size_t i = 0; i < mesh.bounds->size(); ++i)
+            {
+                const auto& sphere = (*mesh.bounds)[i];
+                bool visible = true;
+                for (const auto& plane : data.planes)
+                {
+                    const float distance = plane.x * sphere[0] +
+                        plane.y * sphere[1] + plane.z * sphere[2] + plane.w;
+                    if (distance < -sphere[3])
+                    {
+                        visible = false;
+                        break;
+                    }
+                }
+                expected[i] = std::uint8_t(visible);
+                result.expected += visible;
+            }
+
+            const auto* ids = static_cast<const std::uint32_t*>(
+                vk::buffer::map(*mesh.visible)
+            );
+            const std::size_t readable = std::min(actual, mesh.bounds->size());
+            result.out_of_range += actual - readable;
+
+            for (std::size_t i = 0; i < readable; ++i)
+            {
+                const auto id = ids[i];
+                if (id >= expected.size())
+                {
+                    ++result.out_of_range;
+                }
+                else if (expected[id] == 0)
+                {
+                    ++result.unexpected;
+                }
+                else if (expected[id] == 2)
+                {
+                    ++result.duplicates;
+                }
+                else
+                {
+                    expected[id] = 2;
+                }
+            }
+
+            for (auto value : expected)
+            {
+                result.missing += value == 1;
+            }
+        }
+
+        return result;
+    }
 
     // Independent visibility audit: reconstruct the same six Vulkan frustum
     // planes and per-instance bounding spheres as the production renderer.
@@ -577,7 +671,6 @@ namespace
         std::vector<double> fence_ms;
         std::vector<double> upload_ms;
         std::vector<double> gpu_ms;
-        std::vector<double> gpu_dispatch_ms;
         std::size_t gpu_candidates = 0;
         std::size_t visible_instances = 0;
         std::size_t draw_calls = 0;
@@ -626,11 +719,12 @@ namespace
         output.fence_ms.reserve(10000);
         output.upload_ms.reserve(10000);
         output.gpu_ms.reserve(10000);
-        output.gpu_dispatch_ms.reserve(10000);
 
         // Visibility counts are sampled once per phase, not every frame; the
         // audit must not dominate the renderer's actual frame-time measurement.
         const auto counts = visibility.sample();
+        const auto snapshot = clt::connection::snapshot();
+        output.gpu_candidates = snapshot ? snapshot->instances.size() : 0;
         output.visible_instances = counts.visible;
         output.draw_calls = counts.draw_calls;
         output.collision_query_ms = collision.query_ms;
@@ -649,6 +743,7 @@ namespace
 
         while (std::chrono::duration<double>(clock::now() - started).count() < seconds)
         {
+            clt::connection::check_error();
             clt::window::poll_events();
 
             if (clt::window::should_close())
@@ -669,8 +764,6 @@ namespace
                 output.record_ms.push_back(measured.record_ms);
                 output.fence_ms.push_back(measured.fence_ms);
                 output.upload_ms.push_back(measured.upload_ms);
-                output.gpu_dispatch_ms.push_back(measured.scene.gpu_dispatch_ms);
-                output.gpu_candidates = measured.scene.gpu_candidates;
                 if (measured.gpu_ms >= 0)
                 {
                     output.gpu_ms.push_back(measured.gpu_ms);
@@ -760,7 +853,6 @@ namespace
                   << " aabb_query_ms=" << value.collision_query_ms
                   << " physics_step_ms=" << value.collision_step_ms << '\n';
         std::cout << "  gpu_candidates=" << value.gpu_candidates
-                  << " compute_record_ms=" << average(value.gpu_dispatch_ms)
                   << " visibility=gpu_indirect" << '\n';
     }
 } // namespace
@@ -889,6 +981,11 @@ int main()
         clt::camera::init();
         clt::prediction::init();
         clt::renderer::init("shd/mesh.vert.spv", "shd/mesh.frag.spv");
+        const auto mode = clt::renderer::get()->present_mode;
+        std::cout << "PRESENT mode="
+                  << (mode == vk::PresentModeKHR::eImmediate ? "immediate" :
+                      mode == vk::PresentModeKHR::eMailbox ? "mailbox" : "fifo")
+                  << " uncapped_requested=" << clt::renderer::get()->uncapped << '\n';
         milestone("window+vulkan_init");
         gpu.init();
 
@@ -900,6 +997,7 @@ int main()
         while ((!clt::connection::get()->scene_complete.load(std::memory_order_relaxed) ||
                 clt::prediction::ticks() < 10) && clock::now() < deadline)
         {
+            clt::connection::check_error();
             clt::window::poll_events();
 
             if (clock::now() >= next_progress)
@@ -934,6 +1032,8 @@ int main()
         {
             throw std::runtime_error("Scene transfer completed without the expected instances");
         }
+        std::cout << "Scene received: " << complete_scene->meshes.size()
+                  << " meshes, " << complete_scene->instances.size() << " instances\n";
 
         const auto audit_gpu = [&](const char* label)
         {
@@ -945,7 +1045,7 @@ int main()
                 throw std::runtime_error("GPU visibility audit fence failed");
             }
 
-            const auto check = clt::scene_renderer::validate_gpu_visibility();
+            const auto check = validate_gpu_visibility();
             std::cout << "GPU_VISIBILITY " << label
                       << " expected=" << check.expected
                       << " gpu_visible=" << check.actual

@@ -87,7 +87,8 @@ namespace clt::prediction
                     {
                         for (std::size_t i = 0; i < source->meshes.size(); ++i)
                         {
-                            if (source->meshes[i].id != cached_scene->meshes[i].id)
+                            if (!::scene::same_mesh(
+                                source->meshes[i], cached_scene->meshes[i]))
                             {
                                 appended = false;
                                 break;
@@ -98,8 +99,8 @@ namespace clt::prediction
                     {
                         for (std::size_t i = 0; i < cached_scene->instances.size(); ++i)
                         {
-                            if (source->instances[i].id != cached_scene->instances[i].id ||
-                                source->instances[i].mesh_id != cached_scene->instances[i].mesh_id)
+                            if (!::scene::same_instance(
+                                source->instances[i], cached_scene->instances[i]))
                             {
                                 appended = false;
                                 break;

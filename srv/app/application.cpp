@@ -15,7 +15,6 @@
 
 #include "srv/scene/test.hpp"
 
-#include <iostream>
 #include <stdexcept>
 #include <thread>
 
@@ -120,27 +119,9 @@ namespace srv::application
             throw std::runtime_error("srv::application is not initialized");
         }
 
-        std::cout << "Server listening on " << get()->options.bind_host << ':'
-                  << get()->options.port << " (UDP, 60 Hz)\n"
-                  << std::flush;
         const auto started = clock::now();
         auto next = started;
         constexpr auto interval = std::chrono::nanoseconds(1'000'000'000 / 60);
-
-        // auto ground = srv::world::height(get()->terrain, 10, 20);
-        // bool blocked = srv::world::solid(get()->terrain, 10.5, 12.0, 20.5);
-        // srv::world::aabb player{
-        //     10.2, 12.0, 20.2,
-        //     10.8, 13.8, 20.8
-        // };
-        // bool collision = srv::world::collides(get()->terrain, player);
-        // srv::world::set_height(get()->terrain, 10, 20, 25);
-        // std::int32_t heights[16 * 16];
-        // srv::world::sample(get()->terrain, 0, 0, 16, 16, heights);
-        //
-        // std::cout << "Ground: " << ground
-        //       << ", Blocked: " << blocked
-        //       << ", Collision: " << collision << '\n';
 
         while (!game::application::get()->stop.load(std::memory_order_relaxed))
         {

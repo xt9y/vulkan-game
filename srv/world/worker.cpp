@@ -3,7 +3,6 @@
 #include <condition_variable>
 #include <deque>
 #include <exception>
-#include <iostream>
 #include <mutex>
 #include <thread>
 #include <utility>
@@ -18,6 +17,7 @@ namespace srv::generation
 
             std::deque<job> pending;
             std::deque<completion> completed;
+            std::exception_ptr failure;
 
             std::thread worker;
             bool stop = false;
@@ -62,9 +62,14 @@ namespace srv::generation
                         data.completed.push_back(std::move(result));
                     }
                 }
-                catch (const std::exception& error)
+                catch (...)
                 {
-                    std::cerr << "Generation: " << error.what() << '\n';
+                    std::lock_guard<std::mutex> lock(data.mutex);
+                    if (!data.failure)
+                    {
+                        data.failure = std::current_exception();
+                    }
+                    data.pending.clear();
                 }
             }
         }
@@ -79,7 +84,11 @@ namespace srv::generation
             return;
         }
 
-        data.stop = false;
+        {
+            std::lock_guard<std::mutex> lock(data.mutex);
+            data.stop = false;
+            data.failure = {};
+        }
         data.worker = std::thread(run);
     }
 
@@ -88,7 +97,8 @@ namespace srv::generation
         auto& data = get();
         std::lock_guard<std::mutex> lock(data.mutex);
 
-        if (data.stop || !data.worker.joinable() || data.pending.size() >= 64)
+        if (data.stop || data.failure || !data.worker.joinable() ||
+            data.pending.size() >= 64)
         {
             return false;
         }
@@ -103,15 +113,22 @@ namespace srv::generation
     {
         auto& data = get();
         std::deque<completion> tasks;
+        std::exception_ptr failure;
 
         {
             std::lock_guard<std::mutex> lock(data.mutex);
+            failure = data.failure;
 
             for (int i = 0; i < 2 && !data.completed.empty(); ++i)
             {
                 tasks.push_back(std::move(data.completed.front()));
                 data.completed.pop_front();
             }
+        }
+
+        if (failure)
+        {
+            std::rethrow_exception(failure);
         }
 
         for (auto& task : tasks)
@@ -139,5 +156,6 @@ namespace srv::generation
 
         std::lock_guard<std::mutex> lock(data.mutex);
         data.completed.clear();
+        data.failure = {};
     }
 } // namespace srv::generation

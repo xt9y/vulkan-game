@@ -7,12 +7,10 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cstddef>
 #include <cstdlib>
 #include <filesystem>
 #include <cmath>
-#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -63,7 +61,6 @@ namespace clt::scene_renderer
             vk::Pipeline cull_pipeline{};
             std::array<vec4, 6> last_gpu_planes{};
             bool gpu_planes_valid = false;
-            draw_stats timings{};
 
             vk::RenderPass render_pass{};
             vk::PipelineLayout layout{};
@@ -501,91 +498,26 @@ namespace clt::scene_renderer
             throw;
         }
         vk::shader::destroy(module);
-        std::cout << "GPU-driven frustum culling enabled\n";
     }
 
-    draw_stats last_stats()
-    {
-        return get().timings;
-    }
-
-    gpu_validation validate_gpu_visibility()
+    culling_readback culling_data()
     {
         auto& data = get();
-        gpu_validation result;
-        if (!data.gpu_planes_valid)
-        {
-            return result;
-        }
-        result.available = true;
+        culling_readback result;
+        result.planes = data.last_gpu_planes;
+        result.valid = data.gpu_planes_valid;
+        result.meshes.reserve(data.meshes.size());
 
         for (auto& mesh : data.meshes)
         {
-            if (mesh.transforms.empty()) continue;
-
-            const auto* draw = static_cast<const vk::DrawIndexedIndirectCommand*>(
-                vk::buffer::map(mesh.indirect_buffer)
-            );
-            const std::size_t actual = draw->instanceCount;
-            result.actual += actual;
-            if (draw->indexCount != mesh.index_count || draw->firstIndex ||
-                draw->vertexOffset || draw->firstInstance)
+            if (!mesh.transforms.empty())
             {
-                ++result.bad_commands;
-            }
-
-            std::vector<std::uint8_t> expected(mesh.bounds.size(), 0);
-            for (std::size_t i = 0; i < mesh.bounds.size(); ++i)
-            {
-                const auto& sphere = mesh.bounds[i];
-                bool visible = true;
-                for (const auto& plane : data.last_gpu_planes)
-                {
-                    const float distance = plane.x * sphere[0] +
-                        plane.y * sphere[1] + plane.z * sphere[2] + plane.w;
-                    if (distance < -sphere[3])
-                    {
-                        visible = false;
-                        break;
-                    }
-                }
-                expected[i] = std::uint8_t(visible);
-                result.expected += visible;
-            }
-
-            const auto* ids = static_cast<const std::uint32_t*>(
-                vk::buffer::map(mesh.visible_buffer)
-            );
-            const std::size_t readable = std::min(actual, mesh.bounds.size());
-            result.out_of_range += actual - readable;
-
-            for (std::size_t i = 0; i < readable; ++i)
-            {
-                const auto id = ids[i];
-                if (id >= expected.size())
-                {
-                    ++result.out_of_range;
-                }
-                else if (expected[id] == 0)
-                {
-                    ++result.unexpected;
-                }
-                else if (expected[id] == 2)
-                {
-                    ++result.duplicates;
-                }
-                else
-                {
-                    expected[id] = 2;
-                }
-            }
-
-            for (auto value : expected)
-            {
-                result.missing += value == 1;
+                result.meshes.push_back({
+                    &mesh.bounds, &mesh.visible_buffer,
+                    &mesh.indirect_buffer, mesh.index_count
+                });
             }
         }
-
         return result;
     }
 
@@ -863,8 +795,7 @@ namespace clt::scene_renderer
             {
                 const auto& a = source->meshes[i];
                 const auto& b = data.snapshot->meshes[i];
-                if (a.id != b.id || a.vertices.size() != b.vertices.size() ||
-                    a.indices.size() != b.indices.size())
+                if (!::scene::same_mesh(a, b))
                 {
                     appended = false;
                     break;
@@ -874,23 +805,9 @@ namespace clt::scene_renderer
 
         if (appended)
         {
-            const auto equal_pose = [](const ::scene::instance& a, const ::scene::instance& b)
-            {
-                return a.id == b.id && a.mesh_id == b.mesh_id &&
-                    a.pose.position.x == b.pose.position.x &&
-                    a.pose.position.y == b.pose.position.y &&
-                    a.pose.position.z == b.pose.position.z &&
-                    a.pose.scale.x == b.pose.scale.x &&
-                    a.pose.scale.y == b.pose.scale.y &&
-                    a.pose.scale.z == b.pose.scale.z &&
-                    a.pose.rotation.x == b.pose.rotation.x &&
-                    a.pose.rotation.y == b.pose.rotation.y &&
-                    a.pose.rotation.z == b.pose.rotation.z &&
-                    a.pose.rotation.w == b.pose.rotation.w;
-            };
             appended = std::equal(
                 data.snapshot->instances.begin(), data.snapshot->instances.end(),
-                source->instances.begin(), equal_pose
+                source->instances.begin(), ::scene::same_instance
             );
         }
 
@@ -918,7 +835,7 @@ namespace clt::scene_renderer
             }
             for (std::size_t i = 0; i < data.meshes.size(); ++i)
             {
-                if (data.meshes[i].instances.size() != previous_counts[i])
+                if (data.meshes[i].transforms.size() != previous_counts[i])
                 {
                     refresh_instances(data.meshes[i], previous_counts[i]);
                 }
@@ -1069,10 +986,7 @@ namespace clt::scene_renderer
 
     void draw(vk::CommandBuffer command, std::uint32_t image)
     {
-        using clock = std::chrono::steady_clock;
-
         auto& data = get();
-        data.timings = {};
         const auto extent = vk::swapchain::get()->extent;
 
         std::array<vk::ClearValue, 2> clear{};
@@ -1091,7 +1005,6 @@ namespace clt::scene_renderer
         // Compute visibility and compact instance IDs for indirect graphics draws.
         if (data.snapshot)
         {
-            const auto started = clock::now();
             const auto view_projection = camera::projection(
                 float(extent.width) / float(extent.height)
             ) * camera::view();
@@ -1152,7 +1065,6 @@ namespace clt::scene_renderer
                     0, sizeof(params), &params
                 );
                 command.dispatch((params.count + 127u) / 128u, 1, 1);
-                data.timings.gpu_candidates += mesh.transforms.size();
             }
 
             vk::MemoryBarrier finished{};
@@ -1166,9 +1078,6 @@ namespace clt::scene_renderer
                 {}, {finished}, {}, {}
             );
 
-            data.timings.gpu_dispatch_ms =
-                std::chrono::duration<double, std::milli>(
-                    clock::now() - started).count();
         }
 
         command.beginRenderPass(begin, vk::SubpassContents::eInline);
@@ -1224,7 +1133,6 @@ namespace clt::scene_renderer
                     mesh.indirect_buffer.handle, 0, 1,
                     sizeof(vk::DrawIndexedIndirectCommand)
                 );
-                ++data.timings.draw_calls;
             }
         }
 

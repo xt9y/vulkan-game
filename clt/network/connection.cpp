@@ -16,7 +16,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <iostream>
 #include <random>
 #include <stdexcept>
 
@@ -40,6 +39,19 @@ namespace clt::connection
     {
         std::lock_guard<std::mutex> lock(get()->scene_mutex);
         return get()->scene;
+    }
+
+    void check_error()
+    {
+        std::exception_ptr error;
+        {
+            std::lock_guard<std::mutex> lock(get()->error_mutex);
+            error = get()->worker_error;
+        }
+        if (error)
+        {
+            std::rethrow_exception(error);
+        }
     }
 
     void send_input(const ::player::input& input)
@@ -83,6 +95,11 @@ namespace clt::connection
             get()->scene.reset();
         }
 
+        {
+            std::lock_guard<std::mutex> lock(get()->error_mutex);
+            get()->worker_error = {};
+        }
+
         get()->stop.store(false, std::memory_order_relaxed);
         get()->connected.store(false, std::memory_order_relaxed);
         get()->server_tick.store(0, std::memory_order_relaxed);
@@ -113,6 +130,10 @@ namespace clt::connection
         }
 
         net::socket::destroy(get()->socket);
+        {
+            std::lock_guard<std::mutex> lock(get()->error_mutex);
+            get()->worker_error = {};
+        }
         get()->connected.store(false, std::memory_order_relaxed);
         get()->server_tick.store(0, std::memory_order_relaxed);
         get()->scene_complete.store(false, std::memory_order_relaxed);
@@ -321,13 +342,6 @@ namespace clt::connection
                                     scene_bytes.clear();
                                     next_scene_send = now;
 
-                                    if (scene_ready)
-                                    {
-                                        const auto completed = snapshot();
-                                        std::cout << "Scene received: "
-                                                  << completed->meshes.size() << " meshes, "
-                                                  << completed->instances.size() << " instances\n";
-                                    }
                                 }
                                 else
                                 {
@@ -507,9 +521,10 @@ namespace clt::connection
                     send(net::message::type::goodbye);
                 }
             }
-            catch (const std::exception& error)
+            catch (...)
             {
-                std::cerr << "Server connection: " << error.what() << '\n';
+                std::lock_guard<std::mutex> lock(data.error_mutex);
+                data.worker_error = std::current_exception();
             }
 
             data.connected.store(false, std::memory_order_relaxed);

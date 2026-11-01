@@ -12,7 +12,6 @@
 #include <atomic>
 #include <chrono>
 #include <exception>
-#include <iostream>
 #include <stdexcept>
 #include <thread>
 
@@ -76,19 +75,13 @@ namespace clt::application
         {
             while (running())
             {
+                connection::check_error();
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
+            connection::check_error();
 
             const bool connected = connection::get()->connected.load(std::memory_order_relaxed);
             const auto scene = connection::snapshot();
-
-            std::cout
-                << (connected ? "connected" : "disconnected")
-                << ", server tick: "
-                << connection::get()->server_tick.load(std::memory_order_relaxed)
-                << ", meshes: " << (scene ? scene->meshes.size() : 0)
-                << ", instances: " << (scene ? scene->instances.size() : 0)
-                << '\n';
 
             return connected && scene ? 0 : 1;
         }
@@ -132,6 +125,7 @@ namespace clt::application
             while (running() && !window::should_close() &&
                    !render_stop.load(std::memory_order_relaxed))
             {
+                connection::check_error();
                 window::poll_events();
 
                 const auto frame = input::poll();
