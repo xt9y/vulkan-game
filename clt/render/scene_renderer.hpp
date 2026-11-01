@@ -25,6 +25,13 @@ namespace clt::scene_renderer
     // Readback views are valid until the next synchronize() or shutdown().
     culling_readback culling_data();
 
+    struct gbuffer {
+        std::array<vk::ImageView, 4> views{};
+        vk::Extent2D extent{};
+    };
+
+    gbuffer outputs(std::uint32_t image);
+
     void create_frame_resources();
     void release_frame_resources();
     
