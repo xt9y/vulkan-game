@@ -68,4 +68,37 @@ namespace net::animation
             return std::nullopt;
         return result;
     }
+    event_packet encode_event(const attachment_event& event)
+    {
+        event_packet bytes{};
+        bytes[0] = 'E';
+        bytes[1] = 'V';
+        bytes[2] = 'N';
+        bytes[3] = 'T';
+        write(bytes.data() + 4, event.token);
+        write(bytes.data() + 8, event.tick);
+        write(bytes.data() + 12, event.sequence);
+        write(bytes.data() + 16, event.instance_id);
+        write(bytes.data() + 20, event.joint);
+        write(bytes.data() + 24, event.kind);
+        return bytes;
+    }
+
+    std::optional<attachment_event> decode_event(const std::uint8_t* bytes,
+                                                  std::size_t size)
+    {
+        if (!bytes || size != event_packet{}.size() ||
+            bytes[0] != 'E' || bytes[1] != 'V' ||
+            bytes[2] != 'N' || bytes[3] != 'T')
+            return std::nullopt;
+        attachment_event event;
+        event.token = read(bytes + 4);
+        event.tick = read(bytes + 8);
+        event.sequence = read(bytes + 12);
+        event.instance_id = read(bytes + 16);
+        event.joint = read(bytes + 20);
+        event.kind = read(bytes + 24);
+        return event.token && event.instance_id && event.sequence ?
+            std::optional<attachment_event>(event) : std::nullopt;
+    }
 } // namespace net::animation
