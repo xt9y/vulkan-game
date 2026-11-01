@@ -26,7 +26,7 @@ namespace game::options
     };
 
     state* get();
-    void init(int argc, char** argv);
+    void init(int argc, char** argv, mode default_mode = mode::server_and_client);
     void print_help();
     void shutdown();
 } // namespace game::options
