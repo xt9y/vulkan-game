@@ -1,4 +1,5 @@
 #include "prediction.hpp"
+#include "srv/game/options.hpp"
 
 #include "clt/network/connection.hpp"
 #include "srv/shared/net/message.hpp"
@@ -27,7 +28,7 @@ namespace clt::prediction
             std::atomic<float> error{0};
 
             std::mutex pose_mutex;
-            vk::util::math::vec3 pose{0, 0, 4};
+            vk::util::math::vec3 pose{};
 
             std::thread worker;
         };
@@ -56,7 +57,7 @@ namespace clt::prediction
             bool ready = false;
 
             auto next = clock::now();
-            constexpr auto tick = std::chrono::nanoseconds(1'000'000'000 / 60);
+            const auto tick = std::chrono::nanoseconds(1'000'000'000 / game::options::get()->simulation.tick_hz);
 
             while (!data.stop.load(std::memory_order_relaxed))
             {
@@ -69,6 +70,7 @@ namespace clt::prediction
                     colliders.clear();
                     collision_index = {};
                     avatar = {};
+                    avatar.position = game::options::get()->player.spawn;
                     visual_offset = {};
                     pending.clear();
                     sequence = 0;
@@ -159,7 +161,7 @@ namespace clt::prediction
                                 const auto delta = previous - avatar.position;
                                 const auto distance = vk::util::math::length(delta);
                                 data.error.store(distance, std::memory_order_relaxed);
-                                if (distance < 2.0f)
+                                if (distance < game::options::get()->graphics.correction_limit)
                                 {
                                     visual_offset = visual_offset + delta;
                                 }
@@ -202,7 +204,7 @@ namespace clt::prediction
                     }
                 }
 
-                visual_offset = visual_offset * 0.8f;
+                visual_offset = visual_offset * game::options::get()->graphics.correction_decay;
                 {
                     std::lock_guard<std::mutex> lock(data.pose_mutex);
                     data.pose = avatar.position + visual_offset;
@@ -230,6 +232,10 @@ namespace clt::prediction
         data.ticks.store(0, std::memory_order_relaxed);
         data.error.store(0, std::memory_order_relaxed);
 
+        {
+            std::lock_guard<std::mutex> lock(data.pose_mutex);
+            data.pose = game::options::get()->player.spawn;
+        }
         data.worker = std::thread(run);
     }
 

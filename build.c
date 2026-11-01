@@ -112,8 +112,9 @@ void build(C_Build* b)
     C_Target* server = c_executable(b, "vulkan-server");
     c_sources(server, "server.cpp");
     c_sources(server, "srv/world/*.cpp");
+    c_sources(server, "game/*.cpp");
+    c_sources(server, "game/world/*.cpp");
     c_sources(server, "srv/assets/*.cpp");
-    c_sources(server, "srv/scene/*.cpp");
     c_sources(server, "srv/app/*.cpp");
     c_sources(server, "srv/network/*.cpp");
     c_sources(server, "srv/shared/net/*.cpp");

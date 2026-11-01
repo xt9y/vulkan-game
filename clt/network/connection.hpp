@@ -24,8 +24,8 @@ namespace clt::connection
 {
     struct state
     {
-        std::string host = "127.0.0.1";
-        std::uint16_t port = 27015;
+        std::string host;
+        std::uint16_t port = 0;
         net::socket::resource socket;
 
         std::atomic<bool> stop{false};

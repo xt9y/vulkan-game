@@ -9,10 +9,12 @@
 
 namespace net::scene_stream
 {
-    inline constexpr std::size_t fragment_size = 1024;
+    // 1224-byte datagrams (24 header + 1200 payload) fit within IPv6's
+    // minimum 1280-byte MTU including UDP and IP headers.
+    inline constexpr std::size_t fragment_size = 1200;
     inline constexpr std::size_t header_size = 24;
     inline constexpr std::size_t packet_size = header_size + fragment_size;
-    inline constexpr std::size_t max_scene_bytes = 32 * 1024 * 1024;
+    inline constexpr std::size_t max_scene_bytes = 75 * 1024 * 1024;
     // A request encodes a batch and a fragment in its 32-bit value.
     inline constexpr std::uint32_t max_fragments_per_batch = 65536;
 

@@ -1,6 +1,6 @@
 #include "world.hpp"
 
-#include "gen.hpp"
+#include <stdexcept>
 
 #include <algorithm>
 #include <cmath>
@@ -16,9 +16,11 @@ namespace srv::world
         }
     }; // namespace 
     
-    void init(state& world, std::uint64_t seed)
+    void init(state& world, std::uint64_t seed, height_generator generator)
     {
+        if (!generator) throw std::invalid_argument("A world height generator is required");
         world.seed = seed;
+        world.generator = generator;
         world.edits.clear();
     }
 
@@ -31,7 +33,9 @@ namespace srv::world
             return it->height;
         }
 
-        return generator::height(world.seed, x, z);
+        if (!world.generator)
+            throw std::logic_error("World generator is not configured");
+        return world.generator(world.seed, x, z);
     }
 
     void set_height(state &world, std::int32_t x, std::int32_t z, std::int32_t height) 
@@ -40,7 +44,9 @@ namespace srv::world
 
         const bool exists = it != world.edits.end() && it->x == x && it->z == z;
 
-        if (height == generator::height(world.seed, x, z))
+        if (!world.generator)
+            throw std::logic_error("World generator is not configured");
+        if (height == world.generator(world.seed, x, z))
         {
             if (exists) 
             {

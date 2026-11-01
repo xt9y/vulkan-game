@@ -1,7 +1,8 @@
 #include "gen.hpp"
+#include "srv/game/options.hpp"
 #include <cstdint>
 
-namespace srv::world::generator
+namespace game::world::generator
 {
     namespace 
     {
@@ -57,7 +58,8 @@ namespace srv::world::generator
 
     std::int32_t height(std::uint64_t seed, std::int32_t x, std::int32_t z)
     {
-        return 16 + noise(seed, x, z, 64, 10) +
-                    noise(seed ^ 0xd1b54a32d192ed03ULL, x, z, 16, 3);
+        const auto& cfg = game::options::get()->simulation;
+        return cfg.terrain_base + noise(seed, x, z, cfg.terrain_scale, cfg.terrain_amplitude) +
+            noise(seed ^ 0xd1b54a32d192ed03ULL, x, z, cfg.detail_scale, cfg.detail_amplitude);
     }
 } // namespace srv::world::generator

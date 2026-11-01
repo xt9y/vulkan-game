@@ -10,6 +10,11 @@ namespace clt::postprocess
     void set(effect value, bool enabled);
     void toggle(effect value);
     void set_exposure(float exposure);
+    void configure_options(bool visible, int selected);
+    bool options_open();
+    void toggle_options();
+    void options_select(int change);
+    void options_adjust(int change);
     struct targets {
         vk::Image hdr{};
         vk::Image ldr{};

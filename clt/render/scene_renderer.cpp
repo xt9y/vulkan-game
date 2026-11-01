@@ -1,4 +1,5 @@
 #include "scene_renderer.hpp"
+#include "srv/game/options.hpp"
 
 #include "clt/network/connection.hpp"
 #include "clt/render/upload.hpp"
@@ -242,7 +243,8 @@ namespace clt::scene_renderer
 
                 vk::PipelineRasterizationStateCreateInfo rasterization{};
                 rasterization.polygonMode = vk::PolygonMode::eFill;
-                rasterization.cullMode = vk::CullModeFlagBits::eNone;
+                rasterization.cullMode = game::options::get()->graphics.backface_culling
+                    ? vk::CullModeFlagBits::eBack : vk::CullModeFlagBits::eNone;
                 rasterization.frontFace = vk::FrontFace::eCounterClockwise;
                 rasterization.lineWidth = 1.0f;
 
@@ -1160,7 +1162,7 @@ namespace clt::scene_renderer
             }
             const auto elapsed = std::chrono::duration<float>(
                 now - data.animation_received).count();
-            const float smooth_tick = float(server_tick) + std::clamp(elapsed, 0.f, 0.2f) * 60.f;
+            const float smooth_tick = float(server_tick) + std::clamp(elapsed, 0.f, 0.2f) * float(game::options::get()->simulation.tick_hz);
             for (auto& mesh : data.meshes)
             {
                 if (!mesh.joint_count || mesh.transforms.empty()) continue;
@@ -1175,7 +1177,7 @@ namespace clt::scene_renderer
                     const auto overlay = update ? update->overlay : instance.overlay_animation;
                     const auto weight = update ? update->blend : instance.overlay_weight;
                     const auto root = update ? update->mask_root : instance.overlay_root;
-                    const float time = (smooth_tick - float(start)) / 60.0f;
+                    const float time = (smooth_tick - float(start)) / float(game::options::get()->simulation.tick_hz);
                     if (!animation::sample(mesh.skin_id, clip, std::max(0.f, time), bones,
                         overlay, weight, root) ||
                         bones.size() != mesh.joint_count)

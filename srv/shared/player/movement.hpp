@@ -8,8 +8,6 @@
 
 namespace player
 {
-    inline constexpr float dt = 1.0f / 60.0f;
-
     enum button : std::uint32_t {
         forward = 1u << 0,
         backward = 1u << 1,
@@ -27,7 +25,7 @@ namespace player
     };
 
     struct state {
-        vk::util::math::vec3 position{0, 0, 4};
+        vk::util::math::vec3 position{};
         vk::util::math::vec3 velocity{};
         bool grounded = false;
     };

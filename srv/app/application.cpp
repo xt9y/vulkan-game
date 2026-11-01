@@ -14,13 +14,13 @@
 #include "srv/world/worker.hpp"
 
 #include <algorithm>
-#include <cstdlib>
+#include <iostream>
+#include <filesystem>
 #include <cmath>
 #include <string>
 #include <iterator>
 #include <vector>
 
-#include "srv/scene/test.hpp"
 
 #include <stdexcept>
 #include <thread>
@@ -51,6 +51,22 @@ namespace srv::application
         return &data;
     }
 
+    void set_scene(::scene::state scene)
+    {
+        if (get()->initialized) throw std::runtime_error("Cannot replace a running scene");
+        get()->scene = std::move(scene);
+        get()->scene_configured = true;
+    }
+
+    void load_model(std::filesystem::path path, ::scene::transform pose,
+                    std::uint32_t animation)
+    {
+        if (get()->initialized) throw std::runtime_error("Register model imports before init");
+        if (path.empty() || !std::filesystem::is_regular_file(path))
+            throw std::runtime_error("Model file not found: " + path.string());
+        get()->models.push_back({std::move(path), pose, animation});
+    }
+
     void init()
     {
         if (get()->initialized)
@@ -58,52 +74,72 @@ namespace srv::application
             throw std::runtime_error("srv::application already initialized");
         }
 
+        if (!get()->scene_configured)
+            throw std::runtime_error("The game must provide a scene with set_scene()");
         get()->options = *game::options::get();
         get()->socket = net::socket::create(get()->options.port, get()->options.bind_host);
         session::init();
-        scene::build_test(get()->scene);
         get()->colliders = player::build_colliders(get()->scene);
         get()->collision_index = player::build_index(get()->colliders);
         srv::generation::init();
         get()->scene_bytes = net::scene_stream::serialize(get()->scene);
         get()->scene_hash = net::scene_stream::checksum(get()->scene_bytes);
         get()->scene_batches = {{get()->scene_bytes, get()->scene_hash, true}};
-        world::init(get()->terrain, 123456789ULL);
         get()->tick = 0;
         get()->initialized = true;
 
-        // Parse GLB/glTF off-thread, then publish on the authoritative tick.
-        // Rendering and Vulkan uploads are exclusively client-side.
-        std::vector<std::string> paths;
-        if (const char* models = std::getenv("VK_MODELS"); models && *models)
-        {
-            const std::string list(models);
-            for (std::size_t offset = 0; offset < list.size();)
-            {
-                const auto end = list.find(';', offset);
-                const auto length = end == std::string::npos ?
-                    list.size() - offset : end - offset;
-                if (length) paths.push_back(list.substr(offset, length));
-                offset += length + 1;
-            }
-        }
-        else if (const char* model = std::getenv("VK_MODEL"); model && *model)
-        {
-            paths.emplace_back(model);
-        }
-
-        if (!paths.empty())
+        // Import game-declared assets (including textures, skins and clips).
+        // Vulkan resources remain entirely client-side.
+        auto requests = std::move(get()->models);
+        if (!requests.empty())
         {
             begin_stream();
-            if (!generation::submit([paths = std::move(paths)]() -> generation::completion
+            if (!generation::submit([requests = std::move(requests)]() -> generation::completion
             {
                 ::scene::state combined;
-                std::uint32_t mesh_id = 1000, instance_id = 1000;
-                std::uint32_t texture_id = 1000, skin_id = 1000;
-                for (const auto& path : paths)
+                auto mesh_id = std::uint32_t(1);
+                auto instance_id = std::uint32_t(1);
+                auto texture_id = std::uint32_t(1);
+                auto skin_id = std::uint32_t(1);
+                for (const auto& mesh : get()->scene.meshes)
+                    mesh_id = std::max(mesh_id, mesh.id + 1);
+                for (const auto& instance : get()->scene.instances)
+                    instance_id = std::max(instance_id, instance.id + 1);
+                for (const auto& texture : get()->scene.textures)
+                    texture_id = std::max(texture_id, texture.id + 1);
+                for (const auto& skin : get()->scene.skins)
+                    skin_id = std::max(skin_id, skin.id + 1);
+
+                for (const auto& request : requests)
                 {
-                    auto imported = assets::load(path, mesh_id, instance_id,
-                                                  texture_id, skin_id);
+                    auto imported = assets::load(request.path, mesh_id, instance_id,
+                                                 texture_id, skin_id);
+                    if (imported.meshes.empty())
+                        throw std::runtime_error("Model has no renderable meshes: " + request.path.string());
+                    for (auto& instance : imported.instances)
+                    {
+                        const auto mesh = std::find_if(imported.meshes.begin(), imported.meshes.end(),
+                            [&](const ::scene::mesh& entry) { return entry.id == instance.mesh_id; });
+                        if (mesh == imported.meshes.end())
+                            throw std::runtime_error("Imported instance references a missing mesh");
+                        if (mesh->skin_id)
+                        {
+                            const auto skin = std::find_if(imported.skins.begin(), imported.skins.end(),
+                                [&](const ::scene::skin& entry) { return entry.id == mesh->skin_id; });
+                            if (skin == imported.skins.end() ||
+                                (request.animation >= skin->clips.size() &&
+                                 !(skin->clips.empty() && request.animation == 0)))
+                                throw std::runtime_error("Requested animation clip does not exist: " +
+                                                         request.path.string());
+                        }
+                        instance.pose = request.pose;
+                        instance.animation = request.animation;
+                    }
+                    std::cout << "srv: imported " << request.path.string() << " ("
+                              << imported.meshes.size() << " meshes, "
+                              << imported.instances.size() << " instances, "
+                              << imported.textures.size() << " textures, "
+                              << imported.skins.size() << " skins)\n";
                     mesh_id += std::uint32_t(imported.meshes.size());
                     instance_id += std::uint32_t(imported.instances.size());
                     texture_id += std::uint32_t(imported.textures.size());
@@ -121,17 +157,16 @@ namespace srv::application
                         std::make_move_iterator(imported.skins.begin()),
                         std::make_move_iterator(imported.skins.end()));
                 }
-
-                return [imported = std::make_shared<::scene::state>(
-                    std::move(combined))]() mutable
+                return [imported = std::make_shared<::scene::state>(std::move(combined))]() mutable
                 {
                     get()->importing = std::move(imported);
                     get()->next_texture = 0;
+                    get()->next_skin = 0;
+                    get()->next_mesh = 0;
+                    get()->next_instance = 0;
                 };
             }))
-            {
-                throw std::runtime_error("Could not queue model import");
-            }
+                throw std::runtime_error("Could not queue model imports");
         }
     }
 
@@ -156,6 +191,8 @@ namespace srv::application
         }
 
         auto bytes = net::scene_stream::serialize(patch);
+        if (bytes.size() > net::scene_stream::max_scene_bytes)
+            throw std::runtime_error("Scene asset exceeds the network batch limit (75 MiB)");
         auto hash = net::scene_stream::checksum(bytes);
 
         for (auto& skin : patch.skins)
@@ -251,7 +288,7 @@ namespace srv::application
 
         const auto started = clock::now();
         auto next = started;
-        constexpr auto interval = std::chrono::nanoseconds(1'000'000'000 / 60);
+        const auto interval = std::chrono::nanoseconds(1'000'000'000 / get()->options.simulation.tick_hz);
 
         while (!game::application::get()->stop.load(std::memory_order_relaxed))
         {
@@ -273,34 +310,49 @@ namespace srv::application
             send_animation_states();
             send_attachment_events();
 
-            // Publish at most one CPU asset batch per authoritative tick.
+            // Stream imported textures, rigs, geometry and instances in separate
+            // network batches. Previously all meshes were packed into one batch,
+            // and batches over 32 MiB were silently impossible to transmit.
             if (get()->importing)
             {
                 auto& imported = *get()->importing;
                 ::scene::state patch;
                 if (get()->next_texture < imported.textures.size())
+                    patch.textures.push_back(std::move(imported.textures[get()->next_texture++]));
+                else if (get()->next_skin < imported.skins.size())
+                    patch.skins.push_back(std::move(imported.skins[get()->next_skin++]));
+                else if (get()->next_mesh < imported.meshes.size())
+                    patch.meshes.push_back(std::move(imported.meshes[get()->next_mesh++]));
+                else if (get()->next_instance < imported.instances.size())
                 {
-                    patch.textures.push_back(
-                        std::move(imported.textures[get()->next_texture++])
-                    );
+                    // Instance metadata is small; pack multiple references together.
+                    const auto end = std::min(imported.instances.size(), get()->next_instance + 256);
+                    for (; get()->next_instance < end; ++get()->next_instance)
+                        patch.instances.push_back(std::move(imported.instances[get()->next_instance]));
                 }
-                else
-                {
-                    patch.skins = std::move(imported.skins);
-                    patch.meshes = std::move(imported.meshes);
-                    patch.instances = std::move(imported.instances);
-                }
-                const bool final = get()->next_texture == imported.textures.size() &&
-                    (patch.textures.empty() || imported.meshes.empty());
+
+                const bool final =
+                    get()->next_texture == imported.textures.size() &&
+                    get()->next_skin == imported.skins.size() &&
+                    get()->next_mesh == imported.meshes.size() &&
+                    get()->next_instance == imported.instances.size();
                 append_scene(std::move(patch), final);
-                if (final) get()->importing.reset();
+                if (final)
+                {
+                    std::cout << "srv: model import published in "
+                              << get()->scene_batches.size() << " scene batches\n";
+                    get()->importing.reset();
+                }
             }
 
             send_scene_fragments();
 
             // Streaming generation may be expensive; commit only when there is
             // room before the next tick, without blocking player simulation.
-            if (clock::now() + 2ms < next + interval || get()->tick % 8 == 0)
+            if (clock::now() +
+                std::chrono::milliseconds(get()->options.simulation.generation_slack_ms) <
+                next + interval ||
+                get()->tick % get()->options.simulation.generation_commit_ticks == 0)
             {
                 generation::commit();
             }
@@ -333,8 +385,13 @@ namespace srv::application
         get()->colliders.clear();
         get()->scene_hash = 0;
         get()->scene = {};
+        get()->models.clear();
+        get()->scene_configured = false;
         get()->importing.reset();
         get()->next_texture = 0;
+        get()->next_skin = 0;
+        get()->next_mesh = 0;
+        get()->next_instance = 0;
         get()->animation_cursor = 0;
         get()->attachment_events.clear();
         get()->next_event = 0;
@@ -351,8 +408,11 @@ namespace srv::application
             // truncation.
             std::array<std::uint8_t, 25> buffer{};
 
-            const auto deadline = clock::now() + 2ms;
-            for (int budget = 0; budget < 96 && clock::now() < deadline; ++budget)
+            const auto deadline = clock::now() +
+                std::chrono::milliseconds(get()->options.simulation.receive_ms);
+            for (std::uint32_t budget = 0;
+                 budget < get()->options.simulation.receive_packets && clock::now() < deadline;
+                 ++budget)
             {
                 net::endpoint::resource peer;
                 const auto size = net::socket::receive(get()->socket, peer, buffer.data(), buffer.size());
@@ -449,6 +509,7 @@ namespace srv::application
                     client->endpoint = peer;
                     client->token = message.token;
                     client->active = true;
+                    client->avatar.position = game::options::get()->player.spawn;
                 }
 
                 client->last_seen = clock::now();
@@ -512,9 +573,9 @@ namespace srv::application
 
         void send_animation_states()
         {
-            if (get()->tick % 6 != 0 || get()->scene.instances.empty()) return;
+            if (get()->tick % get()->options.simulation.animation_period != 0 || get()->scene.instances.empty()) return;
             const auto& instances = get()->scene.instances;
-            const std::size_t count = std::min<std::size_t>(64, instances.size());
+            const std::size_t count = std::min<std::size_t>(get()->options.simulation.animations_per_tick, instances.size());
             const std::size_t start = get()->animation_cursor % instances.size();
             for (auto& client : session::get()->clients)
             {
@@ -541,9 +602,9 @@ namespace srv::application
 
         void send_scene_fragments()
         {
-            constexpr int max_fragments = 32;
-            const auto deadline = clock::now() + 2ms;
-            int remaining = max_fragments;
+            const auto deadline = clock::now() +
+                std::chrono::milliseconds(get()->options.simulation.fragments_ms);
+            std::uint32_t remaining = get()->options.simulation.fragments_per_tick;
 
             for (auto& client : session::get()->clients)
             {
@@ -567,7 +628,7 @@ namespace srv::application
                     net::scene_stream::fragment_size;
 
                 for (std::size_t i = fragment_id;
-                     i < std::min<std::size_t>(count, fragment_id + 32) &&
+                     i < std::min<std::size_t>(count, fragment_id + get()->options.simulation.fragments_per_tick) &&
                      remaining && clock::now() < deadline; ++i)
                 {
                     net::scene_stream::packet packet;
@@ -614,7 +675,7 @@ namespace srv::application
                 }
 
                 // Apply contiguous inputs only. Never simulate a phantom input tick.
-                for (int budget = 0; budget < 4 && !client.inputs.empty(); ++budget)
+                for (std::uint32_t budget = 0; budget < get()->options.simulation.inputs_per_tick && !client.inputs.empty(); ++budget)
                 {
                     if (client.inputs.front().sequence != client.processed_input + 1)
                     {

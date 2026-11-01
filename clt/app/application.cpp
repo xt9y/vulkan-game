@@ -87,7 +87,13 @@ namespace clt::application
         camera::init();
         prediction::init();
 
-        renderer::init("build/shaders/mesh.vert.spv", "build/shaders/mesh.frag.spv");
+        postprocess::configure_options(get()->options.graphics.options_visible,
+                                       get()->options.graphics.options_selected);
+        postprocess::set(postprocess::effect::lighting, get()->options.graphics.lighting);
+        postprocess::set(postprocess::effect::tonemapping, get()->options.graphics.tonemapping);
+        postprocess::set_exposure(get()->options.graphics.exposure);
+        renderer::init(get()->options.graphics.vertex_shader.c_str(),
+                       get()->options.graphics.fragment_shader.c_str());
         bool connected = false;
 
         std::atomic<bool> render_stop{false};
@@ -124,12 +130,22 @@ namespace clt::application
                 window::poll_events();
 
                 const auto frame = input::poll();
+                if (frame.toggle_options) postprocess::toggle_options();
+                if (postprocess::options_open())
+                {
+                    if (frame.options_up) postprocess::options_select(-1);
+                    if (frame.options_down) postprocess::options_select(1);
+                    if (frame.options_decrease) postprocess::options_adjust(-1);
+                    if (frame.options_increase) postprocess::options_adjust(1);
+                }
                 if (frame.toggle_lighting)
                     postprocess::toggle(postprocess::effect::lighting);
                 if (frame.toggle_tonemapping)
                     postprocess::toggle(postprocess::effect::tonemapping);
-                camera::look(frame.mouse_x, frame.mouse_y);
-                prediction::controls(frame.buttons, camera::snapshot().yaw);
+                if (!postprocess::options_open())
+                    camera::look(frame.mouse_x, frame.mouse_y);
+                prediction::controls(postprocess::options_open() ? 0 : frame.buttons,
+                                     camera::snapshot().yaw);
 
                 const bool current = connection::get()->connected.load(std::memory_order_relaxed);
                 if (current != connected)

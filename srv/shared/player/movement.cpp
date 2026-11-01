@@ -1,4 +1,5 @@
 #include "movement.hpp"
+#include "srv/game/options.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -12,17 +13,16 @@ namespace player
     {
         using namespace vk::util::math;
 
-        constexpr float radius = 0.3f;
-        constexpr float body_height = 1.8f;
-
         bool overlaps_xz(vec3 p, const box& b)
         {
+            const float radius = game::options::get()->player.radius;
             return p.x + radius > b.min.x && p.x - radius < b.max.x &&
                    p.z + radius > b.min.z && p.z - radius < b.max.z;
         }
 
         bool overlaps_y(float y, const box& b)
         {
+            const float body_height = game::options::get()->player.height;
             return y < b.max.y && y + body_height > b.min.y;
         }
     } // namespace
@@ -106,6 +106,10 @@ namespace player
     void step(state& p, const input& input, const collision_world& world, const spatial::index* broadphase) 
     {
         using namespace vk::util::math;
+        const auto& settings = game::options::get()->player;
+        const float radius = settings.radius;
+        const float body_height = settings.height;
+        const float dt = 1.0f / float(game::options::get()->simulation.tick_hz);
 
         const vec3 front{
             std::sin(input.yaw), 0, -std::cos(input.yaw)
@@ -127,7 +131,7 @@ namespace player
             direction = normalize(direction);
         }
 
-        const float speed = input.buttons & sprint ? 8.0f : 5.0f;
+        const float speed = input.buttons & sprint ? settings.sprint_speed : settings.walk_speed;
 
         p.velocity.x = direction.x * speed;
         p.velocity.z = direction.z * speed;
@@ -138,7 +142,7 @@ namespace player
         if (broadphase)
         {
             const float horizontal = radius + 8.0f * dt + 0.01f;
-            const float vertical = std::abs(p.velocity.y) * dt + 20.0f * dt * dt + 0.05f;
+            const float vertical = std::abs(p.velocity.y) * dt + settings.gravity * dt * dt + 0.05f;
             
             const spatial::bounds region{
                 {
@@ -148,7 +152,7 @@ namespace player
                 },
                 {
                     p.position.x + horizontal,
-                    p.position.y + 1.8f + vertical,
+                    p.position.y + body_height + vertical,
                     p.position.z + horizontal
                 }
             };
@@ -203,7 +207,7 @@ namespace player
             }
         }
 
-        p.velocity.y -= 20.0f * dt;
+        p.velocity.y -= settings.gravity * dt;
         p.position.y += p.velocity.y * dt;
         p.grounded = false;
 

@@ -3,6 +3,7 @@
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
+#include <utility>
 
 namespace game::options
 {
@@ -12,9 +13,9 @@ namespace game::options
         return &data;
     }
 
-    void init(int argc, char** argv, mode selected_mode)
+    void init(int argc, char** argv, mode selected_mode, state configured)
     {
-        state result;
+        state result = std::move(configured);
         result.mode = selected_mode;
         bool host_specified = false;
         bool bind_specified = false;
@@ -101,7 +102,41 @@ namespace game::options
             }
         }
 
-        *get() = result;
+        if (result.host.empty() || result.bind_host.empty() ||
+            !result.port || !result.simulation.tick_hz || !result.simulation.max_clients ||
+            !result.simulation.receive_packets || !result.simulation.fragments_per_tick ||
+            !result.simulation.inputs_per_tick || !result.simulation.animation_period ||
+            !result.simulation.animations_per_tick || !result.simulation.timeout_seconds ||
+            !result.simulation.receive_ms || !result.simulation.fragments_ms ||
+            !result.simulation.generation_commit_ticks ||
+            !result.simulation.terrain_scale || !result.simulation.detail_scale ||
+            result.player.walk_speed <= 0 || result.player.sprint_speed <= 0 ||
+            result.player.height <= 0 ||
+            result.player.radius <= 0 || result.player.gravity <= 0 ||
+            result.view.fov <= 0 || result.view.near_plane <= 0 ||
+            result.view.far_plane <= result.view.near_plane ||
+            result.graphics.width <= 0 || result.graphics.height <= 0 ||
+            result.graphics.vertex_shader.empty() || result.graphics.fragment_shader.empty() ||
+            result.graphics.scene_request_ms == 0 || result.graphics.movement_ms == 0 ||
+            result.graphics.retry_ms == 0 ||
+            result.graphics.retry_max_ms < result.graphics.retry_ms ||
+            result.graphics.timeout_ms == 0 ||
+            result.graphics.heartbeat_ms == 0 ||
+            result.graphics.correction_decay <= 0 || result.graphics.correction_decay >= 1 ||
+            result.graphics.exposure < 0 ||
+            result.graphics.max_exposure <= result.graphics.min_exposure ||
+            result.graphics.max_fov <= result.graphics.min_fov ||
+            result.graphics.max_sensitivity <= result.graphics.min_sensitivity ||
+            result.graphics.exposure_step <= 0 || result.graphics.fov_step <= 0 ||
+            result.graphics.sensitivity_step <= 0 ||
+            result.view.fov < result.graphics.min_fov ||
+            result.view.fov > result.graphics.max_fov ||
+            result.view.sensitivity < result.graphics.min_sensitivity ||
+            result.view.sensitivity > result.graphics.max_sensitivity ||
+            result.graphics.exposure > result.graphics.max_exposure ||
+            result.graphics.correction_limit <= 0)
+            throw std::invalid_argument("Game configuration is incomplete or invalid");
+        *get() = std::move(result);
     }
 
     void print_help()
@@ -110,11 +145,11 @@ namespace game::options
         std::cout << (server ? "Usage: vulkan-server [OPTIONS]\n\n"
                             : "Usage: vulkan-client [OPTIONS]\n\n")
                   << "Options:\n"
-                  << "  --port PORT         UDP port (default: 27015)\n";
+                  << "  --port PORT         UDP port (configured in game::config)\n";
         if (server)
-            std::cout << "  --bind ADDRESS      Server listen address (default: 127.0.0.1)\n";
+            std::cout << "  --bind ADDRESS      Server listen address (game::config)\n";
         else
-            std::cout << "  --host HOST         Server address (default: 127.0.0.1)\n"
+            std::cout << "  --host HOST         Server address (game::config)\n"
                       << "  --headless          Run the client without a window\n";
         std::cout << "  --duration SECONDS  Stop automatically after the given time\n"
                   << "  --help              Show this help\n";

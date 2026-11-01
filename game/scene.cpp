@@ -1,8 +1,8 @@
-#include "test.hpp"
+#include "scene.hpp"
 #include "srv/shared/scene/scene.hpp"
 #include "util/math/vector.hpp"
 
-namespace srv::scene
+namespace game::scene
 {
     namespace 
     {
@@ -56,7 +56,7 @@ namespace srv::scene
         }
     } // namespace
     
-    void build_test(::scene::state &data)
+    void create_start(::scene::state &data)
     {
         data = {};
 
@@ -78,4 +78,4 @@ namespace srv::scene
         spawn(3, 2, {0, 0.5f, 0});
         spawn(4, 2, {2, 0.5f, 0});
     }
-}; // namespace srv::scene
+}; // namespace game::scene

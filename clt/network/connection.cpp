@@ -1,4 +1,6 @@
 #include "connection.hpp"
+#include "srv/game/options.hpp"
+#include <iostream>
 
 #include "srv/shared/net/endpoint.hpp"
 #include "srv/shared/net/message.hpp"
@@ -247,6 +249,7 @@ namespace clt::connection
                 std::vector<std::uint8_t> scene_bytes;
                 std::vector<std::uint8_t> scene_received;
                 std::uint32_t scene_fragment = 0;
+                std::uint32_t reported_percent = 0;
                 std::uint32_t scene_batch = 0;
                 std::uint32_t scene_hash = 0;
                 std::uint32_t requested_until = 0;
@@ -257,7 +260,7 @@ namespace clt::connection
                 auto next_scene_send = next_send;
                 auto next_move_send = next_send;
                 auto last_received = next_send;
-                auto retry = 250ms;
+                auto retry = std::chrono::milliseconds(game::options::get()->graphics.retry_ms);
                 std::array<std::uint8_t, net::scene_stream::packet_size + 1> buffer{};
                 
                 auto clear_scene = [&]
@@ -265,6 +268,7 @@ namespace clt::connection
                     scene_bytes.clear();
                     scene_received.clear();
                     scene_fragment = 0;
+                    reported_percent = 0;
                     scene_batch = 0;
                     scene_hash = 0;
                     requested_until = 0;
@@ -393,6 +397,7 @@ namespace clt::connection
                                     net::scene_stream::fragment_size, 0
                                 );
                                 scene_hash = fragment.checksum;
+                                reported_percent = 0;
                                 scene_last = fragment.final;
                             }
                             else if (fragment.total != scene_bytes.size() ||
@@ -424,6 +429,15 @@ namespace clt::connection
                                     ++scene_fragment;
                                 }
 
+                                const auto progress = std::uint32_t(
+                                    std::uint64_t(scene_fragment) * 100 /
+                                    std::max<std::size_t>(1, scene_received.size()));
+                                if (progress >= reported_percent + 10)
+                                {
+                                    reported_percent = (progress / 10) * 10;
+                                    std::cout << "clt: scene batch " << scene_batch
+                                              << " " << reported_percent << "%\n";
+                                }
                                 // A complete burst unlocks the next window immediately.
                                 if (scene_fragment >= requested_until)
                                 {
@@ -440,6 +454,11 @@ namespace clt::connection
                                 {
                                     {
                                         std::lock_guard<std::mutex> lock(data.scene_mutex);
+                                        std::cout << "clt: received scene batch " << scene_batch
+                                                   << " (" << received.meshes.size() << " meshes, "
+                                                   << received.instances.size() << " instances, "
+                                                   << received.textures.size() << " textures, "
+                                                   << received.skins.size() << " skins)\n";
                                         data.pending_scene.push_back(std::move(received));
                                     }
 
@@ -447,6 +466,7 @@ namespace clt::connection
                                     data.scene_complete.store(scene_ready, std::memory_order_relaxed);
                                     ++scene_batch;
                                     scene_fragment = 0;
+                                    reported_percent = 0;
                                     requested_until = 0;
                                     scene_hash = 0;
                                     scene_last = false;
@@ -485,12 +505,12 @@ namespace clt::connection
                         data.connected.store(true, std::memory_order_relaxed);
 
                         last_received = now;
-                        next_send = now + 50ms;
+                        next_send = now + std::chrono::milliseconds(game::options::get()->graphics.heartbeat_ms);
                         waiting = false;
-                        retry = 250ms;
+                        retry = std::chrono::milliseconds(game::options::get()->graphics.retry_ms);
                     }
 
-                    if (data.connected.load(std::memory_order_relaxed) && now - last_received > 3s)
+                    if (data.connected.load(std::memory_order_relaxed) && now - last_received > std::chrono::milliseconds(game::options::get()->graphics.timeout_ms))
                     {
                         data.connected.store(false, std::memory_order_relaxed);
                         clear_scene();
@@ -519,7 +539,7 @@ namespace clt::connection
 
                         waiting = false;
                         next_send = now;
-                        retry = 250ms;
+                        retry = std::chrono::milliseconds(game::options::get()->graphics.retry_ms);
                     }
 
                     if (now >= next_send)
@@ -533,7 +553,7 @@ namespace clt::connection
                         // second.
                         if (waiting)
                         {
-                            retry = std::min(retry * 2, 1000ms);
+                            retry = std::min(retry * 2, std::chrono::milliseconds(game::options::get()->graphics.retry_max_ms));
                         }
 
                         waiting = true;
@@ -556,8 +576,8 @@ namespace clt::connection
                             packet.size()
                         );
 
-                        requested_until = scene_fragment + 32;
-                        next_scene_send = now + 40ms;
+                        requested_until = scene_fragment + game::options::get()->simulation.fragments_per_tick;
+                        next_scene_send = now + std::chrono::milliseconds(game::options::get()->graphics.scene_request_ms);
                     }
 
                     std::deque<::player::input> inputs;
@@ -598,7 +618,7 @@ namespace clt::connection
                                 transmit(unacknowledged.back());
                             }
 
-                            next_move_send = now + 16ms;
+                            next_move_send = now + std::chrono::milliseconds(game::options::get()->graphics.movement_ms);
                         }
                     }
                     else

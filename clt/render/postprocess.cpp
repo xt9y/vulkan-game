@@ -1,4 +1,5 @@
 #include "postprocess.hpp"
+#include "srv/game/options.hpp"
 #include "scene_renderer.hpp"
 #include "clt/view/camera.hpp"
 
@@ -53,10 +54,18 @@ namespace clt::postprocess
             return data;
         }
 
-        std::atomic<bool> use_lighting{true};
-        std::atomic<bool> use_tonemapping{true};
-        std::atomic<float> exposure_value{1.0f};
-        std::once_flag environment;
+        std::atomic<bool> use_lighting{};
+        std::atomic<bool> use_tonemapping{};
+        std::atomic<float> exposure_value{};
+        std::atomic<bool> show_options{};
+        std::atomic<int> selected_option{};
+
+        struct overlay_push {
+            std::int32_t visible, selected, lighting, tonemapping;
+            float exposure, fov, sensitivity, padding;
+        };
+
+        static_assert(sizeof(overlay_push) == 32);
 
         struct push {
             std::int32_t enabled = 1;
@@ -102,6 +111,14 @@ namespace clt::postprocess
                 constants.offset = 0;
                 constants.size = sizeof(push);
                 constants.stageFlags = vk::ShaderStageFlagBits::eCompute;
+                info.pushConstantRangeCount = 1;
+                info.pPushConstantRanges = &constants;
+            }
+            else
+            {
+                constants.offset = 0;
+                constants.size = sizeof(overlay_push);
+                constants.stageFlags = vk::ShaderStageFlagBits::eFragment;
                 info.pushConstantRangeCount = 1;
                 info.pPushConstantRanges = &constants;
             }
@@ -287,6 +304,10 @@ namespace clt::postprocess
     {
         (value == effect::lighting ? use_lighting : use_tonemapping)
             .store(active, std::memory_order_relaxed);
+        if (value == effect::lighting)
+            game::options::get()->graphics.lighting = active;
+        else
+            game::options::get()->graphics.tonemapping = active;
     }
 
     void toggle(effect value)
@@ -297,6 +318,56 @@ namespace clt::postprocess
     void set_exposure(float exposure)
     {
         exposure_value.store(std::max(0.0f, exposure), std::memory_order_relaxed);
+        game::options::get()->graphics.exposure = exposure;
+    }
+
+    void configure_options(bool visible, int selected)
+    {
+        show_options.store(visible, std::memory_order_relaxed);
+        selected_option.store(selected, std::memory_order_relaxed);
+    }
+
+    bool options_open()
+    {
+        return show_options.load(std::memory_order_relaxed);
+    }
+
+    void toggle_options()
+    {
+        show_options.store(!options_open(), std::memory_order_relaxed);
+        game::options::get()->graphics.options_visible = options_open();
+    }
+
+    void options_select(int change)
+    {
+        const int value = selected_option.load(std::memory_order_relaxed);
+        selected_option.store((value + change + 5) % 5, std::memory_order_relaxed);
+        game::options::get()->graphics.options_selected =
+            selected_option.load(std::memory_order_relaxed);
+    }
+
+    void options_adjust(int change)
+    {
+        const auto& cfg = game::options::get()->graphics;
+        const auto view = camera::snapshot();
+        switch (selected_option.load(std::memory_order_relaxed))
+        {
+            case 0: toggle(effect::lighting); break;
+            case 1: toggle(effect::tonemapping); break;
+            case 2:
+                set_exposure(std::clamp(exposure_value.load(std::memory_order_relaxed) +
+                    change * cfg.exposure_step, cfg.min_exposure, cfg.max_exposure));
+                break;
+            case 3:
+                camera::set_fov(std::clamp(view.fov + change * cfg.fov_step,
+                    cfg.min_fov, cfg.max_fov));
+                break;
+            case 4:
+                camera::set_sensitivity(std::clamp(view.sensitivity +
+                    change * cfg.sensitivity_step,
+                    cfg.min_sensitivity, cfg.max_sensitivity));
+                break;
+        }
     }
 
     void create()
@@ -312,14 +383,6 @@ namespace clt::postprocess
             if ((support & required) != required)
                 throw std::runtime_error("Required offscreen storage image format unsupported");
         }
-
-        std::call_once(environment, []
-        {
-            if (const char* setting = std::getenv("VK_LIGHTING"))
-                use_lighting.store(setting[0] != '0', std::memory_order_relaxed);
-            if (const char* setting = std::getenv("VK_TONEMAP"))
-                use_tonemapping.store(setting[0] != '0', std::memory_order_relaxed);
-        });
 
         try
         {
@@ -519,6 +582,24 @@ namespace clt::postprocess
             vk::PipelineBindPoint::eGraphics, get().present_layout,
             0, {get().frames.at(image).presentation}, {}
         );
+        const auto view = camera::snapshot();
+        const auto& cfg = game::options::get()->graphics;
+        const auto ratio = [](float v, float low, float high)
+        {
+            return (v - low) / (high - low);
+        };
+        const overlay_push overlay{
+            options_open() ? 1 : 0,
+            selected_option.load(std::memory_order_relaxed),
+            enabled(effect::lighting) ? 1 : 0,
+            enabled(effect::tonemapping) ? 1 : 0,
+            ratio(exposure_value.load(std::memory_order_relaxed), cfg.min_exposure, cfg.max_exposure),
+            ratio(view.fov, cfg.min_fov, cfg.max_fov),
+            ratio(view.sensitivity, cfg.min_sensitivity, cfg.max_sensitivity),
+            0.0f
+        };
+        command.pushConstants(get().present_layout, vk::ShaderStageFlagBits::eFragment,
+                              0, sizeof(overlay), &overlay);
         command.draw(3, 1, 0, 0);
         command.endRenderPass();
     }

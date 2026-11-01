@@ -6,7 +6,7 @@
 
 #include <deque>
 
-#include <array>
+#include <vector>
 #include <chrono>
 
 namespace srv::session
@@ -28,7 +28,7 @@ namespace srv::session
 
     struct state
     {
-        std::array<resource, 64> clients{};
+        std::vector<resource> clients;
     };
 
     state* get();

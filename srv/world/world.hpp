@@ -11,8 +11,11 @@ namespace srv::world
         std::int32_t height;
     };
 
+    using height_generator = std::int32_t (*)(std::uint64_t, std::int32_t, std::int32_t);
+
     struct state {
         std::uint64_t seed = 0;
+        height_generator generator = nullptr;
         std::vector<edit> edits;
     };
 
@@ -25,7 +28,7 @@ namespace srv::world
         double max_z;
     };
 
-    void init(state& world, std::uint64_t seed);
+    void init(state& world, std::uint64_t seed, height_generator generator);
     
     std::int32_t height(const state& world, std::int32_t x, std::int32_t z);
 

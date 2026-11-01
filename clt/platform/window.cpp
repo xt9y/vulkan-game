@@ -1,4 +1,5 @@
 #include "window.hpp"
+#include "srv/game/options.hpp"
 
 #include "vulkan_loader.hpp"
 
@@ -48,6 +49,9 @@ namespace clt::window
         }
 
         get()->initialized = true;
+        get()->width = game::options::get()->graphics.width;
+        get()->height = game::options::get()->graphics.height;
+        get()->title = game::options::get()->graphics.title;
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         get()->handle =
             glfwCreateWindow(get()->width, get()->height, get()->title.c_str(), nullptr, nullptr);
@@ -87,7 +91,8 @@ namespace clt::window
 
     void set_connected(bool connected)
     {
-        get()->title = connected ? "vulkan-game | connected" : "vulkan-game | connecting";
+        get()->title = game::options::get()->graphics.title +
+            (connected ? " | connected" : " | connecting");
         glfwSetWindowTitle(get()->handle, get()->title.c_str());
     }
 

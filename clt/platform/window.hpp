@@ -9,9 +9,9 @@ namespace clt::window
     struct state
     {
         GLFWwindow* handle = nullptr;
-        int width = 1280;
-        int height = 720;
-        std::string title = "vulkan-game | connecting";
+        int width = 0;
+        int height = 0;
+        std::string title;
         bool initialized = false;
     };
 

@@ -1,4 +1,5 @@
 #include "renderer.hpp"
+#include "srv/game/options.hpp"
 
 #include "scene_renderer.hpp"
 #include "postprocess.hpp"
@@ -64,10 +65,7 @@ namespace clt::renderer
         }
 
         get()->initialized = true;
-        if (const auto* setting = std::getenv("VK_UNCAPPED"))
-        {
-            get()->uncapped = setting[0] == '1' && setting[1] == '\0';
-        }
+        get()->uncapped = game::options::get()->graphics.uncapped;
 
         try
         {
