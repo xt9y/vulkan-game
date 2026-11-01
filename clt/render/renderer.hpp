@@ -11,6 +11,8 @@ namespace clt::renderer
         vk::Semaphore image_ready{};
         vk::Fence frame_fence{};
         std::vector<vk::Semaphore> render_ready;
+        vk::PresentModeKHR present_mode = vk::PresentModeKHR::eFifo;
+        bool uncapped = false;
         bool initialized = false;
     };
 

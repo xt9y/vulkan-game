@@ -577,17 +577,8 @@ namespace
         std::vector<double> fence_ms;
         std::vector<double> upload_ms;
         std::vector<double> gpu_ms;
-        std::vector<double> cull_ms;
-        std::vector<double> index_upload_ms;
-        std::vector<double> commands_ms;
         std::vector<double> gpu_dispatch_ms;
-        bool gpu_culling = false;
         std::size_t gpu_candidates = 0;
-        std::size_t cached_frames = 0;
-        std::uint64_t uploaded_bytes = 0;
-        std::size_t tested_nodes = 0;
-        std::size_t accepted_groups = 0;
-        std::size_t gpu_visible = 0;
         std::size_t visible_instances = 0;
         std::size_t draw_calls = 0;
         double collision_query_ms = 0;
@@ -635,9 +626,6 @@ namespace
         output.fence_ms.reserve(10000);
         output.upload_ms.reserve(10000);
         output.gpu_ms.reserve(10000);
-        output.cull_ms.reserve(10000);
-        output.index_upload_ms.reserve(10000);
-        output.commands_ms.reserve(10000);
         output.gpu_dispatch_ms.reserve(10000);
 
         // Visibility counts are sampled once per phase, not every frame; the
@@ -681,17 +669,8 @@ namespace
                 output.record_ms.push_back(measured.record_ms);
                 output.fence_ms.push_back(measured.fence_ms);
                 output.upload_ms.push_back(measured.upload_ms);
-                output.cull_ms.push_back(measured.scene.cull_ms);
-                output.index_upload_ms.push_back(measured.scene.index_upload_ms);
-                output.commands_ms.push_back(measured.scene.commands_ms);
                 output.gpu_dispatch_ms.push_back(measured.scene.gpu_dispatch_ms);
-                output.gpu_culling = measured.scene.gpu_culling;
                 output.gpu_candidates = measured.scene.gpu_candidates;
-                output.tested_nodes = measured.scene.tested_nodes;
-                output.accepted_groups = measured.scene.accepted_groups;
-                output.gpu_visible = measured.scene.visible_instances;
-                output.cached_frames += std::size_t(measured.scene.cache_hits > 0);
-                output.uploaded_bytes += measured.scene.uploaded_bytes;
                 if (measured.gpu_ms >= 0)
                 {
                     output.gpu_ms.push_back(measured.gpu_ms);
@@ -780,19 +759,9 @@ namespace
                   << " draws=" << value.draw_calls
                   << " aabb_query_ms=" << value.collision_query_ms
                   << " physics_step_ms=" << value.collision_step_ms << '\n';
-        std::cout << "  cull_pack_ms=" << average(value.cull_ms)
-                  << " p95=" << percentile(value.cull_ms, 0.95)
-                  << " visible_id_upload_ms=" << average(value.index_upload_ms)
-                  << " commands_ms=" << average(value.commands_ms)
-                  << " gpu_visible=" << value.gpu_visible
-                  << " bvh_nodes=" << value.tested_nodes
-                  << " accepted_groups=" << value.accepted_groups
-                  << " gpu_mode=" << value.gpu_culling
-                  << " gpu_candidates=" << value.gpu_candidates
-                  << " gpu_dispatch_cpu_ms=" << average(value.gpu_dispatch_ms)
-                  << " cache_frames=" << value.cached_frames
-                  << "/" << value.record_ms.size()
-                  << " uploaded_kib=" << (value.uploaded_bytes / 1024) << '\n';
+        std::cout << "  gpu_candidates=" << value.gpu_candidates
+                  << " compute_record_ms=" << average(value.gpu_dispatch_ms)
+                  << " visibility=gpu_indirect" << '\n';
     }
 } // namespace
 
@@ -912,6 +881,9 @@ int main()
         clt::connection::init();
         milestone("network_threads");
 
+        // Measure uncapped presentation in the workload. The normal game
+        // stays VSynced unless launched with VK_UNCAPPED=1.
+        clt::renderer::get()->uncapped = true;
         clt::window::init();
         clt::input::init();
         clt::camera::init();
@@ -962,6 +934,37 @@ int main()
         {
             throw std::runtime_error("Scene transfer completed without the expected instances");
         }
+
+        const auto audit_gpu = [&](const char* label)
+        {
+            const auto device = vk::device::get()->handle;
+            if (device.waitForFences(
+                    clt::renderer::get()->frame_fence, true, UINT64_MAX) !=
+                vk::Result::eSuccess)
+            {
+                throw std::runtime_error("GPU visibility audit fence failed");
+            }
+
+            const auto check = clt::scene_renderer::validate_gpu_visibility();
+            std::cout << "GPU_VISIBILITY " << label
+                      << " expected=" << check.expected
+                      << " gpu_visible=" << check.actual
+                      << " missing=" << check.missing
+                      << " unexpected=" << check.unexpected
+                      << " duplicates=" << check.duplicates
+                      << " out_of_range=" << check.out_of_range
+                      << " invalid_commands=" << check.bad_commands
+                      << " result=" << (check.passed() ? "PASS" : "FAIL") << '\n';
+            if (!check.passed())
+            {
+                throw std::runtime_error("GPU visible IDs differ from CPU sphere reference");
+            }
+        };
+
+        // Render once after the full snapshot is published so the readback
+        // verifies all streamed instances rather than the previous batch.
+        clt::renderer::draw_frame();
+        audit_gpu("full_scene");
         milestone("progressive_scene_stream+gpu_upload+first_player_ticks");
         std::cout << "STARTUP total "
                   << std::chrono::duration<double>(clock::now() - startup_begin).count()
@@ -1036,6 +1039,7 @@ int main()
             gpu, visibility, collision
         );
         report(recovery);
+        audit_gpu("after_movement");
 
         generate.store(false, std::memory_order_relaxed);
 
