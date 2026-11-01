@@ -110,6 +110,9 @@ namespace srv::application
         auto bytes = net::scene_stream::serialize(patch);
         auto hash = net::scene_stream::checksum(bytes);
 
+        for (auto& skin : patch.skins)
+            data.scene.skins.push_back(std::move(skin));
+
         for (auto& texture : patch.textures)
         {
             data.scene.textures.push_back(std::move(texture));
@@ -182,6 +185,7 @@ namespace srv::application
                 }
                 else
                 {
+                    patch.skins = std::move(imported.skins);
                     patch.meshes = std::move(imported.meshes);
                     patch.instances = std::move(imported.instances);
                 }
