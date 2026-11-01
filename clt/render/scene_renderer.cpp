@@ -538,7 +538,7 @@ namespace clt::scene_renderer
 
     gpu_validation validate_gpu_visibility()
     {
-        const auto& data = get();
+        auto& data = get();
         gpu_validation result;
         if (!data.gpu_culling || !data.gpu_planes_valid)
         {

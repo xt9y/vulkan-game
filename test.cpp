@@ -973,6 +973,41 @@ int main()
         {
             throw std::runtime_error("Scene transfer completed without the expected instances");
         }
+
+        const auto audit_gpu = [&](const char* label)
+        {
+            if (!clt::scene_renderer::last_stats().gpu_culling)
+            {
+                return;
+            }
+            const auto device = vk::device::get()->handle;
+            if (device.waitForFences(
+                    clt::renderer::get()->frame_fence, true, UINT64_MAX) !=
+                vk::Result::eSuccess)
+            {
+                throw std::runtime_error("GPU visibility audit fence failed");
+            }
+
+            const auto check = clt::scene_renderer::validate_gpu_visibility();
+            std::cout << "GPU_VISIBILITY " << label
+                      << " expected=" << check.expected
+                      << " gpu_visible=" << check.actual
+                      << " missing=" << check.missing
+                      << " unexpected=" << check.unexpected
+                      << " duplicates=" << check.duplicates
+                      << " out_of_range=" << check.out_of_range
+                      << " invalid_commands=" << check.bad_commands
+                      << " result=" << (check.passed() ? "PASS" : "FAIL") << '\n';
+            if (!check.passed())
+            {
+                throw std::runtime_error("GPU visible IDs differ from CPU sphere reference");
+            }
+        };
+
+        // Render once after the full snapshot is published so the readback
+        // verifies all streamed instances rather than the previous batch.
+        clt::renderer::draw_frame();
+        audit_gpu("full_scene");
         milestone("progressive_scene_stream+gpu_upload+first_player_ticks");
         std::cout << "STARTUP total "
                   << std::chrono::duration<double>(clock::now() - startup_begin).count()
@@ -1047,6 +1082,7 @@ int main()
             gpu, visibility, collision
         );
         report(recovery);
+        audit_gpu("after_movement");
 
         generate.store(false, std::memory_order_relaxed);
 
