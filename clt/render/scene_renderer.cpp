@@ -364,6 +364,15 @@ namespace clt::scene_renderer
             {
                 for (std::size_t i = 0; i < color_formats.size(); ++i)
                 {
+                    const auto features = vk::physical_device::get()->handle
+                        .getFormatProperties(color_formats[i]).optimalTilingFeatures;
+                    const auto needed = vk::FormatFeatureFlagBits::eColorAttachment |
+                        vk::FormatFeatureFlagBits::eSampledImage;
+                    if ((features & needed) != needed)
+                    {
+                        throw std::runtime_error("Required G-buffer format unsupported");
+                    }
+
                     vk::ImageCreateInfo image{};
                     image.imageType = vk::ImageType::e2D;
                     image.format = color_formats[i];
@@ -870,7 +879,7 @@ namespace clt::scene_renderer
                         throw;
                     }
                 }
-            transfers.finish();
+                transfers.finish();
             }
             catch (...)
             {
