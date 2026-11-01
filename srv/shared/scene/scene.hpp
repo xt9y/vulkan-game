@@ -21,4 +21,19 @@ namespace scene
         std::vector<mesh> meshes;
         std::vector<instance> instances;
     };
+
+    inline bool same_instance(const instance& a, const instance& b)
+    {
+        return a.id == b.id && a.mesh_id == b.mesh_id &&
+            a.pose.position.x == b.pose.position.x &&
+            a.pose.position.y == b.pose.position.y &&
+            a.pose.position.z == b.pose.position.z &&
+            a.pose.scale.x == b.pose.scale.x &&
+            a.pose.scale.y == b.pose.scale.y &&
+            a.pose.scale.z == b.pose.scale.z &&
+            a.pose.rotation.x == b.pose.rotation.x &&
+            a.pose.rotation.y == b.pose.rotation.y &&
+            a.pose.rotation.z == b.pose.rotation.z &&
+            a.pose.rotation.w == b.pose.rotation.w;
+    }
 }; // namespace scene
