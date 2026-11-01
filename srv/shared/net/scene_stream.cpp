@@ -105,10 +105,26 @@ namespace net::scene_stream
             throw std::runtime_error("Scene snapshot exceeds 8 MiB");
         }
 
-        std::vector<std::uint8_t> bytes{'S', 'C', 'N', '2'};
+        std::vector<std::uint8_t> bytes{'S', 'C', 'N', '3'};
 
         add(bytes, std::uint32_t(scene.meshes.size()));
         add(bytes, std::uint32_t(scene.instances.size()));
+        add(bytes, std::uint32_t(scene.textures.size()));
+
+        for (const auto& texture : scene.textures)
+        {
+            const auto total = std::uint64_t(texture.width) * texture.height * 4;
+            if (texture.id == 0 || !texture.width || !texture.height ||
+                total != texture.pixels.size() ||
+                total > max_scene_bytes - 16 ||
+                bytes.size() + 16 + total > max_scene_bytes)
+                throw std::runtime_error("Invalid texture or scene batch too large");
+            add(bytes, texture.id);
+            add(bytes, texture.width);
+            add(bytes, texture.height);
+            add(bytes, std::uint32_t(total));
+            bytes.insert(bytes.end(), texture.pixels.begin(), texture.pixels.end());
+        }
 
         for (const auto& mesh : scene.meshes)
         {
@@ -131,6 +147,11 @@ namespace net::scene_stream
             add_float(bytes, mesh.surface.roughness);
             add_float(bytes, mesh.surface.occlusion);
             add_float(bytes, mesh.surface.alpha_cutoff);
+            add(bytes, mesh.surface.base_color_texture);
+            add(bytes, mesh.surface.metallic_roughness_texture);
+            add(bytes, mesh.surface.normal_texture);
+            add(bytes, mesh.surface.occlusion_texture);
+            add(bytes, mesh.surface.emissive_texture);
             add(bytes, mesh.surface.alpha_mode);
             add(bytes, mesh.surface.double_sided ? 1u : 0u);
 
@@ -184,12 +205,12 @@ namespace net::scene_stream
         ::scene::state& scene
     )
     {
-        if (bytes.size() < 12 ||
+        if (bytes.size() < 16 ||
             bytes.size() > max_scene_bytes ||
             bytes[0] != 'S' ||
             bytes[1] != 'C' ||
             bytes[2] != 'N' ||
-            bytes[3] != '2')
+            bytes[3] != '3')
         {
             return false;
         }
@@ -198,9 +219,12 @@ namespace net::scene_stream
 
         std::uint32_t mesh_count = 0;
         std::uint32_t instance_count = 0;
+        std::uint32_t texture_count = 0;
 
         if (!input.take(mesh_count) ||
             !input.take(instance_count) ||
+            !input.take(texture_count) ||
+            texture_count > input.remaining() / 16 ||
             mesh_count > input.remaining() / 12 ||
             instance_count > input.remaining() / 48)
         {
@@ -210,6 +234,22 @@ namespace net::scene_stream
         ::scene::state result;
         result.meshes.reserve(mesh_count);
         result.instances.reserve(instance_count);
+        result.textures.reserve(texture_count);
+
+        for (std::uint32_t i = 0; i < texture_count; ++i)
+        {
+            ::scene::texture texture;
+            std::uint32_t bytes_count = 0;
+            if (!input.take(texture.id) || !input.take(texture.width) ||
+                !input.take(texture.height) || !input.take(bytes_count) ||
+                !texture.id || !texture.width || !texture.height ||
+                std::uint64_t(texture.width) * texture.height * 4 != bytes_count ||
+                bytes_count > input.remaining()) return false;
+            texture.pixels.assign(bytes.begin() + input.offset,
+                                  bytes.begin() + input.offset + bytes_count);
+            input.offset += bytes_count;
+            result.textures.push_back(std::move(texture));
+        }
 
         for (std::uint32_t i = 0; i < mesh_count; ++i)
         {
@@ -227,7 +267,7 @@ namespace net::scene_stream
                 return false;
             }
 
-            if (input.remaining() < 52) return false;
+            if (input.remaining() < 72) return false;
             for (auto& value : mesh.surface.base_color)
                 if (!input.take_float(value)) return false;
             for (auto& value : mesh.surface.emissive)
@@ -236,6 +276,11 @@ namespace net::scene_stream
                 !input.take_float(mesh.surface.roughness) ||
                 !input.take_float(mesh.surface.occlusion) ||
                 !input.take_float(mesh.surface.alpha_cutoff) ||
+                !input.take(mesh.surface.base_color_texture) ||
+                !input.take(mesh.surface.metallic_roughness_texture) ||
+                !input.take(mesh.surface.normal_texture) ||
+                !input.take(mesh.surface.occlusion_texture) ||
+                !input.take(mesh.surface.emissive_texture) ||
                 !input.take(mesh.surface.alpha_mode)) return false;
             std::uint32_t double_sided = 0;
             if (!input.take(double_sided) || double_sided > 1 ||
