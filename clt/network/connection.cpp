@@ -51,22 +51,31 @@ namespace clt::connection
         }
 
         auto combined = std::make_shared<::scene::state>();
+        std::size_t textures = data.scene ? data.scene->textures.size() : 0;
         std::size_t meshes = data.scene ? data.scene->meshes.size() : 0;
         std::size_t instances = data.scene ? data.scene->instances.size() : 0;
         for (const auto& patch : data.pending_scene)
         {
+            textures += patch.textures.size();
             meshes += patch.meshes.size();
             instances += patch.instances.size();
         }
+        combined->textures.reserve(textures);
         combined->meshes.reserve(meshes);
         combined->instances.reserve(instances);
         if (data.scene)
         {
+            combined->textures = data.scene->textures;
             combined->meshes = data.scene->meshes;
             combined->instances = data.scene->instances;
         }
         for (auto& patch : data.pending_scene)
         {
+            combined->textures.insert(
+                combined->textures.end(),
+                std::make_move_iterator(patch.textures.begin()),
+                std::make_move_iterator(patch.textures.end())
+            );
             combined->meshes.insert(
                 combined->meshes.end(),
                 std::make_move_iterator(patch.meshes.begin()),
