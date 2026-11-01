@@ -149,7 +149,6 @@ namespace clt::connection
         get()->connected.store(false, std::memory_order_relaxed);
         get()->server_tick.store(0, std::memory_order_relaxed);
         get()->player_snapshots.store(0, std::memory_order_relaxed);
-        get()->diagnostic_max_snapshot_gap_us.store(0, std::memory_order_relaxed);
         get()->scene_complete.store(false, std::memory_order_relaxed);
         get()->worker = std::thread(run, get()->host, get()->port);
         get()->initialized = true;
@@ -206,7 +205,6 @@ namespace clt::connection
                 bool waiting = false;
                 
                 std::uint32_t last_player_tick = 0;
-                clock::time_point last_snapshot{};
                 std::deque<::player::input> unacknowledged;
 
                 std::vector<std::uint8_t> scene_bytes;
@@ -279,22 +277,6 @@ namespace clt::connection
                                 }
 
                                 last_player_tick = update->tick;
-                                if (last_snapshot != clock::time_point{})
-                                {
-                                    const auto gap = static_cast<std::uint64_t>(
-                                        std::chrono::duration_cast<std::chrono::microseconds>(
-                                            now - last_snapshot).count()
-                                    );
-                                    auto previous = data.diagnostic_max_snapshot_gap_us.load(
-                                        std::memory_order_relaxed
-                                    );
-                                    while (previous < gap &&
-                                           !data.diagnostic_max_snapshot_gap_us.compare_exchange_weak(
-                                               previous, gap, std::memory_order_relaxed))
-                                    {
-                                    }
-                                }
-                                last_snapshot = now;
                                 data.player_snapshots.fetch_add(1, std::memory_order_relaxed);
                                 while (!unacknowledged.empty() &&
                                        !net::message::newer(unacknowledged.front().sequence,
@@ -448,7 +430,6 @@ namespace clt::connection
                         last_accepted = 0;
                         last_player_tick = 0;
                         unacknowledged.clear();
-                        last_snapshot = {};
                         next_move_send = now;
                         next_scene_send = now;
                         last_received = now;

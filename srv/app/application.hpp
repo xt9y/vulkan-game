@@ -1,6 +1,5 @@
 #pragma once
 
-#include <atomic>
 #include <vector>
 
 #include "srv/game/options.hpp"
@@ -32,11 +31,6 @@ namespace srv::application
         };
         std::vector<batch> scene_batches;
         std::uint32_t tick = 0;
-        // Counters sampled by main.cpp; the server thread is the sole writer.
-        std::atomic<std::uint64_t> diagnostic_ticks{0};
-        std::atomic<std::uint64_t> diagnostic_work_us{0};
-        std::atomic<std::uint64_t> diagnostic_max_work_us{0};
-        std::atomic<std::uint64_t> diagnostic_overruns{0};
         bool initialized = false;
     };
 

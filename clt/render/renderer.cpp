@@ -9,7 +9,6 @@
 #include "clt/platform/window.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
@@ -52,12 +51,6 @@ namespace clt::renderer
         return &data;
     }
 
-    diagnostics& stats()
-    {
-        static diagnostics data;
-        return data;
-    }
-
     void init(const char* vertex_path, const char* fragment_path)
     {
         if (get()->initialized)
@@ -71,13 +64,6 @@ namespace clt::renderer
         }
 
         get()->initialized = true;
-        stats().frames.store(0, std::memory_order_relaxed);
-        stats().deferred.store(0, std::memory_order_relaxed);
-        stats().scene_updates.store(0, std::memory_order_relaxed);
-        stats().fence_wait_us.store(0, std::memory_order_relaxed);
-        stats().max_fence_wait_us.store(0, std::memory_order_relaxed);
-        stats().max_frame_us.store(0, std::memory_order_relaxed);
-
         if (const auto* setting = std::getenv("VK_UNCAPPED"))
         {
             get()->uncapped = setting[0] == '1' && setting[1] == '\0';
@@ -351,7 +337,6 @@ namespace clt::renderer
 
     void draw_frame()
     {
-        const auto frame_start = std::chrono::steady_clock::now();
         auto& data = *get();
 
         auto device = vk::device::get()->handle;
@@ -372,21 +357,9 @@ namespace clt::renderer
         }
 
         auto& frame = data.frames[data.next_frame];
-        const auto wait_start = std::chrono::steady_clock::now();
         if (device.waitForFences(frame.fence, true, UINT64_MAX) != vk::Result::eSuccess)
         {
             throw std::runtime_error("Frame fence wait failed");
-        }
-        const auto wait_us = static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - wait_start).count()
-        );
-        stats().fence_wait_us.fetch_add(wait_us, std::memory_order_relaxed);
-        auto prior = stats().max_fence_wait_us.load(std::memory_order_relaxed);
-        while (prior < wait_us &&
-               !stats().max_fence_wait_us.compare_exchange_weak(
-                   prior, wait_us, std::memory_order_relaxed))
-        {
         }
 
         // Resource replacements are only applied once all older submissions
@@ -404,12 +377,10 @@ namespace clt::renderer
             }
             if (!safe)
             {
-                stats().deferred.fetch_add(1, std::memory_order_relaxed);
                 std::this_thread::yield();
                 return;
             }
             scene_renderer::synchronize();
-            stats().scene_updates.fetch_add(1, std::memory_order_relaxed);
         }
 
         uint32_t image = 0;
@@ -475,17 +446,6 @@ namespace clt::renderer
         {
             resize();
         }
-        const auto frame_us = static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - frame_start).count()
-        );
-        auto longest = stats().max_frame_us.load(std::memory_order_relaxed);
-        while (longest < frame_us &&
-               !stats().max_frame_us.compare_exchange_weak(
-                   longest, frame_us, std::memory_order_relaxed))
-        {
-        }
-        stats().frames.fetch_add(1, std::memory_order_relaxed);
     }
 
     void shutdown() noexcept
