@@ -4,95 +4,111 @@
 
 #include <cstddef>
 #include <stdexcept>
+#include <vector>
 
 namespace clt::upload
 {
-    // Static geometry: upload once, then keep it in device-local memory.
-    // Scene synchronization already runs after the renderer's frame fence.
-    inline vk::buffer::resource static_buffer(
-        const void* data,
-        std::size_t bytes,
-        vk::BufferUsageFlags usage
-    )
+    // Accumulate immutable mesh copies into one submission and retire staging
+    // allocations only after its fence signals. Never idle the entire queue.
+    class batch
     {
-        if (!data || !bytes)
+        vk::CommandBuffer command{};
+        std::vector<vk::buffer::resource> staging;
+        vk::Fence fence{};
+
+    public:
+        batch() = default;
+        batch(const batch&) = delete;
+        batch& operator=(const batch&) = delete;
+
+        vk::buffer::resource add(const void* data, std::size_t bytes,
+                                 vk::BufferUsageFlags usage)
         {
-            throw std::invalid_argument("Invalid static mesh upload");
+            if (!data || !bytes)
+                throw std::invalid_argument("Invalid static mesh upload");
+
+            vk::buffer::resource source{};
+            vk::buffer::resource destination{};
+            try
+            {
+                source = vk::buffer::create(
+                    bytes, vk::BufferUsageFlagBits::eTransferSrc,
+                    vk::MemoryPropertyFlagBits::eHostVisible |
+                    vk::MemoryPropertyFlagBits::eHostCoherent
+                );
+                vk::buffer::write(source, data, bytes);
+                destination = vk::buffer::create(
+                    bytes, usage | vk::BufferUsageFlagBits::eTransferDst,
+                    vk::MemoryPropertyFlagBits::eDeviceLocal
+                );
+                if (!command) command = vk::command::begin_one_time();
+
+                vk::BufferCopy copy{};
+                copy.size = bytes;
+                command.copyBuffer(source.handle, destination.handle, {copy});
+                staging.push_back(source);
+                return destination;
+            }
+            catch (...)
+            {
+                if (source.handle) vk::buffer::destroy(source);
+                if (destination.handle) vk::buffer::destroy(destination);
+                throw;
+            }
         }
 
-        vk::buffer::resource staging;
-        vk::buffer::resource destination;
-        vk::CommandBuffer command{};
-        bool submitted = false;
-
-        try
+        void finish()
         {
-            staging = vk::buffer::create(
-                bytes,
-                vk::BufferUsageFlagBits::eTransferSrc,
-                vk::MemoryPropertyFlagBits::eHostVisible |
-                vk::MemoryPropertyFlagBits::eHostCoherent
-            );
+            if (!command) return;
+            auto device = vk::device::get()->handle;
 
-            destination = vk::buffer::create(
-                bytes,
-                usage | vk::BufferUsageFlagBits::eTransferDst,
-                vk::MemoryPropertyFlagBits::eDeviceLocal
-            );
-
-            vk::buffer::write(staging, data, bytes);
-
-            command = vk::command::begin_one_time();
-
-            vk::BufferCopy copy{};
-            copy.size = bytes;
-            command.copyBuffer(staging.handle, destination.handle, {copy});
             command.end();
+            vk::FenceCreateInfo info{};
+            fence = device.createFence(info);
 
             vk::SubmitInfo submit{};
             submit.commandBufferCount = 1;
             submit.pCommandBuffers = &command;
+            vk::submit::queue(vk::queue::get()->graphics, {submit}, fence);
+            if (device.waitForFences(fence, true, UINT64_MAX) != vk::Result::eSuccess)
+                throw std::runtime_error("Mesh upload fence failed");
 
-            const auto queue = vk::queue::get()->graphics;
-            vk::submit::queue(queue, {submit});
-            submitted = true;
-            vk::submit::wait(queue);
-
-            vk::command::free({command});
-            command = nullptr;
-            vk::buffer::destroy(staging);
-            return destination;
+            release();
         }
-        catch (...)
-        {
-            if (submitted)
-            {
-                try
-                {
-                    vk::submit::wait(vk::queue::get()->graphics);
-                }
-                catch (...)
-                {
-                    // The caller handles fatal device errors.
-                }
-            }
 
+        void release()
+        {
             if (command)
             {
                 vk::command::free({command});
+                command = nullptr;
             }
+            for (auto& source : staging)
+                vk::buffer::destroy(source);
+            staging.clear();
 
-            if (staging.handle)
+            if (fence)
             {
-                vk::buffer::destroy(staging);
+                vk::device::get()->handle.destroyFence(fence);
+                fence = nullptr;
             }
-
-            if (destination.handle)
-            {
-                vk::buffer::destroy(destination);
-            }
-
-            throw;
         }
-    }
-} // namespace clt::upload
+
+        ~batch()
+        {
+            // The caller must call finish() for pending copies. The destructor
+            // releases unsubmitted work during exception unwinding.
+            if (fence)
+            {
+                try
+                {
+                    vk::device::get()->handle.waitForFences(fence, true, UINT64_MAX);
+                }
+                catch (...)
+                {
+                }
+            }
+            release();
+        }
+    };
+}

@@ -893,6 +893,7 @@ namespace clt::scene_renderer
         {
             meshes.reserve(source->meshes.size());
 
+            upload::batch transfers;
             for (const auto& mesh : source->meshes)
             {
                 gpu_mesh result;
@@ -908,13 +909,13 @@ namespace clt::scene_renderer
                     const auto index_bytes =
                         mesh.indices.size() * sizeof(std::uint32_t);
 
-                    result.vertices = upload::static_buffer(
+                    result.vertices = transfers.add(
                         mesh.vertices.data(),
                         vertex_bytes,
                         vk::BufferUsageFlagBits::eVertexBuffer
                     );
 
-                    result.indices = upload::static_buffer(
+                    result.indices = transfers.add(
                         mesh.indices.data(),
                         index_bytes,
                         vk::BufferUsageFlagBits::eIndexBuffer
@@ -952,6 +953,7 @@ namespace clt::scene_renderer
                     throw;
                 }
             }
+            transfers.finish();
         }
 
         try
