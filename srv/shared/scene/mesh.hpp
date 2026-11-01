@@ -1,6 +1,7 @@
 #pragma once
 
 #include "util/math/vector.hpp"
+#include "material.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -19,12 +20,13 @@ namespace scene
         std::uint32_t id = 0;
         std::vector<vertex> vertices;
         std::vector<std::uint32_t> indices;
+        material surface;
     };
 
     inline bool same_mesh(const mesh& a, const mesh& b)
     {
         if (a.id != b.id || a.vertices.size() != b.vertices.size() ||
-            a.indices != b.indices)
+            a.indices != b.indices || !same_material(a.surface, b.surface))
         {
             return false;
         }
