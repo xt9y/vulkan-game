@@ -177,6 +177,7 @@ namespace clt::renderer
                 {
                     if (queues[i].queueCount &&
                         (queues[i].queueFlags & vk::QueueFlagBits::eGraphics) &&
+                        (queues[i].queueFlags & vk::QueueFlagBits::eCompute) &&
                         gpu.getSurfaceSupportKHR(i, vk::surface::get()->handle))
                     {
                         vk::physical_device::adopt(gpu);
@@ -193,7 +194,7 @@ namespace clt::renderer
 
             if (family == UINT32_MAX)
             {
-                throw std::runtime_error("No graphics GPU with Vulkan presentation support");
+                throw std::runtime_error("GPU culling requires a graphics, compute and present Vulkan queue");
             }
 
             float priority = 1.0f;

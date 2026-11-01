@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdlib>
 #include <filesystem>
@@ -1087,8 +1088,7 @@ namespace clt::scene_renderer
         begin.clearValueCount = clear.size();
         begin.pClearValues = clear.data();
 
-        // Optional GPU visibility: compact instance IDs into the same vertex
-        // buffer consumed by the graphics pipeline, and write indirect counts.
+        // Compute visibility and compact instance IDs for indirect graphics draws.
         if (data.snapshot)
         {
             const auto started = clock::now();
