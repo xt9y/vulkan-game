@@ -580,6 +580,9 @@ namespace
         std::vector<double> cull_ms;
         std::vector<double> index_upload_ms;
         std::vector<double> commands_ms;
+        std::vector<double> gpu_dispatch_ms;
+        bool gpu_culling = false;
+        std::size_t gpu_candidates = 0;
         std::size_t cached_frames = 0;
         std::uint64_t uploaded_bytes = 0;
         std::size_t tested_nodes = 0;
@@ -635,6 +638,7 @@ namespace
         output.cull_ms.reserve(10000);
         output.index_upload_ms.reserve(10000);
         output.commands_ms.reserve(10000);
+        output.gpu_dispatch_ms.reserve(10000);
 
         // Visibility counts are sampled once per phase, not every frame; the
         // audit must not dominate the renderer's actual frame-time measurement.
@@ -680,6 +684,9 @@ namespace
                 output.cull_ms.push_back(measured.scene.cull_ms);
                 output.index_upload_ms.push_back(measured.scene.index_upload_ms);
                 output.commands_ms.push_back(measured.scene.commands_ms);
+                output.gpu_dispatch_ms.push_back(measured.scene.gpu_dispatch_ms);
+                output.gpu_culling = measured.scene.gpu_culling;
+                output.gpu_candidates = measured.scene.gpu_candidates;
                 output.tested_nodes = measured.scene.tested_nodes;
                 output.accepted_groups = measured.scene.accepted_groups;
                 output.gpu_visible = measured.scene.visible_instances;
@@ -780,6 +787,9 @@ namespace
                   << " gpu_visible=" << value.gpu_visible
                   << " bvh_nodes=" << value.tested_nodes
                   << " accepted_groups=" << value.accepted_groups
+                  << " gpu_mode=" << value.gpu_culling
+                  << " gpu_candidates=" << value.gpu_candidates
+                  << " gpu_dispatch_cpu_ms=" << average(value.gpu_dispatch_ms)
                   << " cache_frames=" << value.cached_frames
                   << "/" << value.record_ms.size()
                   << " uploaded_kib=" << (value.uploaded_bytes / 1024) << '\n';

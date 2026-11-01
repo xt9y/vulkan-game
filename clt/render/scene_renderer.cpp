@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <cmath>
+#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -41,7 +42,10 @@ namespace clt::scene_renderer
             vk::buffer::resource indices;
             vk::buffer::resource instance_buffer;
             vk::buffer::resource visible_buffer;
+            vk::buffer::resource bounds_buffer;
+            vk::buffer::resource indirect_buffer;
             vk::DescriptorSet instance_set{};
+            std::vector<std::array<float, 4>> bounds;
             std::vector<prepared_instance> instances;
             std::vector<instance_data> transforms;
             std::vector<std::uint32_t> visible;
@@ -54,11 +58,20 @@ namespace clt::scene_renderer
         static_assert(sizeof(instance_data) == 128);
         static_assert(sizeof(::scene::vertex) == 32);
 
+        struct cull_parameters {
+            std::array<vec4, 6> planes{};
+            std::uint32_t count = 0;
+        };
+        static_assert(sizeof(cull_parameters) <= 128);
+
         struct state {
             std::shared_ptr<const ::scene::state> snapshot;
             std::vector<gpu_mesh> meshes;
             vk::DescriptorSetLayout instance_layout{};
             vk::DescriptorPool instance_pool{};
+            vk::PipelineLayout cull_layout{};
+            vk::Pipeline cull_pipeline{};
+            bool gpu_culling = false;
             draw_stats timings{};
             mat4 cached_view_projection{};
             bool visibility_valid = false;
@@ -95,6 +108,14 @@ namespace clt::scene_renderer
                 if (mesh.visible_buffer.handle)
                 {
                     vk::buffer::destroy(mesh.visible_buffer);
+                }
+                if (mesh.bounds_buffer.handle)
+                {
+                    vk::buffer::destroy(mesh.bounds_buffer);
+                }
+                if (mesh.indirect_buffer.handle)
+                {
+                    vk::buffer::destroy(mesh.indirect_buffer);
                 }
             }
 
@@ -441,19 +462,71 @@ namespace clt::scene_renderer
             throw std::invalid_argument("Scene shader paths must not be empty");
         }
 
-        get().shaders = {vertex_path, fragment_path};
+        auto& data = get();
+        data.shaders = {vertex_path, fragment_path};
 
-        vk::DescriptorSetLayoutBinding binding{};
-        binding.binding = 0;
-        binding.descriptorType = vk::DescriptorType::eStorageBuffer;
-        binding.descriptorCount = 1;
-        binding.stageFlags = vk::ShaderStageFlagBits::eVertex;
+        const auto* requested = std::getenv("VK_GPU_CULL");
+        const auto family = vk::queue::get()->graphics_family;
+        const auto families =
+            vk::physical_device::get()->handle.getQueueFamilyProperties();
+        data.gpu_culling = requested && requested[0] == '1' &&
+            requested[1] == '\0' && family < families.size() &&
+            bool(families[family].queueFlags & vk::QueueFlagBits::eCompute);
 
+        std::array<vk::DescriptorSetLayoutBinding, 4> bindings{};
+        for (std::uint32_t i = 0; i < bindings.size(); ++i)
+        {
+            bindings[i].binding = i;
+            bindings[i].descriptorType = vk::DescriptorType::eStorageBuffer;
+            bindings[i].descriptorCount = 1;
+            bindings[i].stageFlags = vk::ShaderStageFlagBits::eCompute;
+            if (i == 0)
+            {
+                bindings[i].stageFlags |= vk::ShaderStageFlagBits::eVertex;
+            }
+        }
+
+        const auto device = vk::device::get()->handle;
         vk::DescriptorSetLayoutCreateInfo info{};
-        info.bindingCount = 1;
-        info.pBindings = &binding;
-        get().instance_layout =
-            vk::device::get()->handle.createDescriptorSetLayout(info);
+        info.bindingCount = data.gpu_culling ? 4 : 1;
+        info.pBindings = bindings.data();
+        data.instance_layout = device.createDescriptorSetLayout(info);
+
+        if (data.gpu_culling)
+        {
+            update_shader("shd/cull.comp.spv");
+
+            vk::PushConstantRange range{};
+            range.stageFlags = vk::ShaderStageFlagBits::eCompute;
+            range.offset = 0;
+            range.size = sizeof(cull_parameters);
+
+            vk::PipelineLayoutCreateInfo layout{};
+            layout.setLayoutCount = 1;
+            layout.pSetLayouts = &data.instance_layout;
+            layout.pushConstantRangeCount = 1;
+            layout.pPushConstantRanges = &range;
+            data.cull_layout = device.createPipelineLayout(layout);
+
+            const auto code = vk::shader::read("shd/cull.comp.spv");
+            auto module = vk::shader::create(code);
+            try
+            {
+                vk::ComputePipelineCreateInfo pipeline{};
+                pipeline.stage.stage = vk::ShaderStageFlagBits::eCompute;
+                pipeline.stage.module = module;
+                pipeline.stage.pName = "main";
+                pipeline.layout = data.cull_layout;
+                data.cull_pipeline = vk::pipeline::compute(pipeline);
+            }
+            catch (...)
+            {
+                vk::shader::destroy(module);
+                throw;
+            }
+            vk::shader::destroy(module);
+            std::cout << "GPU-driven frustum culling enabled\n";
+        }
     }
 
     draw_stats last_stats()
@@ -571,27 +644,51 @@ namespace clt::scene_renderer
             trs(pose.position, pose.rotation, pose.scale),
             rotation(pose.rotation) * scale(inverse)
         });
+        if (get().gpu_culling)
+        {
+            const auto center_world = mesh.instances.back().center;
+            mesh.bounds.push_back({
+                center_world.x, center_world.y, center_world.z,
+                mesh.instances.back().radius
+            });
+        }
     }
 
     void bind_instances(gpu_mesh& mesh)
     {
-        if (!mesh.instance_set || !mesh.instance_buffer.handle)
+        if (!mesh.instance_set || !mesh.instance_buffer.handle ||
+            (get().gpu_culling && (!mesh.bounds_buffer.handle ||
+                                   !mesh.visible_buffer.handle ||
+                                   !mesh.indirect_buffer.handle)))
         {
             return;
         }
 
-        vk::DescriptorBufferInfo buffer{};
-        buffer.buffer = mesh.instance_buffer.handle;
-        buffer.offset = 0;
-        buffer.range = VK_WHOLE_SIZE;
+        const std::array<vk::Buffer, 4> buffers{
+            mesh.instance_buffer.handle,
+            mesh.bounds_buffer.handle,
+            mesh.visible_buffer.handle,
+            mesh.indirect_buffer.handle
+        };
+        const std::size_t count = get().gpu_culling ? 4 : 1;
+        std::array<vk::DescriptorBufferInfo, 4> infos{};
+        std::array<vk::WriteDescriptorSet, 4> writes{};
 
-        vk::WriteDescriptorSet write{};
-        write.dstSet = mesh.instance_set;
-        write.dstBinding = 0;
-        write.descriptorCount = 1;
-        write.descriptorType = vk::DescriptorType::eStorageBuffer;
-        write.pBufferInfo = &buffer;
-        vk::device::get()->handle.updateDescriptorSets({write}, {});
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            infos[i].buffer = buffers[i];
+            infos[i].offset = 0;
+            infos[i].range = VK_WHOLE_SIZE;
+            writes[i].dstSet = mesh.instance_set;
+            writes[i].dstBinding = static_cast<std::uint32_t>(i);
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = vk::DescriptorType::eStorageBuffer;
+            writes[i].pBufferInfo = &infos[i];
+        }
+        std::vector<vk::WriteDescriptorSet> updates(
+            writes.begin(), writes.begin() + count
+        );
+        vk::device::get()->handle.updateDescriptorSets(updates, {});
     }
 
     void refresh_instances(gpu_mesh& mesh, std::size_t first = 0)
@@ -664,7 +761,8 @@ namespace clt::scene_renderer
                     static_cast<vk::DeviceSize>(visible_bytes),
                     mesh.visible_buffer.size * 2
                 ),
-                vk::BufferUsageFlagBits::eVertexBuffer,
+                vk::BufferUsageFlagBits::eVertexBuffer |
+                vk::BufferUsageFlagBits::eStorageBuffer,
                 vk::MemoryPropertyFlagBits::eHostVisible |
                 vk::MemoryPropertyFlagBits::eHostCoherent
             );
@@ -673,6 +771,52 @@ namespace clt::scene_renderer
                 vk::buffer::destroy(mesh.visible_buffer);
             }
             mesh.visible_buffer = replacement;
+            bind_instances(mesh);
+        }
+
+        if (get().gpu_culling)
+        {
+            const auto size = mesh.bounds.size() * sizeof(mesh.bounds.front());
+            if (!mesh.bounds_buffer.handle || mesh.bounds_buffer.size < size)
+            {
+                auto replacement = vk::buffer::create(
+                    std::max<vk::DeviceSize>(size, mesh.bounds_buffer.size * 2),
+                    vk::BufferUsageFlagBits::eStorageBuffer,
+                    vk::MemoryPropertyFlagBits::eHostVisible |
+                    vk::MemoryPropertyFlagBits::eHostCoherent
+                );
+                vk::buffer::write(replacement, mesh.bounds.data(), size);
+                if (mesh.bounds_buffer.handle)
+                {
+                    vk::buffer::destroy(mesh.bounds_buffer);
+                }
+                mesh.bounds_buffer = replacement;
+                bind_instances(mesh);
+            }
+            else if (first < mesh.bounds.size())
+            {
+                vk::buffer::write(
+                    mesh.bounds_buffer, mesh.bounds.data() + first,
+                    (mesh.bounds.size() - first) * sizeof(mesh.bounds.front()),
+                    first * sizeof(mesh.bounds.front())
+                );
+            }
+
+            if (!mesh.indirect_buffer.handle)
+            {
+                mesh.indirect_buffer = vk::buffer::create(
+                    sizeof(vk::DrawIndexedIndirectCommand),
+                    vk::BufferUsageFlagBits::eStorageBuffer |
+                    vk::BufferUsageFlagBits::eIndirectBuffer |
+                    vk::BufferUsageFlagBits::eTransferDst,
+                    vk::MemoryPropertyFlagBits::eHostVisible |
+                    vk::MemoryPropertyFlagBits::eHostCoherent
+                );
+                vk::DrawIndexedIndirectCommand draw{};
+                draw.indexCount = mesh.index_count;
+                vk::buffer::write(mesh.indirect_buffer, &draw, sizeof(draw));
+                bind_instances(mesh);
+            }
         }
     }
 
@@ -851,11 +995,15 @@ namespace clt::scene_renderer
                 // transform storage; no per-frame matrix upload is required.
                 vk::DescriptorPoolSize pool_size{};
                 pool_size.type = vk::DescriptorType::eStorageBuffer;
-                pool_size.descriptorCount =
-                    static_cast<std::uint32_t>(std::max<std::size_t>(1, meshes.size()));
+                pool_size.descriptorCount = static_cast<std::uint32_t>(
+                    std::max<std::size_t>(1, meshes.size()) *
+                    (data.gpu_culling ? 4 : 1)
+                );
 
                 vk::DescriptorPoolCreateInfo pool_info{};
-                pool_info.maxSets = pool_size.descriptorCount;
+                pool_info.maxSets = static_cast<std::uint32_t>(
+                    std::max<std::size_t>(1, meshes.size())
+                );
                 pool_info.poolSizeCount = 1;
                 pool_info.pPoolSizes = &pool_size;
                 const auto device = vk::device::get()->handle;
@@ -906,6 +1054,7 @@ namespace clt::scene_renderer
 
         auto& data = get();
         data.timings = {};
+        data.timings.gpu_culling = data.gpu_culling;
         const auto extent = vk::swapchain::get()->extent;
 
         std::array<vk::ClearValue, 2> clear{};
@@ -920,6 +1069,87 @@ namespace clt::scene_renderer
         begin.renderArea = vk::Rect2D{vk::Offset2D{0, 0}, extent};
         begin.clearValueCount = clear.size();
         begin.pClearValues = clear.data();
+
+        // Optional GPU visibility: compact instance IDs into the same vertex
+        // buffer consumed by the graphics pipeline, and write indirect counts.
+        if (data.gpu_culling && data.snapshot)
+        {
+            const auto started = clock::now();
+            const auto view_projection = camera::projection(
+                float(extent.width) / float(extent.height)
+            ) * camera::view();
+            const auto camera_planes = frustum(view_projection);
+            cull_parameters params;
+            for (std::size_t i = 0; i < params.planes.size(); ++i)
+            {
+                const auto& plane = camera_planes[i];
+                const float inverse = 1.0f / std::max(plane.magnitude, 1e-6f);
+                params.planes[i] = {
+                    plane.normal.x * inverse,
+                    plane.normal.y * inverse,
+                    plane.normal.z * inverse,
+                    plane.offset * inverse
+                };
+            }
+
+            for (const auto& mesh : data.meshes)
+            {
+                if (!mesh.instances.empty())
+                {
+                    command.fillBuffer(
+                        mesh.indirect_buffer.handle,
+                        offsetof(vk::DrawIndexedIndirectCommand, instanceCount),
+                        sizeof(std::uint32_t), 0
+                    );
+                }
+            }
+
+            vk::MemoryBarrier transfer{};
+            transfer.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+            transfer.dstAccessMask = vk::AccessFlagBits::eShaderRead |
+                vk::AccessFlagBits::eShaderWrite;
+            command.pipelineBarrier(
+                vk::PipelineStageFlagBits::eTransfer,
+                vk::PipelineStageFlagBits::eComputeShader,
+                {}, {transfer}, {}, {}
+            );
+
+            command.bindPipeline(vk::PipelineBindPoint::eCompute, data.cull_pipeline);
+            for (const auto& mesh : data.meshes)
+            {
+                if (mesh.instances.empty())
+                {
+                    continue;
+                }
+
+                params.count = static_cast<std::uint32_t>(mesh.instances.size());
+                command.bindDescriptorSets(
+                    vk::PipelineBindPoint::eCompute,
+                    data.cull_layout, 0, {mesh.instance_set}, {}
+                );
+                command.pushConstants(
+                    data.cull_layout, vk::ShaderStageFlagBits::eCompute,
+                    0, sizeof(params), &params
+                );
+                command.dispatch((params.count + 127u) / 128u, 1, 1);
+                data.timings.gpu_candidates += mesh.instances.size();
+            }
+
+            vk::MemoryBarrier finished{};
+            finished.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
+            finished.dstAccessMask = vk::AccessFlagBits::eVertexAttributeRead |
+                vk::AccessFlagBits::eIndirectCommandRead;
+            command.pipelineBarrier(
+                vk::PipelineStageFlagBits::eComputeShader,
+                vk::PipelineStageFlagBits::eVertexInput |
+                vk::PipelineStageFlagBits::eDrawIndirect,
+                {}, {finished}, {}, {}
+            );
+
+            data.timings.gpu_dispatch_ms =
+                std::chrono::duration<double, std::milli>(
+                    clock::now() - started).count();
+        }
 
         command.beginRenderPass(begin, vk::SubpassContents::eInline);
 
@@ -967,6 +1197,33 @@ namespace clt::scene_renderer
 
             for (auto& mesh : data.meshes)
             {
+                if (data.gpu_culling)
+                {
+                    if (mesh.instances.empty())
+                    {
+                        continue;
+                    }
+
+                    const std::array<vk::Buffer, 2> buffers{
+                        mesh.vertices.handle, mesh.visible_buffer.handle
+                    };
+                    const std::array<vk::DeviceSize, 2> offsets{0, 0};
+                    command.bindDescriptorSets(
+                        vk::PipelineBindPoint::eGraphics,
+                        data.layout, 0, {mesh.instance_set}, {}
+                    );
+                    command.bindVertexBuffers(0, buffers, offsets);
+                    command.bindIndexBuffer(
+                        mesh.indices.handle, 0, vk::IndexType::eUint32
+                    );
+                    command.drawIndexedIndirect(
+                        mesh.indirect_buffer.handle, 0, 1,
+                        sizeof(vk::DrawIndexedIndirectCommand)
+                    );
+                    ++data.timings.draw_calls;
+                    continue;
+                }
+
                 if (recull)
                 {
                     const auto start = clock::now();
@@ -1053,6 +1310,16 @@ namespace clt::scene_renderer
 
         release_frame_resources();
 
+        if (data.cull_pipeline)
+        {
+            vk::pipeline::destroy(data.cull_pipeline);
+            data.cull_pipeline = nullptr;
+        }
+        if (data.cull_layout)
+        {
+            vk::device::get()->handle.destroyPipelineLayout(data.cull_layout);
+            data.cull_layout = nullptr;
+        }
         if (data.instance_layout)
         {
             vk::device::get()->handle.destroyDescriptorSetLayout(data.instance_layout);
