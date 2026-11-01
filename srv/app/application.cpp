@@ -1,6 +1,7 @@
 #include "application.hpp"
 
 #include "srv/game/application.hpp"
+#include "srv/assets/model.hpp"
 #include "srv/network/session.hpp"
 
 #include "srv/shared/net/endpoint.hpp"
@@ -12,6 +13,8 @@
 #include "srv/world/worker.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <string>
 
 #include "srv/scene/test.hpp"
 
@@ -62,6 +65,24 @@ namespace srv::application
         world::init(get()->terrain, 123456789ULL);
         get()->tick = 0;
         get()->initialized = true;
+
+        // Parse GLB/glTF off-thread, then publish on the authoritative tick.
+        // Rendering and Vulkan uploads are exclusively client-side.
+        if (const char* model = std::getenv("VK_MODEL"); model && *model)
+        {
+            begin_stream();
+            if (!generation::submit([path = std::string(model)]() -> generation::completion
+            {
+                auto imported = assets::load(path);
+                return [imported = std::move(imported)]() mutable
+                {
+                    append_scene(std::move(imported), true);
+                };
+            }))
+            {
+                throw std::runtime_error("Could not queue model import");
+            }
+        }
     }
 
     void begin_stream()
