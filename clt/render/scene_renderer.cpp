@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <cmath>
+#include <chrono>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -83,6 +84,8 @@ namespace clt::scene_renderer
             std::array<vec4, 6> last_gpu_planes{};
             bool gpu_planes_valid = false;
             std::uint32_t last_image = 0;
+            std::uint32_t last_animation_tick = UINT32_MAX;
+            std::chrono::steady_clock::time_point animation_received{};
 
             vk::RenderPass render_pass{};
             vk::PipelineLayout layout{};
@@ -1149,6 +1152,15 @@ namespace clt::scene_renderer
         {
             const auto server_tick = connection::get()->server_tick.load(
                 std::memory_order_relaxed);
+            const auto now = std::chrono::steady_clock::now();
+            if (server_tick != data.last_animation_tick)
+            {
+                data.last_animation_tick = server_tick;
+                data.animation_received = now;
+            }
+            const auto elapsed = std::chrono::duration<float>(
+                now - data.animation_received).count();
+            const float smooth_tick = float(server_tick) + std::clamp(elapsed, 0.f, 0.2f) * 60.f;
             for (auto& mesh : data.meshes)
             {
                 if (!mesh.joint_count || mesh.transforms.empty()) continue;
@@ -1163,7 +1175,7 @@ namespace clt::scene_renderer
                     const auto overlay = update ? update->overlay : instance.overlay_animation;
                     const auto weight = update ? update->blend : instance.overlay_weight;
                     const auto root = update ? update->mask_root : instance.overlay_root;
-                    const float time = float(std::int32_t(server_tick - start)) / 60.0f;
+                    const float time = (smooth_tick - float(start)) / 60.0f;
                     if (!animation::sample(mesh.skin_id, clip, std::max(0.f, time), bones,
                         overlay, weight, root) ||
                         bones.size() != mesh.joint_count)
