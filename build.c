@@ -94,6 +94,8 @@ void build(C_Build* b)
     c_dep_cmake(fastgltf);
     c_dep_cmake_option(fastgltf, "-DBUILD_SHARED_LIBS=OFF");
     c_dep_cmake_option(fastgltf, "-DFASTGLTF_ENABLE_INSTALL=OFF");
+    c_dep_cmake_option(fastgltf, "-DCMAKE_DISABLE_FIND_PACKAGE_simdjson=ON");
+    c_dep_cmake_option(fastgltf, "-DCMAKE_DISABLE_FIND_PACKAGE_simdutf=ON");
     c_dep_include(fastgltf, "include");
     c_dep_link(fastgltf, "fastgltf");
     c_dep_link(fastgltf, "fastgltf_simdjson");
