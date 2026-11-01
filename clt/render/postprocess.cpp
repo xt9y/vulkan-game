@@ -186,8 +186,8 @@ namespace clt::postprocess
         vk::Pipeline presentation_pipeline()
         {
             const auto& data = get();
-            const auto vertex = shader("shd/fullscreen.vert.spv");
-            const auto fragment = shader("shd/present.frag.spv");
+            const auto vertex = shader("build/shaders/fullscreen.vert.spv");
+            const auto fragment = shader("build/shaders/present.frag.spv");
             try
             {
                 std::array<vk::PipelineShaderStageCreateInfo, 2> stages{};
@@ -360,8 +360,8 @@ namespace clt::postprocess
             data.tone_layout = pipeline_layout(data.tone_set, true);
             data.present_layout = pipeline_layout(data.present_set, false);
 
-            data.lighting_pipeline = compute_pipeline("shd/light.comp.spv", data.lighting_layout);
-            data.tone_pipeline = compute_pipeline("shd/tone.comp.spv", data.tone_layout);
+            data.lighting_pipeline = compute_pipeline("build/shaders/light.comp.spv", data.lighting_layout);
+            data.tone_pipeline = compute_pipeline("build/shaders/tone.comp.spv", data.tone_layout);
 
             vk::AttachmentDescription attachment{};
             attachment.format = vk::swapchain::get()->format;
@@ -449,8 +449,11 @@ namespace clt::postprocess
                 lighting[4].imageLayout = vk::ImageLayout::eGeneral;
                 update(current.lighting, lighting, 4);
                 std::vector<vk::DescriptorImageInfo> tone(2);
-                tone[0] = {data.sampler, current.hdr.view, vk::ImageLayout::eGeneral};
-                tone[1] = {{}, current.ldr.view, vk::ImageLayout::eGeneral};
+                tone[0].sampler = data.sampler;
+                tone[0].imageView = current.hdr.view;
+                tone[0].imageLayout = vk::ImageLayout::eGeneral;
+                tone[1].imageView = current.ldr.view;
+                tone[1].imageLayout = vk::ImageLayout::eGeneral;
                 update(current.tone, tone, 1);
                 std::vector<vk::DescriptorImageInfo> presented(1);
                 presented[0].sampler = data.sampler;

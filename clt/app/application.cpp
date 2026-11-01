@@ -93,7 +93,7 @@ namespace clt::application
         camera::init();
         prediction::init();
 
-        renderer::init("shd/mesh.vert.spv", "shd/mesh.frag.spv");
+        renderer::init("build/shaders/mesh.vert.spv", "build/shaders/mesh.frag.spv");
         bool connected = false;
 
         std::atomic<bool> render_stop{false};

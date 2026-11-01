@@ -1,6 +1,12 @@
 #include <cbuild.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#endif
 
 static void compile_shaders(void)
 {
@@ -9,11 +15,21 @@ static void compile_shaders(void)
         "shd/light.comp", "shd/tone.comp",
         "shd/fullscreen.vert", "shd/present.frag"
     };
+#ifdef _WIN32
+    _mkdir("build");
+    _mkdir("build/shaders");
+#else
+    mkdir("build", 0755);
+    mkdir("build/shaders", 0755);
+#endif
+
     for (size_t i = 0; i < sizeof(sources) / sizeof(sources[0]); ++i)
     {
         char binary[256];
         char command[640];
-        snprintf(binary, sizeof(binary), "%s.spv", sources[i]);
+        const char* name = strrchr(sources[i], '/');
+        snprintf(binary, sizeof(binary), "build/shaders/%s.spv",
+                 name ? name + 1 : sources[i]);
         snprintf(command, sizeof(command),
                  "glslangValidator -V \"%s\" -o \"%s\"", sources[i], binary);
         if (system(command) != 0)
