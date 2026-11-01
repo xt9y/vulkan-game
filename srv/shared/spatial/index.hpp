@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <numeric>
 #include <vector>
@@ -98,6 +99,8 @@ namespace spatial
             }
 
             nodes[id].box = box;
+            nodes[id].first = first;
+            nodes[id].count = count;
 
             if (count <= 8)
             {
@@ -150,7 +153,7 @@ namespace spatial
                 return;
             }
 
-            if (n.count)
+            if (!n.left && !n.right)
             {
                 for (std::uint32_t i = 0; i < n.count; ++i)
                 {
@@ -232,6 +235,84 @@ namespace spatial
             {
                 traverse(root, accept, visit);
             }
+        }
+
+        struct frustum_stats {
+            std::size_t tested_nodes = 0;
+            std::size_t accepted_groups = 0;
+            std::size_t accepted_instances = 0;
+        };
+
+        // Whole subtrees inside the frustum skip every individual box test.
+        // The callback receives stable indices into the original bounds.
+        template<class Visit>
+        frustum_stats query_frustum_fast(
+            const std::array<plane, 6>& planes, Visit&& visit
+        ) const
+        {
+            frustum_stats stats;
+
+            auto walk = [&](auto&& self, std::uint32_t id) -> void
+            {
+                const auto& n = nodes[id];
+                ++stats.tested_nodes;
+                bool contained = true;
+
+                for (const auto& p : planes)
+                {
+                    const vec3 near_corner{
+                        p.normal.x >= 0 ? n.box.min.x : n.box.max.x,
+                        p.normal.y >= 0 ? n.box.min.y : n.box.max.y,
+                        p.normal.z >= 0 ? n.box.min.z : n.box.max.z
+                    };
+                    const vec3 far_corner{
+                        p.normal.x >= 0 ? n.box.max.x : n.box.min.x,
+                        p.normal.y >= 0 ? n.box.max.y : n.box.min.y,
+                        p.normal.z >= 0 ? n.box.max.z : n.box.min.z
+                    };
+
+                    if (vk::util::math::dot(p.normal, far_corner) + p.offset < 0)
+                    {
+                        return;
+                    }
+                    contained &= vk::util::math::dot(p.normal, near_corner) + p.offset >= 0;
+                }
+
+                if (contained)
+                {
+                    ++stats.accepted_groups;
+                    for (std::uint32_t i = 0; i < n.count; ++i)
+                    {
+                        visit(order[n.first + i]);
+                    }
+                    stats.accepted_instances += n.count;
+                    return;
+                }
+
+                if (!n.left && !n.right)
+                {
+                    for (std::uint32_t i = 0; i < n.count; ++i)
+                    {
+                        const auto object = order[n.first + i];
+                        if (visible(boxes[object], planes))
+                        {
+                            visit(object);
+                            ++stats.accepted_instances;
+                        }
+                    }
+                    return;
+                }
+
+                self(self, n.left);
+                self(self, n.right);
+            };
+
+            for (auto root : roots)
+            {
+                walk(walk, root);
+            }
+
+            return stats;
         }
     };
 } // namespace spatial
