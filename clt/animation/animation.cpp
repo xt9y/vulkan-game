@@ -202,6 +202,25 @@ namespace clt::animation
         return true;
     }
 
+    std::uint32_t joint(std::uint32_t skin_id, std::string_view name)
+    {
+        const auto* skin = find(skin_id);
+        if (!skin) return UINT32_MAX;
+        const auto names = skin->skeleton.joint_names();
+        for (std::uint32_t i = 0; i < names.size(); ++i)
+            if (name == names[i]) return i;
+        return UINT32_MAX;
+    }
+
+    bool joint_transform(std::uint32_t skin_id, std::uint32_t index, matrix& out)
+    {
+        const auto* skin = find(skin_id);
+        if (!skin || index >= skin->models.size()) return false;
+        for (int c = 0; c < 4; ++c)
+            ozz::math::StorePtrU(skin->models[index].cols[c], out.data() + c * 4);
+        return true;
+    }
+
     void reset()
     {
         skins().clear();
