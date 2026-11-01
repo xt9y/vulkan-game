@@ -102,6 +102,15 @@ namespace clt::connection
         return data.scene;
     }
 
+    std::optional<net::animation::resource> animation(std::uint32_t instance_id)
+    {
+        auto& data = *get();
+        std::lock_guard<std::mutex> lock(data.animation_mutex);
+        const auto it = data.animations.find(instance_id);
+        if (it == data.animations.end()) return std::nullopt;
+        return it->second;
+    }
+
     void check_error()
     {
         std::exception_ptr error;
@@ -257,6 +266,10 @@ namespace clt::connection
                     data.scene.reset();
                     data.pending_scene.clear();
                     data.last_publish = {};
+                    {
+                        std::lock_guard<std::mutex> animation_lock(data.animation_mutex);
+                        data.animations.clear();
+                    }
                 };
 
                 auto send = [&](net::message::type type)
@@ -280,6 +293,21 @@ namespace clt::connection
                             break;
                         }
                         
+                        if (const auto state = net::animation::decode(buffer.data(), *size))
+                        {
+                            if (net::endpoint::equal(peer, server) && state->token == token &&
+                                data.connected.load(std::memory_order_relaxed))
+                            {
+                                std::lock_guard<std::mutex> lock(data.animation_mutex);
+                                const auto old = data.animations.find(state->instance_id);
+                                if (old == data.animations.end() ||
+                                    net::message::newer(state->server_tick, old->second.server_tick))
+                                    data.animations[state->instance_id] = *state;
+                                last_received = now;
+                            }
+                            continue;
+                        }
+
                         if (const auto update = net::movement::decode_snapshot(buffer.data(), *size))
                         {
                             if (net::endpoint::equal(peer, server) && update->token == token &&
