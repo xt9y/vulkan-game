@@ -1,6 +1,7 @@
 #pragma once
 
 #include <fastgltf/types.hpp>
+#include "srv/shared/scene/scene.hpp"
 
 #include <ozz/animation/runtime/animation.h>
 #include <ozz/animation/runtime/skeleton.h>
@@ -24,4 +25,6 @@ namespace srv::assets
     };
 
     rig import_rig(const fastgltf::Asset& asset, std::size_t skin_index);
+    ::scene::skin serialize_rig(const fastgltf::Asset& asset,
+                                std::size_t skin_index, std::uint32_t id);
 } // namespace srv::assets
