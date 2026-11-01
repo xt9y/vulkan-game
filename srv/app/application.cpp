@@ -35,6 +35,7 @@ namespace srv::application
         void receive_messages();
         void send_scene_fragments();
         void send_animation_states();
+        void send_attachment_events();
         void handle(const net::endpoint::resource& peer, const net::message::resource& message);
         void reply(
             const net::endpoint::resource& peer,
@@ -217,6 +218,30 @@ namespace srv::application
         return true;
     }
 
+    bool emit_attachment_event(std::uint32_t instance_id,
+                               std::uint32_t joint, std::uint32_t kind)
+    {
+        auto& state = *get();
+        if (state.attachment_events.size() >= 128) return false;
+        const auto it = std::find_if(state.scene.instances.begin(),
+            state.scene.instances.end(), [&](const ::scene::instance& instance)
+            { return instance.id == instance_id; });
+        if (it == state.scene.instances.end()) return false;
+        const auto mesh = std::find_if(state.scene.meshes.begin(),
+            state.scene.meshes.end(), [&](const ::scene::mesh& m)
+            { return m.id == it->mesh_id; });
+        if (mesh == state.scene.meshes.end() || !mesh->skin_id) return false;
+        const auto skin = std::find_if(state.scene.skins.begin(),
+            state.scene.skins.end(), [&](const ::scene::skin& entry)
+            { return entry.id == mesh->skin_id; });
+        if (skin == state.scene.skins.end() ||
+            joint >= skin->inverse_bind.size()) return false;
+        state.attachment_events.push_back({
+            {0, state.tick, ++state.next_event, instance_id, joint, kind}, 3
+        });
+        return true;
+    }
+
     int run()
     {
         if (!get()->initialized)
@@ -246,6 +271,7 @@ namespace srv::application
             receive_messages();
             tick_players();
             send_animation_states();
+            send_attachment_events();
 
             // Publish at most one CPU asset batch per authoritative tick.
             if (get()->importing)
@@ -310,6 +336,8 @@ namespace srv::application
         get()->importing.reset();
         get()->next_texture = 0;
         get()->animation_cursor = 0;
+        get()->attachment_events.clear();
+        get()->next_event = 0;
         get()->terrain = {};
         get()->tick = 0;
         get()->initialized = false;
@@ -459,6 +487,27 @@ namespace srv::application
                 existing->scene_request = message.value;
                 existing->scene_pending = true;
             }
+        }
+
+        void send_attachment_events()
+        {
+            auto& queue = get()->attachment_events;
+            for (auto& item : queue)
+            {
+                for (const auto& client : session::get()->clients)
+                {
+                    if (!client.active) continue;
+                    auto event = item.event;
+                    event.token = client.token;
+                    const auto bytes = net::animation::encode_event(event);
+                    net::socket::send(get()->socket, client.endpoint,
+                                      bytes.data(), bytes.size());
+                }
+                if (item.repeats) --item.repeats;
+            }
+            queue.erase(std::remove_if(queue.begin(), queue.end(),
+                [](const state::pending_event& item) { return !item.repeats; }),
+                queue.end());
         }
 
         void send_animation_states()
