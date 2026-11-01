@@ -72,6 +72,8 @@ namespace clt::scene_renderer
             vk::PipelineLayout cull_layout{};
             vk::Pipeline cull_pipeline{};
             bool gpu_culling = false;
+            std::array<vec4, 6> last_gpu_planes{};
+            bool gpu_planes_valid = false;
             draw_stats timings{};
             mat4 cached_view_projection{};
             bool visibility_valid = false;
@@ -532,6 +534,86 @@ namespace clt::scene_renderer
     draw_stats last_stats()
     {
         return get().timings;
+    }
+
+    gpu_validation validate_gpu_visibility()
+    {
+        const auto& data = get();
+        gpu_validation result;
+        if (!data.gpu_culling || !data.gpu_planes_valid)
+        {
+            return result;
+        }
+        result.available = true;
+
+        for (auto& mesh : data.meshes)
+        {
+            if (mesh.instances.empty()) continue;
+
+            const auto* draw = static_cast<const vk::DrawIndexedIndirectCommand*>(
+                vk::buffer::map(mesh.indirect_buffer)
+            );
+            const std::size_t actual = draw->instanceCount;
+            result.actual += actual;
+            if (draw->indexCount != mesh.index_count || draw->firstIndex ||
+                draw->vertexOffset || draw->firstInstance)
+            {
+                ++result.bad_commands;
+            }
+
+            std::vector<std::uint8_t> expected(mesh.bounds.size(), 0);
+            for (std::size_t i = 0; i < mesh.bounds.size(); ++i)
+            {
+                const auto& sphere = mesh.bounds[i];
+                bool visible = true;
+                for (const auto& plane : data.last_gpu_planes)
+                {
+                    const float distance = plane.x * sphere[0] +
+                        plane.y * sphere[1] + plane.z * sphere[2] + plane.w;
+                    if (distance < -sphere[3])
+                    {
+                        visible = false;
+                        break;
+                    }
+                }
+                expected[i] = std::uint8_t(visible);
+                result.expected += visible;
+            }
+
+            const auto* ids = static_cast<const std::uint32_t*>(
+                vk::buffer::map(mesh.visible_buffer)
+            );
+            const std::size_t readable = std::min(actual, mesh.bounds.size());
+            result.out_of_range += actual - readable;
+
+            for (std::size_t i = 0; i < readable; ++i)
+            {
+                const auto id = ids[i];
+                if (id >= expected.size())
+                {
+                    ++result.out_of_range;
+                }
+                else if (expected[id] == 0)
+                {
+                    ++result.unexpected;
+                }
+                else if (expected[id] == 2)
+                {
+                    ++result.duplicates;
+                }
+                else
+                {
+                    expected[id] = 2;
+                }
+            }
+
+            for (auto value : expected)
+            {
+                result.missing += value == 1;
+            }
+        }
+
+        return result;
     }
 
     void release_frame_resources()
@@ -1091,6 +1173,9 @@ namespace clt::scene_renderer
                     plane.offset * inverse
                 };
             }
+
+            data.last_gpu_planes = params.planes;
+            data.gpu_planes_valid = true;
 
             for (const auto& mesh : data.meshes)
             {
