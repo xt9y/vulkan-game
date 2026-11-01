@@ -125,7 +125,7 @@ namespace clt::texture
                 {
                     if (old.id == texture.id && old.hash == hash)
                     {
-                        replacement.push_back(std::exchange(old, {}));
+                        replacement.push_back(std::exchange(old, resource{}));
                         reused = true;
                         break;
                     }
