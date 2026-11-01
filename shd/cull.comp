@@ -38,19 +38,44 @@ layout(push_constant) uniform Culling
     uint count;
 } pc;
 
+// One atomic per workgroup instead of one per visible instance.
+shared uint prefix[128];
+shared uint group_base;
+
 void main()
 {
     uint id = gl_GlobalInvocationID.x;
-    if (id >= pc.count)
-        return;
+    uint lane = gl_LocalInvocationID.x;
+    bool keep = id < pc.count;
 
-    vec4 sphere = spheres[id];
-    for (uint i = 0; i < 6; ++i)
+    if (keep)
     {
-        if (dot(pc.planes[i], vec4(sphere.xyz, 1.0)) < -sphere.w)
-            return;
+        vec4 sphere = spheres[id];
+        for (uint i = 0; i < 6; ++i)
+        {
+            if (dot(pc.planes[i], vec4(sphere.xyz, 1.0)) < -sphere.w)
+            {
+                keep = false;
+                break;
+            }
+        }
     }
 
-    uint slot = atomicAdd(instance_count, 1u);
-    visible_ids[slot] = id;
+    prefix[lane] = keep ? 1u : 0u;
+    barrier();
+
+    for (uint offset = 1; offset < 128; offset <<= 1)
+    {
+        uint left = lane >= offset ? prefix[lane - offset] : 0u;
+        barrier();
+        prefix[lane] += left;
+        barrier();
+    }
+
+    if (lane == 0)
+        group_base = atomicAdd(instance_count, prefix[127]);
+    barrier();
+
+    if (keep)
+        visible_ids[group_base + prefix[lane] - 1u] = id;
 }
