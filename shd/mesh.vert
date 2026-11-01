@@ -31,7 +31,9 @@ layout(push_constant) uniform Draw
 void main()
 {
     Instance instance = instances[instance_index];
-    gl_Position = pc.view_projection * instance.model * vec4(in_position, 1.0);
+    vec4 world = instance.model * vec4(in_position, 1.0);
+    gl_Position = pc.view_projection * world;
+    world_position = world.xyz;
     world_normal = normalize(mat3(instance.normal) * in_normal);
     uv = in_uv;
 }
