@@ -321,13 +321,6 @@ namespace clt::connection
                                     scene_bytes.clear();
                                     next_scene_send = now;
 
-                                    if (scene_ready)
-                                    {
-                                        const auto completed = snapshot();
-                                        std::cout << "Scene received: "
-                                                  << completed->meshes.size() << " meshes, "
-                                                  << completed->instances.size() << " instances\n";
-                                    }
                                 }
                                 else
                                 {

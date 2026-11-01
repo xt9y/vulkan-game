@@ -889,6 +889,11 @@ int main()
         clt::camera::init();
         clt::prediction::init();
         clt::renderer::init("shd/mesh.vert.spv", "shd/mesh.frag.spv");
+        const auto mode = clt::renderer::get()->present_mode;
+        std::cout << "PRESENT mode="
+                  << (mode == vk::PresentModeKHR::eImmediate ? "immediate" :
+                      mode == vk::PresentModeKHR::eMailbox ? "mailbox" : "fifo")
+                  << " uncapped_requested=" << clt::renderer::get()->uncapped << '\n';
         milestone("window+vulkan_init");
         gpu.init();
 
@@ -934,6 +939,8 @@ int main()
         {
             throw std::runtime_error("Scene transfer completed without the expected instances");
         }
+        std::cout << "Scene received: " << complete_scene->meshes.size()
+                  << " meshes, " << complete_scene->instances.size() << " instances\n";
 
         const auto audit_gpu = [&](const char* label)
         {

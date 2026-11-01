@@ -9,7 +9,6 @@
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
-#include <iostream>
 #include <stdexcept>
 
 namespace clt::renderer
@@ -310,13 +309,6 @@ namespace clt::renderer
         }
 
         data.present_mode = info.presentMode;
-        std::cout << "PRESENT mode="
-                  << (info.presentMode == vk::PresentModeKHR::eImmediate ? "immediate" :
-                      info.presentMode == vk::PresentModeKHR::eMailbox ? "mailbox" :
-                      "fifo")
-                  << " uncapped_requested=" << data.uncapped
-                  << (data.uncapped && info.presentMode == vk::PresentModeKHR::eFifo
-                      ? " (non-VSync modes unavailable)" : "") << '\n';
         info.clipped = true;
         vk::swapchain::init(info);
         scene_renderer::create_frame_resources();

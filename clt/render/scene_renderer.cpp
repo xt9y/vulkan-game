@@ -12,7 +12,6 @@
 #include <cstdlib>
 #include <filesystem>
 #include <cmath>
-#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -501,7 +500,6 @@ namespace clt::scene_renderer
             throw;
         }
         vk::shader::destroy(module);
-        std::cout << "GPU-driven frustum culling enabled\n";
     }
 
     draw_stats last_stats()

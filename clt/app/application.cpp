@@ -12,7 +12,6 @@
 #include <atomic>
 #include <chrono>
 #include <exception>
-#include <iostream>
 #include <stdexcept>
 #include <thread>
 
@@ -81,14 +80,6 @@ namespace clt::application
 
             const bool connected = connection::get()->connected.load(std::memory_order_relaxed);
             const auto scene = connection::snapshot();
-
-            std::cout
-                << (connected ? "connected" : "disconnected")
-                << ", server tick: "
-                << connection::get()->server_tick.load(std::memory_order_relaxed)
-                << ", meshes: " << (scene ? scene->meshes.size() : 0)
-                << ", instances: " << (scene ? scene->instances.size() : 0)
-                << '\n';
 
             return connected && scene ? 0 : 1;
         }
