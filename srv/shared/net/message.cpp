@@ -33,7 +33,7 @@ namespace net::message
     std::optional<resource> decode(const std::uint8_t* data, std::size_t size)
     {
         if (size != packet_size || data[0] != 'V' || data[1] != 'G' || data[2] != 'A' ||
-            data[3] != 'M' || data[4] != 1 || data[5] < 1 || data[5] > 5 || data[6] || data[7])
+            data[3] != 'M' || data[4] != 1 || data[5] < 1 || data[5] > 6 || data[6] || data[7])
         {
             return std::nullopt;
         }

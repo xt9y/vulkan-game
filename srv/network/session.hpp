@@ -2,6 +2,10 @@
 
 #include "srv/shared/net/endpoint.hpp"
 
+#include "srv/shared/player/movement.hpp"
+
+#include <deque>
+
 #include <array>
 #include <chrono>
 
@@ -15,6 +19,9 @@ namespace srv::session
         bool has_sequence = false;
         bool active = false;
         std::chrono::steady_clock::time_point last_seen;
+        ::player::state avatar;
+        std::deque<::player::input> inputs;
+        std::uint32_t processed_input = 0;
     };
 
     struct state

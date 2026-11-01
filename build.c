@@ -1,17 +1,26 @@
 #include <cbuild.h>
 
+/*  Shader 
+ *  glslangValidator -V shd/mesh.vert -o shd/mesh.vert.spv
+    glslangValidator -V shd/mesh.frag -o shd/mesh.frag.spv
+*/
+
 void build(C_Build* b)
 {
     C_Target* game = c_executable(b, "vulkan-game");
     c_sources(game, "main.cpp");
+    c_sources(game, "srv/world/*.cpp");
+    c_sources(game, "srv/scene/*.cpp");
     c_sources(game, "srv/game/*.cpp");
     c_sources(game, "srv/app/*.cpp");
     c_sources(game, "srv/network/*.cpp");
+    c_sources(game, "srv/shared/net/*.cpp");
+
     c_sources(game, "clt/app/*.cpp");
     c_sources(game, "clt/network/*.cpp");
     c_sources(game, "clt/platform/*.cpp");
     c_sources(game, "clt/render/*.cpp");
-    c_sources(game, "srv/shared/net/*.cpp");
+
     c_include(game, ".");
     c_warnings_strict(game);
 

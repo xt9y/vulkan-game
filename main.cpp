@@ -1,5 +1,6 @@
 #include "srv/game/application.hpp"
 #include "srv/game/options.hpp"
+#include "srv/world/world.hpp"
 
 #include <csignal>
 #include <exception>
@@ -32,7 +33,7 @@ int main(int argc, char** argv)
 
         game::application::init();
         std::signal(SIGINT, stop);
-        std::signal(SIGTERM, stop);
+        std::signal(SIGTERM, stop); 
 
         const int result = game::application::run();
 

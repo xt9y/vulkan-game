@@ -1,5 +1,7 @@
 #include "renderer.hpp"
 
+#include "scene_renderer.hpp"
+
 #include "clt/platform/vulkan_loader.hpp"
 #include "clt/platform/window.hpp"
 
@@ -44,7 +46,7 @@ namespace clt::renderer
         return &data;
     }
 
-    void init()
+    void init(const char* vertex_path, const char* fragment_path)
     {
         if (get()->initialized)
         {
@@ -216,6 +218,8 @@ namespace clt::renderer
             get()->image_ready = device.createSemaphore({});
             get()->frame_fence =
                 device.createFence(vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled));
+                
+            scene_renderer::init(vertex_path, fragment_path);
 
             resize();
         }
@@ -233,6 +237,8 @@ namespace clt::renderer
         auto device = vk::device::get()->handle;
         vk::device::idle();
 
+        scene_renderer::release_frame_resources();
+
         for (auto semaphore : data.render_ready)
         {
             device.destroySemaphore(semaphore);
@@ -242,9 +248,9 @@ namespace clt::renderer
 
         const auto caps = vk::surface::capabilities();
 
-        if (!(caps.supportedUsageFlags & vk::ImageUsageFlagBits::eTransferDst))
+        if (!(caps.supportedUsageFlags & vk::ImageUsageFlagBits::eColorAttachment))
         {
-            throw std::runtime_error("Surface does not support transfer-destination images");
+            throw std::runtime_error("Surface does not support color attachments");
         }
 
         auto format = vk::surface::formats().front();
@@ -272,13 +278,14 @@ namespace clt::renderer
         info.imageColorSpace = format.colorSpace;
         info.imageExtent = framebuffer_extent(window::get()->handle, caps);
         info.imageArrayLayers = 1;
-        info.imageUsage = vk::ImageUsageFlagBits::eTransferDst;
+        info.imageUsage = vk::ImageUsageFlagBits::eColorAttachment;
         info.imageSharingMode = vk::SharingMode::eExclusive;
         info.preTransform = caps.currentTransform;
         info.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
         info.presentMode = vk::PresentModeKHR::eFifo;
         info.clipped = true;
         vk::swapchain::init(info);
+        scene_renderer::create_frame_resources();
 
         for (uint32_t i = 0; i < vk::swapchain::get()->size; ++i)
         {
@@ -311,6 +318,7 @@ namespace clt::renderer
         {
             throw std::runtime_error("Frame fence wait failed");
         }
+        scene_renderer::synchronize();
 
         uint32_t image = 0;
 
@@ -328,46 +336,10 @@ namespace clt::renderer
         device.resetFences(data.frame_fence);
         data.command.reset();
         data.command.begin(vk::CommandBufferBeginInfo{});
-
-        const auto swap_image = vk::swapchain::get()->images[image];
-        vk::ImageMemoryBarrier barrier{};
-        barrier.oldLayout = vk::ImageLayout::eUndefined;
-        barrier.newLayout = vk::ImageLayout::eTransferDstOptimal;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = swap_image;
-        barrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-        barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-        data.command.pipelineBarrier(
-            vk::PipelineStageFlagBits::eTopOfPipe,
-            vk::PipelineStageFlagBits::eTransfer,
-            {},
-            {},
-            {},
-            barrier
-        );
-
-        const float wave = 0.5f + 0.5f * std::sin(glfwGetTime() * 0.5);
-        vk::ClearColorValue clear(std::array<float, 4>{0.03f, 0.05f + 0.08f * wave, 0.10f, 1.0f});
-        data.command.clearColorImage(
-            swap_image, vk::ImageLayout::eTransferDstOptimal, clear, barrier.subresourceRange
-        );
-
-        barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
-        barrier.newLayout = vk::ImageLayout::ePresentSrcKHR;
-        barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-        barrier.dstAccessMask = {};
-        data.command.pipelineBarrier(
-            vk::PipelineStageFlagBits::eTransfer,
-            vk::PipelineStageFlagBits::eBottomOfPipe,
-            {},
-            {},
-            {},
-            barrier
-        );
+        scene_renderer::draw(data.command, image);
         data.command.end();
 
-        vk::PipelineStageFlags wait_stage = vk::PipelineStageFlagBits::eTransfer;
+        vk::PipelineStageFlags wait_stage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
         vk::SubmitInfo submit{};
         submit.waitSemaphoreCount = 1;
         submit.pWaitSemaphores = &data.image_ready;
@@ -434,6 +406,8 @@ namespace clt::renderer
             {
                 device.destroySemaphore(get()->image_ready);
             }
+
+            scene_renderer::shutdown();
 
             vk::command::shutdown();
             vk::swapchain::shutdown();
