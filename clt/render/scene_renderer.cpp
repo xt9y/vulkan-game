@@ -479,9 +479,11 @@ namespace clt::scene_renderer
             bindings[i].binding = i;
             bindings[i].descriptorType = vk::DescriptorType::eStorageBuffer;
             bindings[i].descriptorCount = 1;
-            bindings[i].stageFlags = i == 0
-                ? vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eCompute
-                : vk::ShaderStageFlagBits::eCompute;
+            bindings[i].stageFlags = vk::ShaderStageFlagBits::eCompute;
+            if (i == 0)
+            {
+                bindings[i].stageFlags |= vk::ShaderStageFlagBits::eVertex;
+            }
         }
 
         const auto device = vk::device::get()->handle;
@@ -642,11 +644,14 @@ namespace clt::scene_renderer
             trs(pose.position, pose.rotation, pose.scale),
             rotation(pose.rotation) * scale(inverse)
         });
-        const auto center_world = mesh.instances.back().center;
-        mesh.bounds.push_back({
-            center_world.x, center_world.y, center_world.z,
-            mesh.instances.back().radius
-        });
+        if (get().gpu_culling)
+        {
+            const auto center_world = mesh.instances.back().center;
+            mesh.bounds.push_back({
+                center_world.x, center_world.y, center_world.z,
+                mesh.instances.back().radius
+            });
+        }
     }
 
     void bind_instances(gpu_mesh& mesh)
