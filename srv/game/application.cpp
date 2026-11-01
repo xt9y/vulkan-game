@@ -40,12 +40,6 @@ namespace game::application
         }
     } // namespace
 
-    state* get()
-    {
-        static state data;
-        return &data;
-    }
-
     void init()
     {
         if (get()->initialized)

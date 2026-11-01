@@ -1,10 +1,12 @@
 #include "application.hpp"
 
 #include "srv/game/application.hpp"
+#include "srv/assets/model.hpp"
 #include "srv/network/session.hpp"
 
 #include "srv/shared/net/endpoint.hpp"
 #include "srv/shared/net/message.hpp"
+#include "srv/shared/net/animation.hpp"
 #include "srv/shared/net/scene_stream.hpp"
 #include "srv/shared/net/movement.hpp"
 #include "srv/shared/net/socket.hpp"
@@ -12,6 +14,11 @@
 #include "srv/world/worker.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <cmath>
+#include <string>
+#include <iterator>
+#include <vector>
 
 #include "srv/scene/test.hpp"
 
@@ -27,6 +34,8 @@ namespace srv::application
     {
         void receive_messages();
         void send_scene_fragments();
+        void send_animation_states();
+        void send_attachment_events();
         void handle(const net::endpoint::resource& peer, const net::message::resource& message);
         void reply(
             const net::endpoint::resource& peer,
@@ -62,6 +71,68 @@ namespace srv::application
         world::init(get()->terrain, 123456789ULL);
         get()->tick = 0;
         get()->initialized = true;
+
+        // Parse GLB/glTF off-thread, then publish on the authoritative tick.
+        // Rendering and Vulkan uploads are exclusively client-side.
+        std::vector<std::string> paths;
+        if (const char* models = std::getenv("VK_MODELS"); models && *models)
+        {
+            const std::string list(models);
+            for (std::size_t offset = 0; offset < list.size();)
+            {
+                const auto end = list.find(';', offset);
+                const auto length = end == std::string::npos ?
+                    list.size() - offset : end - offset;
+                if (length) paths.push_back(list.substr(offset, length));
+                offset += length + 1;
+            }
+        }
+        else if (const char* model = std::getenv("VK_MODEL"); model && *model)
+        {
+            paths.emplace_back(model);
+        }
+
+        if (!paths.empty())
+        {
+            begin_stream();
+            if (!generation::submit([paths = std::move(paths)]() -> generation::completion
+            {
+                ::scene::state combined;
+                std::uint32_t mesh_id = 1000, instance_id = 1000;
+                std::uint32_t texture_id = 1000, skin_id = 1000;
+                for (const auto& path : paths)
+                {
+                    auto imported = assets::load(path, mesh_id, instance_id,
+                                                  texture_id, skin_id);
+                    mesh_id += std::uint32_t(imported.meshes.size());
+                    instance_id += std::uint32_t(imported.instances.size());
+                    texture_id += std::uint32_t(imported.textures.size());
+                    skin_id += std::uint32_t(imported.skins.size());
+                    combined.meshes.insert(combined.meshes.end(),
+                        std::make_move_iterator(imported.meshes.begin()),
+                        std::make_move_iterator(imported.meshes.end()));
+                    combined.instances.insert(combined.instances.end(),
+                        std::make_move_iterator(imported.instances.begin()),
+                        std::make_move_iterator(imported.instances.end()));
+                    combined.textures.insert(combined.textures.end(),
+                        std::make_move_iterator(imported.textures.begin()),
+                        std::make_move_iterator(imported.textures.end()));
+                    combined.skins.insert(combined.skins.end(),
+                        std::make_move_iterator(imported.skins.begin()),
+                        std::make_move_iterator(imported.skins.end()));
+                }
+
+                return [imported = std::make_shared<::scene::state>(
+                    std::move(combined))]() mutable
+                {
+                    get()->importing = std::move(imported);
+                    get()->next_texture = 0;
+                };
+            }))
+            {
+                throw std::runtime_error("Could not queue model import");
+            }
+        }
     }
 
     void begin_stream()
@@ -87,6 +158,14 @@ namespace srv::application
         auto bytes = net::scene_stream::serialize(patch);
         auto hash = net::scene_stream::checksum(bytes);
 
+        for (auto& skin : patch.skins)
+            data.scene.skins.push_back(std::move(skin));
+
+        for (auto& texture : patch.textures)
+        {
+            data.scene.textures.push_back(std::move(texture));
+        }
+
         for (auto& mesh : patch.meshes)
         {
             data.scene.meshes.push_back(std::move(mesh));
@@ -110,6 +189,57 @@ namespace srv::application
         );
         data.collision_index.append(boxes);
         data.scene_batches.push_back({std::move(bytes), hash, final});
+    }
+
+    bool play_animation(std::uint32_t instance_id, std::uint32_t clip,
+                        std::uint32_t overlay, float blend, std::uint32_t mask_root)
+    {
+        if (!std::isfinite(blend) || blend < 0.f || blend > 1.f)
+            return false;
+        auto& world = get()->scene;
+        const auto it = std::find_if(world.instances.begin(), world.instances.end(),
+            [=](const ::scene::instance& instance) { return instance.id == instance_id; });
+        if (it == world.instances.end()) return false;
+        const auto mesh = std::find_if(world.meshes.begin(), world.meshes.end(),
+            [&](const ::scene::mesh& entry) { return entry.id == it->mesh_id; });
+        if (mesh == world.meshes.end() || !mesh->skin_id) return false;
+        const auto skin = std::find_if(world.skins.begin(), world.skins.end(),
+            [&](const ::scene::skin& entry) { return entry.id == mesh->skin_id; });
+        if (skin == world.skins.end() || clip >= skin->clips.size() ||
+            (overlay != UINT32_MAX && overlay >= skin->clips.size()) ||
+            (mask_root != UINT32_MAX && mask_root >= skin->inverse_bind.size()))
+            return false;
+
+        it->animation = clip;
+        it->animation_tick = get()->tick;
+        it->overlay_animation = overlay;
+        it->overlay_weight = blend;
+        it->overlay_root = mask_root;
+        return true;
+    }
+
+    bool emit_attachment_event(std::uint32_t instance_id,
+                               std::uint32_t joint, std::uint32_t kind)
+    {
+        auto& state = *get();
+        if (state.attachment_events.size() >= 128) return false;
+        const auto it = std::find_if(state.scene.instances.begin(),
+            state.scene.instances.end(), [&](const ::scene::instance& instance)
+            { return instance.id == instance_id; });
+        if (it == state.scene.instances.end()) return false;
+        const auto mesh = std::find_if(state.scene.meshes.begin(),
+            state.scene.meshes.end(), [&](const ::scene::mesh& m)
+            { return m.id == it->mesh_id; });
+        if (mesh == state.scene.meshes.end() || !mesh->skin_id) return false;
+        const auto skin = std::find_if(state.scene.skins.begin(),
+            state.scene.skins.end(), [&](const ::scene::skin& entry)
+            { return entry.id == mesh->skin_id; });
+        if (skin == state.scene.skins.end() ||
+            joint >= skin->inverse_bind.size()) return false;
+        state.attachment_events.push_back({
+            {0, state.tick, ++state.next_event, instance_id, joint, kind}, 3
+        });
+        return true;
     }
 
     int run()
@@ -140,6 +270,32 @@ namespace srv::application
             // amount of network work done inside one authoritative tick.
             receive_messages();
             tick_players();
+            send_animation_states();
+            send_attachment_events();
+
+            // Publish at most one CPU asset batch per authoritative tick.
+            if (get()->importing)
+            {
+                auto& imported = *get()->importing;
+                ::scene::state patch;
+                if (get()->next_texture < imported.textures.size())
+                {
+                    patch.textures.push_back(
+                        std::move(imported.textures[get()->next_texture++])
+                    );
+                }
+                else
+                {
+                    patch.skins = std::move(imported.skins);
+                    patch.meshes = std::move(imported.meshes);
+                    patch.instances = std::move(imported.instances);
+                }
+                const bool final = get()->next_texture == imported.textures.size() &&
+                    (patch.textures.empty() || imported.meshes.empty());
+                append_scene(std::move(patch), final);
+                if (final) get()->importing.reset();
+            }
+
             send_scene_fragments();
 
             // Streaming generation may be expensive; commit only when there is
@@ -177,6 +333,11 @@ namespace srv::application
         get()->colliders.clear();
         get()->scene_hash = 0;
         get()->scene = {};
+        get()->importing.reset();
+        get()->next_texture = 0;
+        get()->animation_cursor = 0;
+        get()->attachment_events.clear();
+        get()->next_event = 0;
         get()->terrain = {};
         get()->tick = 0;
         get()->initialized = false;
@@ -326,6 +487,56 @@ namespace srv::application
                 existing->scene_request = message.value;
                 existing->scene_pending = true;
             }
+        }
+
+        void send_attachment_events()
+        {
+            auto& queue = get()->attachment_events;
+            for (auto& item : queue)
+            {
+                for (const auto& client : session::get()->clients)
+                {
+                    if (!client.active) continue;
+                    auto event = item.event;
+                    event.token = client.token;
+                    const auto bytes = net::animation::encode_event(event);
+                    net::socket::send(get()->socket, client.endpoint,
+                                      bytes.data(), bytes.size());
+                }
+                if (item.repeats) --item.repeats;
+            }
+            queue.erase(std::remove_if(queue.begin(), queue.end(),
+                [](const state::pending_event& item) { return !item.repeats; }),
+                queue.end());
+        }
+
+        void send_animation_states()
+        {
+            if (get()->tick % 6 != 0 || get()->scene.instances.empty()) return;
+            const auto& instances = get()->scene.instances;
+            const std::size_t count = std::min<std::size_t>(64, instances.size());
+            const std::size_t start = get()->animation_cursor % instances.size();
+            for (auto& client : session::get()->clients)
+            {
+                if (!client.active) continue;
+                for (std::size_t i = 0; i < count; ++i)
+                {
+                    const auto& instance = instances[(start + i) % instances.size()];
+                    const auto mesh = std::find_if(
+                        get()->scene.meshes.begin(), get()->scene.meshes.end(),
+                        [&](const ::scene::mesh& m) { return m.id == instance.mesh_id; });
+                    if (mesh == get()->scene.meshes.end() || !mesh->skin_id)
+                        continue;
+                    const auto message = net::animation::encode({
+                        client.token, get()->tick, instance.id, instance.animation,
+                        instance.animation_tick, instance.overlay_animation,
+                        instance.overlay_root, instance.overlay_weight
+                    });
+                    net::socket::send(
+                        get()->socket, client.endpoint, message.data(), message.size());
+                }
+            }
+            get()->animation_cursor = (start + count) % instances.size();
         }
 
         void send_scene_fragments()

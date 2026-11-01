@@ -51,22 +51,40 @@ namespace clt::connection
         }
 
         auto combined = std::make_shared<::scene::state>();
+        std::size_t skins = data.scene ? data.scene->skins.size() : 0;
+        std::size_t textures = data.scene ? data.scene->textures.size() : 0;
         std::size_t meshes = data.scene ? data.scene->meshes.size() : 0;
         std::size_t instances = data.scene ? data.scene->instances.size() : 0;
         for (const auto& patch : data.pending_scene)
         {
+            skins += patch.skins.size();
+            textures += patch.textures.size();
             meshes += patch.meshes.size();
             instances += patch.instances.size();
         }
+        combined->skins.reserve(skins);
+        combined->textures.reserve(textures);
         combined->meshes.reserve(meshes);
         combined->instances.reserve(instances);
         if (data.scene)
         {
+            combined->skins = data.scene->skins;
+            combined->textures = data.scene->textures;
             combined->meshes = data.scene->meshes;
             combined->instances = data.scene->instances;
         }
         for (auto& patch : data.pending_scene)
         {
+            combined->skins.insert(
+                combined->skins.end(),
+                std::make_move_iterator(patch.skins.begin()),
+                std::make_move_iterator(patch.skins.end())
+            );
+            combined->textures.insert(
+                combined->textures.end(),
+                std::make_move_iterator(patch.textures.begin()),
+                std::make_move_iterator(patch.textures.end())
+            );
             combined->meshes.insert(
                 combined->meshes.end(),
                 std::make_move_iterator(patch.meshes.begin()),
@@ -82,6 +100,25 @@ namespace clt::connection
         data.pending_scene.clear();
         data.last_publish = now;
         return data.scene;
+    }
+
+    std::optional<net::animation::resource> animation(std::uint32_t instance_id)
+    {
+        auto& data = *get();
+        std::lock_guard<std::mutex> lock(data.animation_mutex);
+        const auto it = data.animations.find(instance_id);
+        if (it == data.animations.end()) return std::nullopt;
+        return it->second;
+    }
+
+    std::vector<net::animation::attachment_event> take_attachment_events()
+    {
+        auto& data = *get();
+        std::lock_guard<std::mutex> lock(data.animation_mutex);
+        std::vector<net::animation::attachment_event> events(
+            data.attachment_events.begin(), data.attachment_events.end());
+        data.attachment_events.clear();
+        return events;
     }
 
     void check_error()
@@ -239,6 +276,12 @@ namespace clt::connection
                     data.scene.reset();
                     data.pending_scene.clear();
                     data.last_publish = {};
+                    {
+                        std::lock_guard<std::mutex> animation_lock(data.animation_mutex);
+                        data.animations.clear();
+                        data.attachment_events.clear();
+                        data.last_attachment_sequence = 0;
+                    }
                 };
 
                 auto send = [&](net::message::type type)
@@ -262,6 +305,41 @@ namespace clt::connection
                             break;
                         }
                         
+                        if (const auto event = net::animation::decode_event(
+                                buffer.data(), *size))
+                        {
+                            if (net::endpoint::equal(peer, server) && event->token == token &&
+                                data.connected.load(std::memory_order_relaxed))
+                            {
+                                std::lock_guard<std::mutex> lock(data.animation_mutex);
+                                if (net::message::newer(event->sequence,
+                                                        data.last_attachment_sequence))
+                                {
+                                    data.last_attachment_sequence = event->sequence;
+                                    if (data.attachment_events.size() >= 128)
+                                        data.attachment_events.pop_front();
+                                    data.attachment_events.push_back(*event);
+                                }
+                                last_received = now;
+                            }
+                            continue;
+                        }
+
+                        if (const auto state = net::animation::decode(buffer.data(), *size))
+                        {
+                            if (net::endpoint::equal(peer, server) && state->token == token &&
+                                data.connected.load(std::memory_order_relaxed))
+                            {
+                                std::lock_guard<std::mutex> lock(data.animation_mutex);
+                                const auto old = data.animations.find(state->instance_id);
+                                if (old == data.animations.end() ||
+                                    net::message::newer(state->server_tick, old->second.server_tick))
+                                    data.animations[state->instance_id] = *state;
+                                last_received = now;
+                            }
+                            continue;
+                        }
+
                         if (const auto update = net::movement::decode_snapshot(buffer.data(), *size))
                         {
                             if (net::endpoint::equal(peer, server) && update->token == token &&

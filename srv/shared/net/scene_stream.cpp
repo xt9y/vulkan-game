@@ -102,28 +102,85 @@ namespace net::scene_stream
         if (scene.meshes.size() > max_scene_bytes / 12 ||
             scene.instances.size() > max_scene_bytes / 48)
         {
-            throw std::runtime_error("Scene snapshot exceeds 8 MiB");
+            throw std::runtime_error("Scene snapshot exceeds maximum batch size");
         }
 
-        std::vector<std::uint8_t> bytes{'S', 'C', 'N', '1'};
+        std::vector<std::uint8_t> bytes{'S', 'C', 'N', '4'};
 
         add(bytes, std::uint32_t(scene.meshes.size()));
         add(bytes, std::uint32_t(scene.instances.size()));
+        add(bytes, std::uint32_t(scene.textures.size()));
+        add(bytes, std::uint32_t(scene.skins.size()));
+
+        for (const auto& texture : scene.textures)
+        {
+            const auto total = std::uint64_t(texture.width) * texture.height * 4;
+            if (texture.id == 0 || !texture.width || !texture.height ||
+                total != texture.pixels.size() ||
+                total > max_scene_bytes - 16 ||
+                bytes.size() + 16 + total > max_scene_bytes)
+                throw std::runtime_error("Invalid texture or scene batch too large");
+            add(bytes, texture.id);
+            add(bytes, texture.width);
+            add(bytes, texture.height);
+            add(bytes, std::uint32_t(total));
+            bytes.insert(bytes.end(), texture.pixels.begin(), texture.pixels.end());
+        }
+
+        for (const auto& skin : scene.skins)
+        {
+            if (!skin.id || skin.skeleton.empty() || skin.inverse_bind.empty() ||
+                skin.inverse_bind.size() > 1024)
+                throw std::runtime_error("Invalid skeletal asset");
+            add(bytes, skin.id);
+            add(bytes, std::uint32_t(skin.inverse_bind.size()));
+            add(bytes, std::uint32_t(skin.skeleton.size()));
+            add(bytes, std::uint32_t(skin.clips.size()));
+            bytes.insert(bytes.end(), skin.skeleton.begin(), skin.skeleton.end());
+            for (const auto& matrix : skin.inverse_bind)
+                for (float value : matrix) add_float(bytes, value);
+            for (const auto& clip : skin.clips)
+            {
+                if (clip.name.size() > 255 || clip.bytes.empty())
+                    throw std::runtime_error("Invalid skeletal animation clip");
+                add(bytes, std::uint32_t(clip.name.size()));
+                bytes.insert(bytes.end(), clip.name.begin(), clip.name.end());
+                add(bytes, std::uint32_t(clip.bytes.size()));
+                bytes.insert(bytes.end(), clip.bytes.begin(), clip.bytes.end());
+            }
+            if (bytes.size() > max_scene_bytes)
+                throw std::runtime_error("Skeletal asset exceeds scene batch budget");
+        }
 
         for (const auto& mesh : scene.meshes)
         {
             if (mesh.vertices.empty() ||
                 mesh.indices.empty() ||
                 mesh.indices.size() % 3 ||
-                mesh.vertices.size() > max_scene_bytes / 32 ||
+                mesh.vertices.size() > max_scene_bytes / 64 ||
                 mesh.indices.size() > max_scene_bytes / 4)
             {
                 throw std::runtime_error("Invalid scene mesh");
             }
 
             add(bytes, mesh.id);
+            add(bytes, mesh.skin_id);
             add(bytes, std::uint32_t(mesh.vertices.size()));
             add(bytes, std::uint32_t(mesh.indices.size()));
+
+            for (auto value : mesh.surface.base_color) add_float(bytes, value);
+            for (auto value : mesh.surface.emissive) add_float(bytes, value);
+            add_float(bytes, mesh.surface.metallic);
+            add_float(bytes, mesh.surface.roughness);
+            add_float(bytes, mesh.surface.occlusion);
+            add_float(bytes, mesh.surface.alpha_cutoff);
+            add(bytes, mesh.surface.base_color_texture);
+            add(bytes, mesh.surface.metallic_roughness_texture);
+            add(bytes, mesh.surface.normal_texture);
+            add(bytes, mesh.surface.occlusion_texture);
+            add(bytes, mesh.surface.emissive_texture);
+            add(bytes, mesh.surface.alpha_mode);
+            add(bytes, mesh.surface.double_sided ? 1u : 0u);
 
             for (const auto& vertex : mesh.vertices)
             {
@@ -131,6 +188,8 @@ namespace net::scene_stream
                 add_vec3(bytes, vertex.normal);
                 add_float(bytes, vertex.u);
                 add_float(bytes, vertex.v);
+                for (const auto joint : vertex.joints) add(bytes, joint);
+                for (const auto weight : vertex.weights) add_float(bytes, weight);
             }
 
             for (auto index : mesh.indices)
@@ -145,7 +204,7 @@ namespace net::scene_stream
 
             if (bytes.size() > max_scene_bytes)
             {
-                throw std::runtime_error("Scene snapshot exceeds 8 MiB");
+                throw std::runtime_error("Scene snapshot exceeds maximum batch size");
             }
         }
 
@@ -153,6 +212,11 @@ namespace net::scene_stream
         {
             add(bytes, instance.id);
             add(bytes, instance.mesh_id);
+            add(bytes, instance.animation);
+            add(bytes, instance.animation_tick);
+            add(bytes, instance.overlay_animation);
+            add(bytes, instance.overlay_root);
+            add_float(bytes, instance.overlay_weight);
             add_vec3(bytes, instance.pose.position);
             add_vec3(bytes, instance.pose.scale);
 
@@ -164,7 +228,7 @@ namespace net::scene_stream
 
         if (bytes.size() > max_scene_bytes)
         {
-            throw std::runtime_error("Scene snapshot exceeds 8 MiB");
+            throw std::runtime_error("Scene snapshot exceeds maximum batch size");
         }
 
         return bytes;
@@ -175,12 +239,12 @@ namespace net::scene_stream
         ::scene::state& scene
     )
     {
-        if (bytes.size() < 12 ||
+        if (bytes.size() < 20 ||
             bytes.size() > max_scene_bytes ||
             bytes[0] != 'S' ||
             bytes[1] != 'C' ||
             bytes[2] != 'N' ||
-            bytes[3] != '1')
+            bytes[3] != '4')
         {
             return false;
         }
@@ -189,9 +253,15 @@ namespace net::scene_stream
 
         std::uint32_t mesh_count = 0;
         std::uint32_t instance_count = 0;
+        std::uint32_t texture_count = 0;
+        std::uint32_t skin_count = 0;
 
         if (!input.take(mesh_count) ||
             !input.take(instance_count) ||
+            !input.take(texture_count) ||
+            !input.take(skin_count) ||
+            texture_count > input.remaining() / 16 ||
+            skin_count > input.remaining() / 16 ||
             mesh_count > input.remaining() / 12 ||
             instance_count > input.remaining() / 48)
         {
@@ -201,6 +271,59 @@ namespace net::scene_stream
         ::scene::state result;
         result.meshes.reserve(mesh_count);
         result.instances.reserve(instance_count);
+        result.textures.reserve(texture_count);
+        result.skins.reserve(skin_count);
+
+        for (std::uint32_t i = 0; i < texture_count; ++i)
+        {
+            ::scene::texture texture;
+            std::uint32_t bytes_count = 0;
+            if (!input.take(texture.id) || !input.take(texture.width) ||
+                !input.take(texture.height) || !input.take(bytes_count) ||
+                !texture.id || !texture.width || !texture.height ||
+                std::uint64_t(texture.width) * texture.height * 4 != bytes_count ||
+                bytes_count > input.remaining()) return false;
+            texture.pixels.assign(bytes.begin() + input.offset,
+                                  bytes.begin() + input.offset + bytes_count);
+            input.offset += bytes_count;
+            result.textures.push_back(std::move(texture));
+        }
+
+        for (std::uint32_t i = 0; i < skin_count; ++i)
+        {
+            ::scene::skin skin;
+            std::uint32_t joint_count = 0;
+            std::uint32_t skeleton_size = 0;
+            std::uint32_t clips = 0;
+            if (!input.take(skin.id) || !input.take(joint_count) ||
+                !input.take(skeleton_size) || !input.take(clips) ||
+                !skin.id || !joint_count || joint_count > 1024 ||
+                skeleton_size > input.remaining() ||
+                std::uint64_t(joint_count) * 64 > input.remaining() - skeleton_size ||
+                clips > max_scene_bytes / 8) return false;
+            skin.skeleton.assign(bytes.begin() + input.offset,
+                                 bytes.begin() + input.offset + skeleton_size);
+            input.offset += skeleton_size;
+            skin.inverse_bind.resize(joint_count);
+            for (auto& matrix : skin.inverse_bind)
+                for (auto& value : matrix)
+                    if (!input.take_float(value)) return false;
+            for (std::uint32_t j = 0; j < clips; ++j)
+            {
+                std::uint32_t length = 0, size = 0;
+                if (!input.take(length) || length > 255 ||
+                    length > input.remaining()) return false;
+                ::scene::clip clip;
+                clip.name.assign(reinterpret_cast<const char*>(bytes.data() + input.offset), length);
+                input.offset += length;
+                if (!input.take(size) || !size || size > input.remaining()) return false;
+                clip.bytes.assign(bytes.begin() + input.offset,
+                                  bytes.begin() + input.offset + size);
+                input.offset += size;
+                skin.clips.push_back(std::move(clip));
+            }
+            result.skins.push_back(std::move(skin));
+        }
 
         for (std::uint32_t i = 0; i < mesh_count; ++i)
         {
@@ -209,14 +332,37 @@ namespace net::scene_stream
             std::uint32_t indices = 0;
 
             if (!input.take(mesh.id) ||
+                !input.take(mesh.skin_id) ||
                 !input.take(vertices) ||
                 !input.take(indices) ||
                 vertices == 0 || indices == 0 || indices % 3 ||
-                vertices > input.remaining() / 32 ||
-                indices > (input.remaining() - std::size_t(vertices) * 32) / 4)
+                vertices > input.remaining() / 64 ||
+                input.remaining() < 72 ||
+                std::uint64_t(vertices) * 64 + std::uint64_t(indices) * 4 >
+                    input.remaining() - 72)
             {
                 return false;
             }
+
+            if (input.remaining() < 72) return false;
+            for (auto& value : mesh.surface.base_color)
+                if (!input.take_float(value)) return false;
+            for (auto& value : mesh.surface.emissive)
+                if (!input.take_float(value)) return false;
+            if (!input.take_float(mesh.surface.metallic) ||
+                !input.take_float(mesh.surface.roughness) ||
+                !input.take_float(mesh.surface.occlusion) ||
+                !input.take_float(mesh.surface.alpha_cutoff) ||
+                !input.take(mesh.surface.base_color_texture) ||
+                !input.take(mesh.surface.metallic_roughness_texture) ||
+                !input.take(mesh.surface.normal_texture) ||
+                !input.take(mesh.surface.occlusion_texture) ||
+                !input.take(mesh.surface.emissive_texture) ||
+                !input.take(mesh.surface.alpha_mode)) return false;
+            std::uint32_t double_sided = 0;
+            if (!input.take(double_sided) || double_sided > 1 ||
+                mesh.surface.alpha_mode > 2) return false;
+            mesh.surface.double_sided = double_sided != 0;
 
             mesh.vertices.resize(vertices);
             mesh.indices.resize(indices);
@@ -230,6 +376,10 @@ namespace net::scene_stream
                 {
                     return false;
                 }
+                for (auto& joint : vertex.joints)
+                    if (!input.take(joint)) return false;
+                for (auto& weight : vertex.weights)
+                    if (!input.take_float(weight) || weight < 0 || weight > 1) return false;
             }
 
             for (auto& index : mesh.indices)
@@ -254,6 +404,12 @@ namespace net::scene_stream
 
             if (!input.take(instance.id) ||
                 !input.take(instance.mesh_id) ||
+                !input.take(instance.animation) ||
+                !input.take(instance.animation_tick) ||
+                !input.take(instance.overlay_animation) ||
+                !input.take(instance.overlay_root) ||
+                !input.take_float(instance.overlay_weight) ||
+                instance.overlay_weight < 0.f || instance.overlay_weight > 1.f ||
                 !take_vec3(input, instance.pose.position) ||
                 !take_vec3(input, instance.pose.scale) ||
                 !input.take_float(instance.pose.rotation.x) ||

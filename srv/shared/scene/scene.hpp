@@ -1,6 +1,9 @@
 #pragma once
 
 #include "mesh.hpp"
+#include <array>
+#include <string>
+#include <limits>
 #include "util/math/quaternion.hpp"
 
 namespace scene 
@@ -11,20 +14,43 @@ namespace scene
         vk::util::math::quat rotation;
     };
 
+    struct clip {
+        std::string name;
+        std::vector<std::uint8_t> bytes;
+    };
+
+    struct skin {
+        std::uint32_t id = 0;
+        std::vector<std::uint8_t> skeleton;
+        std::vector<clip> clips;
+        std::vector<std::array<float, 16>> inverse_bind;
+    };
+
     struct instance {
         std::uint32_t id = 0;
         std::uint32_t mesh_id = 0;
+        std::uint32_t animation = 0;
+        std::uint32_t animation_tick = 0;
+        std::uint32_t overlay_animation = UINT32_MAX;
+        std::uint32_t overlay_root = UINT32_MAX;
+        float overlay_weight = 0.0f;
         transform pose;
     };
 
     struct state {
         std::vector<mesh> meshes;
+        std::vector<texture> textures;
+        std::vector<skin> skins;
         std::vector<instance> instances;
     };
 
     inline bool same_instance(const instance& a, const instance& b)
     {
         return a.id == b.id && a.mesh_id == b.mesh_id &&
+            a.animation == b.animation && a.animation_tick == b.animation_tick &&
+            a.overlay_animation == b.overlay_animation &&
+            a.overlay_root == b.overlay_root &&
+            a.overlay_weight == b.overlay_weight &&
             a.pose.position.x == b.pose.position.x &&
             a.pose.position.y == b.pose.position.y &&
             a.pose.position.z == b.pose.position.z &&

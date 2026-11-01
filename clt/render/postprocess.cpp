@@ -1,11 +1,13 @@
 #include "postprocess.hpp"
 #include "scene_renderer.hpp"
+#include "clt/view/camera.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <mutex>
 #include <array>
 #include <cstdlib>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -59,6 +61,8 @@ namespace clt::postprocess
         struct push {
             std::int32_t enabled = 1;
             float exposure = 1.0f;
+            std::array<float, 2> padding{};
+            std::array<float, 4> view_direction{0, 0, 1, 0};
         };
 
         vk::ShaderModule shader(const char* filename)
@@ -255,8 +259,13 @@ namespace clt::postprocess
                      bool enabled)
         {
             const auto extent = vk::swapchain::get()->extent;
+            const auto view = camera::snapshot();
             const push controls{
-                enabled ? 1 : 0, exposure_value.load(std::memory_order_relaxed)
+                enabled ? 1 : 0, exposure_value.load(std::memory_order_relaxed),
+                {},
+                {-std::sin(view.yaw) * std::cos(view.pitch),
+                 -std::sin(view.pitch),
+                 std::cos(view.yaw) * std::cos(view.pitch), 0}
             };
             command.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline);
             command.bindDescriptorSets(vk::PipelineBindPoint::eCompute, layout, 0, {set}, {});

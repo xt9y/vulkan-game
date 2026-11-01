@@ -2,6 +2,8 @@
 
 #include "clt/network/connection.hpp"
 #include "clt/render/upload.hpp"
+#include "clt/render/texture.hpp"
+#include "clt/animation/animation.hpp"
 #include "clt/view/camera.hpp"
 #include "srv/shared/scene/scene.hpp"
 
@@ -11,6 +13,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <cmath>
+#include <chrono>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -27,8 +30,20 @@ namespace clt::scene_renderer
             mat4 normal;
         };
 
+        struct draw_parameters {
+            mat4 view_projection;
+            std::array<float, 4> base_color;
+            std::array<float, 4> surface;
+            std::array<float, 4> emissive;
+            std::uint32_t joint_count = 0;
+        };
+        static_assert(sizeof(draw_parameters) <= 128);
+
         struct gpu_mesh {
             std::uint32_t id = 0;
+            ::scene::material surface;
+            std::uint32_t skin_id = 0;
+            std::uint32_t joint_count = 0;
             vk::buffer::resource vertices;
             vk::buffer::resource indices;
             vk::buffer::resource instance_buffer;
@@ -37,18 +52,20 @@ namespace clt::scene_renderer
             struct per_image {
                 vk::buffer::resource visible;
                 vk::buffer::resource indirect;
+                vk::buffer::resource skin_palette;
                 vk::DescriptorSet set{};
             };
             std::vector<per_image> frames;
             std::vector<std::array<float, 4>> bounds;
             std::vector<instance_data> transforms;
+            std::vector<::scene::instance> instances;
             vec3 center;
             float radius = 0;
             std::uint32_t index_count = 0;
         };
 
         static_assert(sizeof(instance_data) == 128);
-        static_assert(sizeof(::scene::vertex) == 32);
+        static_assert(sizeof(::scene::vertex) == 64);
 
         struct cull_parameters {
             std::array<vec4, 6> planes{};
@@ -67,6 +84,8 @@ namespace clt::scene_renderer
             std::array<vec4, 6> last_gpu_planes{};
             bool gpu_planes_valid = false;
             std::uint32_t last_image = 0;
+            std::uint32_t last_animation_tick = UINT32_MAX;
+            std::chrono::steady_clock::time_point animation_received{};
 
             vk::RenderPass render_pass{};
             vk::PipelineLayout layout{};
@@ -109,6 +128,7 @@ namespace clt::scene_renderer
                 {
                     if (frame.visible.handle) vk::buffer::destroy(frame.visible);
                     if (frame.indirect.handle) vk::buffer::destroy(frame.indirect);
+                    if (frame.skin_palette.handle) vk::buffer::destroy(frame.skin_palette);
                 }
             }
 
@@ -158,9 +178,10 @@ namespace clt::scene_renderer
                 fragment_shader = vk::shader::create(fragment_code);
 
                 vk::PushConstantRange range{};
-                range.stageFlags = vk::ShaderStageFlagBits::eVertex;
+                range.stageFlags = vk::ShaderStageFlagBits::eVertex |
+                    vk::ShaderStageFlagBits::eFragment;
                 range.offset = 0;
-                range.size = sizeof(mat4);
+                range.size = sizeof(draw_parameters);
 
                 vk::PipelineLayoutCreateInfo layout_info{};
                 layout_info.pushConstantRangeCount = 1;
@@ -186,13 +207,24 @@ namespace clt::scene_renderer
                     1, sizeof(std::uint32_t), vk::VertexInputRate::eInstance
                 };
 
-                std::array<vk::VertexInputAttributeDescription, 3> attributes{};
+                std::array<vk::VertexInputAttributeDescription, 6> attributes{};
                 attributes[0] = vk::VertexInputAttributeDescription{0, 0, vk::Format::eR32G32B32Sfloat,
                                  offsetof(::scene::vertex, position)};
                 attributes[1] = vk::VertexInputAttributeDescription{1, 0, vk::Format::eR32G32B32Sfloat,
                                  offsetof(::scene::vertex, normal)};
                 attributes[2] = vk::VertexInputAttributeDescription{
-                    2, 1, vk::Format::eR32Uint, 0
+                    2, 0, vk::Format::eR32G32Sfloat, offsetof(::scene::vertex, u)
+                };
+                attributes[3] = vk::VertexInputAttributeDescription{
+                    3, 1, vk::Format::eR32Uint, 0
+                };
+                attributes[4] = vk::VertexInputAttributeDescription{
+                    4, 0, vk::Format::eR32G32B32A32Uint,
+                    offsetof(::scene::vertex, joints)
+                };
+                attributes[5] = vk::VertexInputAttributeDescription{
+                    5, 0, vk::Format::eR32G32B32A32Sfloat,
+                    offsetof(::scene::vertex, weights)
                 };
 
                 vk::PipelineVertexInputStateCreateInfo vertex_input{};
@@ -452,17 +484,20 @@ namespace clt::scene_renderer
         auto& data = get();
         data.shaders = {vertex_path, fragment_path};
 
-        std::array<vk::DescriptorSetLayoutBinding, 4> bindings{};
+        std::array<vk::DescriptorSetLayoutBinding, 10> bindings{};
         for (std::uint32_t i = 0; i < bindings.size(); ++i)
         {
             bindings[i].binding = i;
-            bindings[i].descriptorType = vk::DescriptorType::eStorageBuffer;
+            bindings[i].descriptorType = (i < 4 || i == 9) ?
+                vk::DescriptorType::eStorageBuffer :
+                vk::DescriptorType::eCombinedImageSampler;
             bindings[i].descriptorCount = 1;
-            bindings[i].stageFlags = vk::ShaderStageFlagBits::eCompute;
+            bindings[i].stageFlags = i < 4 ?
+                vk::ShaderStageFlags(vk::ShaderStageFlagBits::eCompute) :
+                i == 9 ? vk::ShaderStageFlags(vk::ShaderStageFlagBits::eVertex) :
+                vk::ShaderStageFlags(vk::ShaderStageFlagBits::eFragment);
             if (i == 0)
-            {
                 bindings[i].stageFlags |= vk::ShaderStageFlagBits::eVertex;
-            }
         }
 
         const auto device = vk::device::get()->handle;
@@ -470,6 +505,7 @@ namespace clt::scene_renderer
         info.bindingCount = static_cast<std::uint32_t>(bindings.size());
         info.pBindings = bindings.data();
         data.instance_layout = device.createDescriptorSetLayout(info);
+        texture::init();
 
 
         vk::PushConstantRange range{};
@@ -592,6 +628,7 @@ namespace clt::scene_renderer
         const float max_scale = std::max({
             std::abs(pose.scale.x), std::abs(pose.scale.y), std::abs(pose.scale.z)
         });
+        mesh.instances.push_back(instance);
         mesh.transforms.push_back({
             trs(pose.position, pose.rotation, pose.scale),
             rotation(pose.rotation) * scale(inverse)
@@ -636,6 +673,17 @@ namespace clt::scene_renderer
                 writes[i].pBufferInfo = &infos[i];
             }
             vk::device::get()->handle.updateDescriptorSets(writes, {});
+            vk::DescriptorBufferInfo palette_info{};
+            palette_info.buffer = frame.skin_palette.handle;
+            palette_info.range = VK_WHOLE_SIZE;
+            vk::WriteDescriptorSet palette_write{};
+            palette_write.dstSet = frame.set;
+            palette_write.dstBinding = 9;
+            palette_write.descriptorCount = 1;
+            palette_write.descriptorType = vk::DescriptorType::eStorageBuffer;
+            palette_write.pBufferInfo = &palette_info;
+            vk::device::get()->handle.updateDescriptorSets({palette_write}, {});
+            texture::bind(frame.set, mesh.surface);
         }
     }
 
@@ -698,6 +746,20 @@ namespace clt::scene_renderer
             }
         }
 
+        const auto palette_size = std::max<std::size_t>(
+            sizeof(animation::matrix), mesh.instances.size() *
+                std::max<std::uint32_t>(1, mesh.joint_count) * sizeof(animation::matrix));
+        for (auto& frame : mesh.frames)
+        {
+            if (!frame.skin_palette.handle || frame.skin_palette.size < palette_size)
+            {
+                if (frame.skin_palette.handle) vk::buffer::destroy(frame.skin_palette);
+                frame.skin_palette = vk::buffer::create(
+                    palette_size, vk::BufferUsageFlagBits::eStorageBuffer,
+                    vk::MemoryPropertyFlagBits::eHostVisible |
+                    vk::MemoryPropertyFlagBits::eHostCoherent);
+            }
+        }
         const auto size = mesh.bounds.size() * sizeof(mesh.bounds.front());
         if (!mesh.bounds_buffer.handle || mesh.bounds_buffer.size < size)
         {
@@ -730,6 +792,8 @@ namespace clt::scene_renderer
     {
         auto& data = get();
         destroy_meshes(data.meshes);
+        texture::reset();
+        animation::reset();
         if (data.instance_pool)
         {
             vk::device::get()->handle.destroyDescriptorPool(data.instance_pool);
@@ -752,6 +816,7 @@ namespace clt::scene_renderer
         // Scene batches are append-only; reuse immutable GPU meshes and grow
         // only the buffers containing newly generated instances.
         bool appended = data.snapshot && source &&
+            source->textures.size() >= data.snapshot->textures.size() &&
             source->meshes.size() == data.snapshot->meshes.size() &&
             source->instances.size() >= data.snapshot->instances.size();
 
@@ -779,6 +844,9 @@ namespace clt::scene_renderer
 
         if (appended)
         {
+            animation::synchronize(*source);
+            if (source->textures.size() != data.snapshot->textures.size())
+                texture::synchronize(*source);
             std::vector<std::size_t> previous_counts;
             previous_counts.reserve(data.meshes.size());
             for (const auto& mesh : data.meshes)
@@ -815,6 +883,17 @@ namespace clt::scene_renderer
 
         if (source)
         {
+            animation::synchronize(*source);
+            texture::synchronize(*source);
+        }
+        else
+        {
+            animation::reset();
+            texture::reset();
+        }
+
+        if (source)
+        {
             meshes.reserve(source->meshes.size());
 
             upload::batch transfers;
@@ -824,6 +903,9 @@ namespace clt::scene_renderer
                 {
                     gpu_mesh result;
                     result.id = mesh.id;
+                    result.surface = mesh.surface;
+                    result.skin_id = mesh.skin_id;
+                    result.joint_count = animation::joints(mesh.skin_id);
                     result.index_count =
                         static_cast<std::uint32_t>(mesh.indices.size());
 
@@ -906,20 +988,20 @@ namespace clt::scene_renderer
 
                 // Each mesh owns a descriptor referencing its persistent
                 // transform storage; no per-frame matrix upload is required.
-                vk::DescriptorPoolSize pool_size{};
-                pool_size.type = vk::DescriptorType::eStorageBuffer;
-                pool_size.descriptorCount = static_cast<std::uint32_t>(
-                    std::max<std::size_t>(1, meshes.size()) *
-                    std::max<std::size_t>(1, vk::swapchain::get()->images.size()) * 4
-                );
+                const auto count = std::max<std::size_t>(1, meshes.size()) *
+                    std::max<std::size_t>(1, vk::swapchain::get()->images.size());
+                std::array<vk::DescriptorPoolSize, 2> pool_sizes{{
+                    {vk::DescriptorType::eStorageBuffer, std::uint32_t(count * 5)},
+                    {vk::DescriptorType::eCombinedImageSampler, std::uint32_t(count * 5)}
+                }};
 
                 vk::DescriptorPoolCreateInfo pool_info{};
                 pool_info.maxSets = static_cast<std::uint32_t>(
                     std::max<std::size_t>(1, meshes.size()) *
                     std::max<std::size_t>(1, vk::swapchain::get()->images.size())
                 );
-                pool_info.poolSizeCount = 1;
-                pool_info.pPoolSizes = &pool_size;
+                pool_info.poolSizeCount = pool_sizes.size();
+                pool_info.pPoolSizes = pool_sizes.data();
                 const auto device = vk::device::get()->handle;
                 new_pool = device.createDescriptorPool(pool_info);
 
@@ -1065,6 +1147,46 @@ namespace clt::scene_renderer
 
         }
 
+        // Write per-swapchain-image palettes only after its frame fence completes.
+        if (data.snapshot)
+        {
+            const auto server_tick = connection::get()->server_tick.load(
+                std::memory_order_relaxed);
+            const auto now = std::chrono::steady_clock::now();
+            if (server_tick != data.last_animation_tick)
+            {
+                data.last_animation_tick = server_tick;
+                data.animation_received = now;
+            }
+            const auto elapsed = std::chrono::duration<float>(
+                now - data.animation_received).count();
+            const float smooth_tick = float(server_tick) + std::clamp(elapsed, 0.f, 0.2f) * 60.f;
+            for (auto& mesh : data.meshes)
+            {
+                if (!mesh.joint_count || mesh.transforms.empty()) continue;
+                std::vector<animation::matrix> matrices;
+                matrices.reserve(mesh.instances.size() * mesh.joint_count);
+                for (const auto& instance : mesh.instances)
+                {
+                    std::vector<animation::matrix> bones;
+                    const auto update = connection::animation(instance.id);
+                    const auto start = update ? update->start_tick : instance.animation_tick;
+                    const auto clip = update ? update->clip : instance.animation;
+                    const auto overlay = update ? update->overlay : instance.overlay_animation;
+                    const auto weight = update ? update->blend : instance.overlay_weight;
+                    const auto root = update ? update->mask_root : instance.overlay_root;
+                    const float time = (smooth_tick - float(start)) / 60.0f;
+                    if (!animation::sample(mesh.skin_id, clip, std::max(0.f, time), bones,
+                        overlay, weight, root) ||
+                        bones.size() != mesh.joint_count)
+                        throw std::runtime_error("Cannot sample streamed animation");
+                    matrices.insert(matrices.end(), bones.begin(), bones.end());
+                }
+                vk::buffer::write(mesh.frames.at(image).skin_palette,
+                                  matrices.data(), matrices.size() * sizeof(matrices[0]));
+            }
+        }
+
         command.beginRenderPass(begin, vk::SubpassContents::eInline);
 
         command.bindPipeline(
@@ -1085,11 +1207,6 @@ namespace clt::scene_renderer
 
         if (data.snapshot)
         {
-            command.pushConstants(
-                data.layout, vk::ShaderStageFlagBits::eVertex,
-                0, sizeof(view_projection), &view_projection
-            );
-
             for (const auto& mesh : data.meshes)
             {
                 if (mesh.transforms.empty())
@@ -1097,6 +1214,27 @@ namespace clt::scene_renderer
                     continue;
                 }
 
+                const auto& m = mesh.surface;
+                const auto flags =
+                    (m.base_color_texture ? 1u : 0u) |
+                    (m.metallic_roughness_texture ? 2u : 0u) |
+                    (m.normal_texture ? 4u : 0u) |
+                    (m.occlusion_texture ? 8u : 0u) |
+                    (m.emissive_texture ? 16u : 0u) |
+                    (m.alpha_mode << 5);
+                draw_parameters params{
+                    view_projection,
+                    m.base_color,
+                    {m.metallic, m.roughness, m.occlusion, m.alpha_cutoff},
+                    {m.emissive[0], m.emissive[1],
+                     m.emissive[2], float(flags)},
+                    mesh.joint_count
+                };
+                command.pushConstants(
+                    data.layout, vk::ShaderStageFlagBits::eVertex |
+                    vk::ShaderStageFlagBits::eFragment,
+                    0, sizeof(params), &params
+                );
                 const std::array<vk::Buffer, 2> buffers{
                     mesh.vertices.handle, mesh.frames.at(image).visible.handle
                 };
@@ -1143,6 +1281,7 @@ namespace clt::scene_renderer
             vk::device::get()->handle.destroyPipelineLayout(data.cull_layout);
             data.cull_layout = nullptr;
         }
+        texture::shutdown();
         if (data.instance_layout)
         {
             vk::device::get()->handle.destroyDescriptorSetLayout(data.instance_layout);
