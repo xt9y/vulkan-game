@@ -7,14 +7,13 @@ namespace game::options
 {
     enum class mode
     {
-        server_and_client,
         server_only,
         client_only
     };
 
     struct state
     {
-        options::mode mode = options::mode::server_and_client;
+        options::mode mode = options::mode::server_only;
 
         std::string host = "127.0.0.1";
         std::string bind_host = "127.0.0.1";
@@ -26,7 +25,7 @@ namespace game::options
     };
 
     state* get();
-    void init(int argc, char** argv, mode default_mode = mode::server_and_client);
+    void init(int argc, char** argv, mode selected_mode);
     void print_help();
     void shutdown();
 } // namespace game::options

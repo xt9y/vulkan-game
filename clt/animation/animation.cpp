@@ -8,6 +8,7 @@
 #include <ozz/base/io/archive.h>
 #include <ozz/base/io/stream.h>
 #include <ozz/base/maths/simd_math.h>
+#include <ozz/base/maths/soa_transform.h>
 
 #include <algorithm>
 #include <array>

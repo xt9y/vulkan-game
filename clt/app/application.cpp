@@ -33,12 +33,6 @@ namespace clt::application
 
         get()->options = *game::options::get();
 
-        if (get()->options.mode == game::options::mode::server_and_client)
-        {
-            get()->options.host =
-                get()->options.bind_host == "0.0.0.0" ? "127.0.0.1" : get()->options.bind_host;
-        }
-
         connection::get()->host = get()->options.host;
         connection::get()->port = get()->options.port;
         connection::init();

@@ -12,11 +12,10 @@ namespace game::options
         return &data;
     }
 
-    void init(int argc, char** argv, mode default_mode)
+    void init(int argc, char** argv, mode selected_mode)
     {
         state result;
-        result.mode = default_mode;
-        bool mode_selected = false;
+        result.mode = selected_mode;
         bool host_specified = false;
         bool bind_specified = false;
 
@@ -27,30 +26,6 @@ namespace game::options
             if (option == "--help")
             {
                 result.help = true;
-                continue;
-            }
-
-            if (option == "--server-only" || option == "--client-only" ||
-                option == "--server+client")
-            {
-                mode selected_mode = mode::server_and_client;
-
-                if (option == "--server-only")
-                {
-                    selected_mode = mode::server_only;
-                }
-                else if (option == "--client-only")
-                {
-                    selected_mode = mode::client_only;
-                }
-
-                if (mode_selected && result.mode != selected_mode)
-                {
-                    throw std::invalid_argument("Conflicting launch modes: choose one mode");
-                }
-
-                result.mode = selected_mode;
-                mode_selected = true;
                 continue;
             }
 
@@ -116,13 +91,13 @@ namespace game::options
             if (result.mode != mode::client_only && host_specified)
             {
                 throw std::invalid_argument(
-                    "--host requires --client-only; combined mode connects locally"
+                    "--host is only supported by vulkan-client"
                 );
             }
 
             if (result.mode == mode::client_only && bind_specified)
             {
-                throw std::invalid_argument("--bind requires a server mode");
+                throw std::invalid_argument("--bind is only supported by vulkan-server");
             }
         }
 
@@ -131,17 +106,17 @@ namespace game::options
 
     void print_help()
     {
-        std::cout << "Usage: vulkan-game [MODE] [OPTIONS]\n\n"
-                  << "Modes (default: --server+client):\n"
-                  << "  --server+client     Start the local server and client\n"
-                  << "  --server-only       Start the server without a window\n"
-                  << "  --client-only       Connect a client to an existing server\n\n"
+        const bool server = get()->mode == mode::server_only;
+        std::cout << (server ? "Usage: vulkan-server [OPTIONS]\n\n"
+                            : "Usage: vulkan-client [OPTIONS]\n\n")
                   << "Options:\n"
-                  << "  --port PORT         UDP port (default: 27015)\n"
-                  << "  --bind ADDRESS      Server listen address (default: 127.0.0.1)\n"
-                  << "  --host HOST         Remote server address for --client-only\n"
-                  << "  --headless          Run the client without a window\n"
-                  << "  --duration SECONDS  Stop automatically after the given time\n"
+                  << "  --port PORT         UDP port (default: 27015)\n";
+        if (server)
+            std::cout << "  --bind ADDRESS      Server listen address (default: 127.0.0.1)\n";
+        else
+            std::cout << "  --host HOST         Server address (default: 127.0.0.1)\n"
+                      << "  --headless          Run the client without a window\n";
+        std::cout << "  --duration SECONDS  Stop automatically after the given time\n"
                   << "  --help              Show this help\n";
     }
 
