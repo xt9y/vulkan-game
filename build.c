@@ -1,7 +1,6 @@
 #include <cbuild.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/stat.h>
 
 static void compile_shaders(void)
 {
@@ -14,20 +13,7 @@ static void compile_shaders(void)
     {
         char binary[256];
         char command[640];
-        struct stat input;
-        struct stat output;
         snprintf(binary, sizeof(binary), "%s.spv", sources[i]);
-
-        if (stat(sources[i], &input) != 0)
-        {
-            fprintf(stderr, "Missing shader source: %s\n", sources[i]);
-            exit(1);
-        }
-        if (stat(binary, &output) == 0 && output.st_mtime > input.st_mtime)
-        {
-            continue;
-        }
-
         snprintf(command, sizeof(command),
                  "glslangValidator -V \"%s\" -o \"%s\"", sources[i], binary);
         if (system(command) != 0)
