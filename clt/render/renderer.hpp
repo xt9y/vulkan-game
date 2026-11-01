@@ -21,7 +21,6 @@ namespace clt::renderer
         std::vector<vk::Fence> image_in_flight;
         std::vector<vk::Semaphore> render_ready;
         vk::PresentModeKHR present_mode = vk::PresentModeKHR::eFifo;
-        bool uncapped = false;
         bool initialized = false;
     };
 

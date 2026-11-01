@@ -102,40 +102,56 @@ namespace game::options
             }
         }
 
-        if (result.host.empty() || result.bind_host.empty() ||
-            !result.port || !result.simulation.tick_hz || !result.simulation.max_clients ||
-            !result.simulation.receive_packets || !result.simulation.fragments_per_tick ||
-            !result.simulation.inputs_per_tick || !result.simulation.animation_period ||
-            !result.simulation.animations_per_tick || !result.simulation.timeout_seconds ||
-            !result.simulation.receive_ms || !result.simulation.fragments_ms ||
-            !result.simulation.generation_commit_ticks ||
-            !result.simulation.terrain_scale || !result.simulation.detail_scale ||
-            result.player.walk_speed <= 0 || result.player.sprint_speed <= 0 ||
-            result.player.height <= 0 ||
-            result.player.radius <= 0 || result.player.gravity <= 0 ||
-            result.view.fov <= 0 || result.view.near_plane <= 0 ||
-            result.view.far_plane <= result.view.near_plane ||
-            result.graphics.width <= 0 || result.graphics.height <= 0 ||
-            result.graphics.vertex_shader.empty() || result.graphics.fragment_shader.empty() ||
-            result.graphics.scene_request_ms == 0 || result.graphics.movement_ms == 0 ||
-            result.graphics.retry_ms == 0 ||
-            result.graphics.retry_max_ms < result.graphics.retry_ms ||
-            result.graphics.timeout_ms == 0 ||
-            result.graphics.heartbeat_ms == 0 ||
-            result.graphics.correction_decay <= 0 || result.graphics.correction_decay >= 1 ||
-            result.graphics.exposure < 0 ||
-            result.graphics.max_exposure <= result.graphics.min_exposure ||
-            result.graphics.max_fov <= result.graphics.min_fov ||
-            result.graphics.max_sensitivity <= result.graphics.min_sensitivity ||
-            result.graphics.exposure_step <= 0 || result.graphics.fov_step <= 0 ||
-            result.graphics.sensitivity_step <= 0 ||
-            result.view.fov < result.graphics.min_fov ||
-            result.view.fov > result.graphics.max_fov ||
-            result.view.sensitivity < result.graphics.min_sensitivity ||
-            result.view.sensitivity > result.graphics.max_sensitivity ||
-            result.graphics.exposure > result.graphics.max_exposure ||
-            result.graphics.correction_limit <= 0)
-            throw std::invalid_argument("Game configuration is incomplete or invalid");
+        if (result.port == 0)
+            throw std::invalid_argument("Game must set a UDP port");
+
+        const auto& p = result.player;
+        const auto& s = result.simulation;
+        if (s.tick_hz == 0 || p.walk_speed <= 0 || p.sprint_speed <= 0 ||
+            p.gravity <= 0 || p.radius <= 0 || p.height <= 0)
+            throw std::invalid_argument("Game must configure movement and tick rate");
+
+        if (result.mode == mode::server_only)
+        {
+            if (result.bind_host.empty() || s.max_clients == 0 || s.timeout_seconds == 0 ||
+                s.receive_packets == 0 || s.receive_ms == 0 ||
+                s.fragments_per_tick == 0 || s.fragments_ms == 0 ||
+                s.inputs_per_tick == 0 || s.animation_period == 0 ||
+                s.animations_per_tick == 0 || s.generation_commit_ticks == 0 ||
+                s.terrain_scale <= 0 || s.detail_scale <= 0 ||
+                s.terrain_amplitude < 0 || s.detail_amplitude < 0)
+                throw std::invalid_argument("Server configuration is incomplete");
+        }
+        else
+        {
+            const auto& g = result.graphics;
+            const auto& c = result.view;
+            if (result.host.empty() || g.width <= 0 || g.height <= 0 ||
+                g.title.empty() || g.connected_title.empty() ||
+                g.connecting_title.empty() || g.vertex_shader.empty() ||
+                g.fragment_shader.empty() ||
+                g.gbuffer == gbuffer_precision::unspecified ||
+                g.surface == surface_format::unspecified ||
+                g.depth == depth_precision::unspecified ||
+                g.present == presentation::unspecified ||
+                g.culling_shader.empty() ||
+                g.lighting_shader.empty() || g.tonemap_shader.empty() ||
+                g.fullscreen_shader.empty() || g.presentation_shader.empty() ||
+                c.fov <= 0 ||
+                c.sensitivity <= 0 || c.eye_height <= 0 ||
+                c.pitch_limit <= 0 || c.near_plane <= 0 ||
+                c.far_plane <= c.near_plane || g.exposure < 0 ||
+                g.correction_limit <= 0 || g.correction_decay <= 0 ||
+                g.sun_intensity < 0 || g.ambient_intensity < 0 ||
+                g.ambient_specular < 0 ||
+                (g.sun_direction.x == 0 && g.sun_direction.y == 0 &&
+                 g.sun_direction.z == 0) ||
+                g.correction_decay >= 1 || g.timeout_ms == 0 ||
+                g.retry_ms == 0 || g.retry_max_ms < g.retry_ms ||
+                g.heartbeat_ms == 0 || g.scene_request_ms == 0 ||
+                g.movement_ms == 0)
+                throw std::invalid_argument("Client configuration is incomplete");
+        }
         *get() = std::move(result);
     }
 
@@ -145,11 +161,11 @@ namespace game::options
         std::cout << (server ? "Usage: vulkan-server [OPTIONS]\n\n"
                             : "Usage: vulkan-client [OPTIONS]\n\n")
                   << "Options:\n"
-                  << "  --port PORT         UDP port (configured in game::config)\n";
+                  << "  --port PORT         UDP port (configured in server.cpp or client.cpp)\n";
         if (server)
-            std::cout << "  --bind ADDRESS      Server listen address (game::config)\n";
+            std::cout << "  --bind ADDRESS      Server listen address (server.cpp)\n";
         else
-            std::cout << "  --host HOST         Server address (game::config)\n"
+            std::cout << "  --host HOST         Server address (client.cpp)\n"
                       << "  --headless          Run the client without a window\n";
         std::cout << "  --duration SECONDS  Stop automatically after the given time\n"
                   << "  --help              Show this help\n";

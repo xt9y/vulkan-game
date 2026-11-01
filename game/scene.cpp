@@ -1,6 +1,7 @@
 #include "scene.hpp"
 #include "srv/shared/scene/scene.hpp"
 #include "util/math/vector.hpp"
+#include <stdexcept>
 
 namespace game::scene
 {
@@ -21,29 +22,27 @@ namespace game::scene
             });
         }
 
-        ::scene::mesh floor()
+        ::scene::mesh floor(std::uint32_t id, float half)
         {
             ::scene::mesh mesh;
-            mesh.id = 1;
+            mesh.id = id;
 
             quad(
                 mesh,
-                {-10, 0, -10},
-                {-10, 0, 10},
-                {10, 0, 10},
-                {10, 0, -10},
+                {-half, 0, -half},
+                {-half, 0, half},
+                {half, 0, half},
+                {half, 0, -half},
                 {0, 1, 0}
             );
 
             return mesh;
         }
 
-        ::scene::mesh cube()
+        ::scene::mesh cube(std::uint32_t id, float h)
         {
             ::scene::mesh mesh;
-            mesh.id = 2;
-
-            constexpr float h = 0.5f;
+            mesh.id = id;
 
             quad(mesh, {-h, -h, h}, {h, -h, h}, {h, h, h}, {-h, h, h}, {0, 0, 1});
             quad(mesh, {h, -h, -h}, {-h, -h, -h}, {-h, h, -h}, {h, h, -h}, {0, 0, -1});
@@ -56,26 +55,15 @@ namespace game::scene
         }
     } // namespace
     
-    void create_start(::scene::state &data)
+    void create_start(::scene::state& data, const configuration& config)
     {
+        if (config.floor_mesh == config.cube_mesh ||
+            config.floor_half_extent <= 0 || config.cube_half_extent <= 0)
+            throw std::invalid_argument("Invalid game scene configuration");
+
         data = {};
-
-        data.meshes.push_back(floor());
-        data.meshes.push_back(cube());
-
-        auto spawn = [&](std::uint32_t id, std::uint32_t mesh_id, vk::util::math::vec3 position)
-        {
-            ::scene::instance instance;
-            instance.id = id;
-            instance.mesh_id = mesh_id;
-            instance.pose.position = position;
-
-            data.instances.push_back(instance);
-        };
-        
-        spawn(1, 1, {0, 0, 0});
-        spawn(2, 2, {-2, 0.5f, 0});
-        spawn(3, 2, {0, 0.5f, 0});
-        spawn(4, 2, {2, 0.5f, 0});
+        data.meshes.push_back(floor(config.floor_mesh, config.floor_half_extent));
+        data.meshes.push_back(cube(config.cube_mesh, config.cube_half_extent));
+        data.instances = config.instances;
     }
-}; // namespace game::scene
+} // namespace game::scene

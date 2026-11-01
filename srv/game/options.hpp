@@ -23,7 +23,6 @@ namespace game::options
         int forward, backward, left, right, sprint_left, sprint_right;
         int capture, release, lighting, tonemapping;
         bool captured_on_start;
-        int overlay, up, down, decrease, increase;
     };
 
     struct server
@@ -37,17 +36,26 @@ namespace game::options
         std::int32_t detail_scale, detail_amplitude;
     };
 
+    enum class gbuffer_precision { unspecified, rgba8, rgba16f };
+    enum class surface_format { unspecified, bgra8_srgb, rgba8_srgb };
+    enum class depth_precision { unspecified, d32, d16 };
+    enum class presentation { unspecified, fifo, mailbox, immediate };
+
     struct client
     {
         int width, height;
-        std::string title, vertex_shader, fragment_shader;
-        bool uncapped, lighting, tonemapping, backface_culling;
-        bool options_visible;
-        int options_selected;
+        std::string title, connected_title, connecting_title;
+        std::string vertex_shader, fragment_shader;
+        bool lighting, tonemapping, backface_culling, gpu_culling;
+        gbuffer_precision gbuffer;
+        surface_format surface;
+        depth_precision depth;
+        presentation present;
+        std::string culling_shader, lighting_shader, tonemap_shader;
+        std::string fullscreen_shader, presentation_shader;
         float exposure, correction_limit, correction_decay;
-        float exposure_step, fov_step, sensitivity_step;
-        float min_exposure, max_exposure, min_fov, max_fov;
-        float min_sensitivity, max_sensitivity;
+        vk::util::math::vec3 sun_direction, sky_color;
+        float sun_intensity, ambient_intensity, ambient_specular;
         std::uint32_t timeout_ms, retry_ms, retry_max_ms, heartbeat_ms, scene_request_ms, movement_ms;
     };
 

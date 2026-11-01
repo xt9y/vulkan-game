@@ -141,7 +141,7 @@ namespace player
         std::vector<std::uint32_t> candidates;
         if (broadphase)
         {
-            const float horizontal = radius + 8.0f * dt + 0.01f;
+            const float horizontal = radius + std::max(settings.walk_speed, settings.sprint_speed) * dt + 0.01f;
             const float vertical = std::abs(p.velocity.y) * dt + settings.gravity * dt * dt + 0.05f;
             
             const spatial::bounds region{

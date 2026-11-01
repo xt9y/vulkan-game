@@ -10,11 +10,6 @@ namespace clt::input
         float mouse_y = 0;
         bool toggle_lighting = false;
         bool toggle_tonemapping = false;
-        bool toggle_options = false;
-        bool options_up = false;
-        bool options_down = false;
-        bool options_decrease = false;
-        bool options_increase = false;
     };
 
     void init();

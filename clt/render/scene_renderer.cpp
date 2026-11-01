@@ -9,6 +9,7 @@
 #include "srv/shared/scene/scene.hpp"
 
 #include <algorithm>
+#include <numeric>
 #include <array>
 #include <cstddef>
 #include <cstdlib>
@@ -308,26 +309,26 @@ namespace clt::scene_renderer
         }
 
 
-        constexpr std::array<vk::Format, 3> color_formats{
-            vk::Format::eR8G8B8A8Unorm,
-            vk::Format::eR8G8B8A8Unorm,
-            vk::Format::eR8G8B8A8Unorm
-        };
+        std::array<vk::Format, 3> color_formats()
+        {
+            const auto precision = game::options::get()->graphics.gbuffer;
+            const auto format = precision == game::options::gbuffer_precision::rgba16f
+                ? vk::Format::eR16G16B16A16Sfloat : vk::Format::eR8G8B8A8Unorm;
+            return {format, format, format};
+        }
 
         vk::Format depth_format()
         {
-            const auto gpu = vk::physical_device::get()->handle;
-            for (auto format : {vk::Format::eD32Sfloat, vk::Format::eD16Unorm})
-            {
-                const auto props = gpu.getFormatProperties(format);
-                const auto needed = vk::FormatFeatureFlagBits::eDepthStencilAttachment |
-                    vk::FormatFeatureFlagBits::eSampledImage;
-                if ((props.optimalTilingFeatures & needed) == needed)
-                {
-                    return format;
-                }
-            }
-            throw std::runtime_error("No sampled depth attachment format available");
+            const auto precision = game::options::get()->graphics.depth;
+            const auto format = precision == game::options::depth_precision::d32
+                ? vk::Format::eD32Sfloat : vk::Format::eD16Unorm;
+            const auto properties = vk::physical_device::get()->handle
+                .getFormatProperties(format);
+            const auto required = vk::FormatFeatureFlagBits::eDepthStencilAttachment |
+                vk::FormatFeatureFlagBits::eSampledImage;
+            if ((properties.optimalTilingFeatures & required) != required)
+                throw std::runtime_error("Configured depth format unsupported");
+            return format;
         }
 
         void create_render_pass()
@@ -338,7 +339,7 @@ namespace clt::scene_renderer
 
             for (std::uint32_t i = 0; i < colors.size(); ++i)
             {
-                attachments[i].format = color_formats[i];
+                attachments[i].format = color_formats()[i];
                 attachments[i].samples = vk::SampleCountFlagBits::e1;
                 attachments[i].loadOp = vk::AttachmentLoadOp::eClear;
                 attachments[i].storeOp = vk::AttachmentStoreOp::eStore;
@@ -396,10 +397,10 @@ namespace clt::scene_renderer
             state::target target{};
             try
             {
-                for (std::size_t i = 0; i < color_formats.size(); ++i)
+                for (std::size_t i = 0; i < color_formats().size(); ++i)
                 {
                     const auto features = vk::physical_device::get()->handle
-                        .getFormatProperties(color_formats[i]).optimalTilingFeatures;
+                        .getFormatProperties(color_formats()[i]).optimalTilingFeatures;
                     const auto needed = vk::FormatFeatureFlagBits::eColorAttachment |
                         vk::FormatFeatureFlagBits::eSampledImage;
                     if ((features & needed) != needed)
@@ -409,7 +410,7 @@ namespace clt::scene_renderer
 
                     vk::ImageCreateInfo image{};
                     image.imageType = vk::ImageType::e2D;
-                    image.format = color_formats[i];
+                    image.format = color_formats()[i];
                     image.extent = vk::Extent3D{extent.width, extent.height, 1};
                     image.mipLevels = 1;
                     image.arrayLayers = 1;
@@ -522,7 +523,7 @@ namespace clt::scene_renderer
         layout.pPushConstantRanges = &range;
         data.cull_layout = device.createPipelineLayout(layout);
 
-        const auto code = vk::shader::read("build/shaders/cull.comp.spv");
+        const auto code = vk::shader::read(game::options::get()->graphics.culling_shader.c_str());
         auto module = vk::shader::create(code);
         try
         {
@@ -720,31 +721,77 @@ namespace clt::scene_renderer
         const auto visible_bytes = mesh.bounds.size() * sizeof(std::uint32_t);
         const auto count = vk::swapchain::get()->images.size();
         mesh.frames.resize(count);
-        for (auto& frame : mesh.frames)
+        if (!game::options::get()->graphics.gpu_culling)
         {
-            if (!frame.visible.handle || frame.visible.size < visible_bytes)
-            {
-                auto replacement = vk::buffer::create(
-                    std::max<vk::DeviceSize>(visible_bytes, frame.visible.size * 2),
-                    vk::BufferUsageFlagBits::eVertexBuffer |
-                    vk::BufferUsageFlagBits::eStorageBuffer |
-                    vk::BufferUsageFlagBits::eTransferSrc,
-                    vk::MemoryPropertyFlagBits::eDeviceLocal
-                );
-                if (frame.visible.handle) vk::buffer::destroy(frame.visible);
-                frame.visible = replacement;
-            }
+            std::vector<std::uint32_t> visible(mesh.transforms.size());
+            std::iota(visible.begin(), visible.end(), 0u);
 
-            if (!frame.indirect.handle)
+            vk::DrawIndexedIndirectCommand draw{};
+            draw.indexCount = mesh.index_count;
+            draw.instanceCount = static_cast<std::uint32_t>(mesh.transforms.size());
+
+            for (auto& frame : mesh.frames)
             {
-                frame.indirect = vk::buffer::create(
-                    sizeof(vk::DrawIndexedIndirectCommand),
-                    vk::BufferUsageFlagBits::eStorageBuffer |
-                    vk::BufferUsageFlagBits::eIndirectBuffer |
-                    vk::BufferUsageFlagBits::eTransferDst |
-                    vk::BufferUsageFlagBits::eTransferSrc,
-                    vk::MemoryPropertyFlagBits::eDeviceLocal
-                );
+                if (!frame.visible.handle || frame.visible.size < visible_bytes)
+                {
+                    const auto capacity = std::max<vk::DeviceSize>(
+                        visible_bytes, frame.visible.size * 2);
+                    auto replacement = transfers.add(
+                        visible.data(), visible_bytes,
+                        vk::BufferUsageFlagBits::eVertexBuffer |
+                        vk::BufferUsageFlagBits::eStorageBuffer,
+                        capacity
+                    );
+                    if (frame.visible.handle) vk::buffer::destroy(frame.visible);
+                    frame.visible = replacement;
+                }
+                else
+                {
+                    transfers.write(frame.visible, visible.data(), visible_bytes);
+                }
+
+                if (!frame.indirect.handle)
+                {
+                    frame.indirect = transfers.add(
+                        &draw, sizeof(draw),
+                        vk::BufferUsageFlagBits::eStorageBuffer |
+                        vk::BufferUsageFlagBits::eIndirectBuffer
+                    );
+                }
+                else
+                {
+                    transfers.write(frame.indirect, &draw, sizeof(draw));
+                }
+            }
+        }
+        else
+        {
+            for (auto& frame : mesh.frames)
+            {
+                if (!frame.visible.handle || frame.visible.size < visible_bytes)
+                {
+                    auto replacement = vk::buffer::create(
+                        std::max<vk::DeviceSize>(visible_bytes, frame.visible.size * 2),
+                        vk::BufferUsageFlagBits::eVertexBuffer |
+                        vk::BufferUsageFlagBits::eStorageBuffer |
+                        vk::BufferUsageFlagBits::eTransferSrc,
+                        vk::MemoryPropertyFlagBits::eDeviceLocal
+                    );
+                    if (frame.visible.handle) vk::buffer::destroy(frame.visible);
+                    frame.visible = replacement;
+                }
+
+                if (!frame.indirect.handle)
+                {
+                    frame.indirect = vk::buffer::create(
+                        sizeof(vk::DrawIndexedIndirectCommand),
+                        vk::BufferUsageFlagBits::eStorageBuffer |
+                        vk::BufferUsageFlagBits::eIndirectBuffer |
+                        vk::BufferUsageFlagBits::eTransferDst |
+                        vk::BufferUsageFlagBits::eTransferSrc,
+                        vk::MemoryPropertyFlagBits::eDeviceLocal
+                    );
+                }
             }
         }
 
@@ -1073,80 +1120,88 @@ namespace clt::scene_renderer
         begin.clearValueCount = clear.size();
         begin.pClearValues = clear.data();
 
-        // Compute visibility and compact instance IDs for indirect graphics draws.
-        if (data.snapshot)
+        if (game::options::get()->graphics.gpu_culling)
         {
-            const auto camera_planes = frustum(view_projection);
-            cull_parameters params;
-            for (std::size_t i = 0; i < params.planes.size(); ++i)
+            // Compute visibility and compact instance IDs for indirect graphics draws.
+            if (data.snapshot)
             {
-                const auto& plane = camera_planes[i];
-                const float inverse = 1.0f / std::max(plane.magnitude, 1e-6f);
-                params.planes[i] = {
-                    plane.normal.x * inverse,
-                    plane.normal.y * inverse,
-                    plane.normal.z * inverse,
-                    plane.offset * inverse
-                };
-            }
-
-            data.last_gpu_planes = params.planes;
-            data.gpu_planes_valid = true;
-
-            for (const auto& mesh : data.meshes)
-            {
-                if (!mesh.transforms.empty())
+                const auto camera_planes = frustum(view_projection);
+                cull_parameters params;
+                for (std::size_t i = 0; i < params.planes.size(); ++i)
                 {
-                    command.fillBuffer(
-                        mesh.frames.at(image).indirect.handle,
-                        offsetof(vk::DrawIndexedIndirectCommand, instanceCount),
-                        sizeof(std::uint32_t), 0
+                    const auto& plane = camera_planes[i];
+                    const float inverse = 1.0f / std::max(plane.magnitude, 1e-6f);
+                    params.planes[i] = {
+                        plane.normal.x * inverse,
+                        plane.normal.y * inverse,
+                        plane.normal.z * inverse,
+                        plane.offset * inverse
+                    };
+                }
+
+                data.last_gpu_planes = params.planes;
+                data.gpu_planes_valid = true;
+
+                for (const auto& mesh : data.meshes)
+                {
+                    if (!mesh.transforms.empty())
+                    {
+                        command.fillBuffer(
+                            mesh.frames.at(image).indirect.handle,
+                            offsetof(vk::DrawIndexedIndirectCommand, instanceCount),
+                            sizeof(std::uint32_t), 0
+                        );
+                    }
+                }
+
+                vk::MemoryBarrier transfer{};
+                transfer.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+                transfer.dstAccessMask = vk::AccessFlagBits::eShaderRead |
+                    vk::AccessFlagBits::eShaderWrite;
+                command.pipelineBarrier(
+                    vk::PipelineStageFlagBits::eTransfer,
+                    vk::PipelineStageFlagBits::eComputeShader,
+                    {}, {transfer}, {}, {}
+                );
+
+                command.bindPipeline(vk::PipelineBindPoint::eCompute, data.cull_pipeline);
+                for (const auto& mesh : data.meshes)
+                {
+                    if (mesh.transforms.empty())
+                    {
+                        continue;
+                    }
+
+                    params.count = static_cast<std::uint32_t>(mesh.transforms.size());
+                    params.index_count = mesh.index_count;
+                    command.bindDescriptorSets(
+                        vk::PipelineBindPoint::eCompute,
+                        data.cull_layout, 0, {mesh.frames.at(image).set}, {}
                     );
-                }
-            }
-
-            vk::MemoryBarrier transfer{};
-            transfer.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-            transfer.dstAccessMask = vk::AccessFlagBits::eShaderRead |
-                vk::AccessFlagBits::eShaderWrite;
-            command.pipelineBarrier(
-                vk::PipelineStageFlagBits::eTransfer,
-                vk::PipelineStageFlagBits::eComputeShader,
-                {}, {transfer}, {}, {}
-            );
-
-            command.bindPipeline(vk::PipelineBindPoint::eCompute, data.cull_pipeline);
-            for (const auto& mesh : data.meshes)
-            {
-                if (mesh.transforms.empty())
-                {
-                    continue;
+                    command.pushConstants(
+                        data.cull_layout, vk::ShaderStageFlagBits::eCompute,
+                        0, sizeof(params), &params
+                    );
+                    command.dispatch((params.count + 127u) / 128u, 1, 1);
                 }
 
-                params.count = static_cast<std::uint32_t>(mesh.transforms.size());
-                params.index_count = mesh.index_count;
-                command.bindDescriptorSets(
-                    vk::PipelineBindPoint::eCompute,
-                    data.cull_layout, 0, {mesh.frames.at(image).set}, {}
+                vk::MemoryBarrier finished{};
+                finished.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
+                finished.dstAccessMask = vk::AccessFlagBits::eVertexAttributeRead |
+                    vk::AccessFlagBits::eIndirectCommandRead;
+                command.pipelineBarrier(
+                    vk::PipelineStageFlagBits::eComputeShader,
+                    vk::PipelineStageFlagBits::eVertexInput |
+                    vk::PipelineStageFlagBits::eDrawIndirect,
+                    {}, {finished}, {}, {}
                 );
-                command.pushConstants(
-                    data.cull_layout, vk::ShaderStageFlagBits::eCompute,
-                    0, sizeof(params), &params
-                );
-                command.dispatch((params.count + 127u) / 128u, 1, 1);
+
             }
 
-            vk::MemoryBarrier finished{};
-            finished.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
-            finished.dstAccessMask = vk::AccessFlagBits::eVertexAttributeRead |
-                vk::AccessFlagBits::eIndirectCommandRead;
-            command.pipelineBarrier(
-                vk::PipelineStageFlagBits::eComputeShader,
-                vk::PipelineStageFlagBits::eVertexInput |
-                vk::PipelineStageFlagBits::eDrawIndirect,
-                {}, {finished}, {}, {}
-            );
-
+        }
+        else
+        {
+            data.gpu_planes_valid = false;
         }
 
         // Write per-swapchain-image palettes only after its frame fence completes.

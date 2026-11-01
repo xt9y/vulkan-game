@@ -65,7 +65,6 @@ namespace clt::renderer
         }
 
         get()->initialized = true;
-        get()->uncapped = game::options::get()->graphics.uncapped;
 
         try
         {
@@ -271,17 +270,57 @@ namespace clt::renderer
             throw std::runtime_error("Surface does not support color attachments");
         }
 
-        auto format = vk::surface::formats().front();
-
-        for (auto candidate : vk::surface::formats())
-        {
-            if (candidate.format == vk::Format::eB8G8R8A8Srgb &&
-                candidate.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear)
+        const auto choice = game::options::get()->graphics.surface;
+        const auto requested_format =
+            choice == game::options::surface_format::bgra8_srgb
+                ? vk::Format::eB8G8R8A8Srgb : vk::Format::eR8G8B8A8Srgb;
+        const auto formats = vk::surface::formats();
+        const auto selected = std::find_if(formats.begin(), formats.end(),
+            [&](const vk::SurfaceFormatKHR& value)
             {
-                format = candidate;
-                break;
-            }
+                return value.format == requested_format &&
+                    value.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;
+            });
+        if (selected == formats.end())
+            throw std::runtime_error("Configured swapchain format unsupported");
+        const auto format = *selected;
+
+        vk::SwapchainCreateInfoKHR info{};
+        info.surface = vk::surface::get()->handle;
+        info.minImageCount = caps.minImageCount + 1;
+
+        if (caps.maxImageCount && info.minImageCount > caps.maxImageCount)
+        {
+            info.minImageCount = caps.maxImageCount;
         }
+
+        info.imageFormat = format.format;
+        info.imageColorSpace = format.colorSpace;
+        info.imageExtent = framebuffer_extent(caps);
+        info.imageArrayLayers = 1;
+        info.imageUsage = vk::ImageUsageFlagBits::eColorAttachment;
+        info.imageSharingMode = vk::SharingMode::eExclusive;
+        info.preTransform = caps.currentTransform;
+        info.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
+        const auto preferred = game::options::get()->graphics.present;
+        info.presentMode = preferred == game::options::presentation::fifo
+            ? vk::PresentModeKHR::eFifo
+            : preferred == game::options::presentation::mailbox
+                ? vk::PresentModeKHR::eMailbox
+                : vk::PresentModeKHR::eImmediate;
+        const auto modes = vk::surface::present_modes();
+        if (std::find(modes.begin(), modes.end(), info.presentMode) == modes.end())
+            throw std::runtime_error("Configured presentation mode unsupported");
+
+ormats.end(),
+            [&](const vk::SurfaceFormatKHR& value)
+            {
+                return value.format == requested_format &&
+                    value.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;
+            });
+        if (selected == formats.end())
+            throw std::runtime_error("Configured swapchain format unsupported");
+        const auto format = *selected;
 
         vk::SwapchainCreateInfoKHR info{};
         info.surface = vk::surface::get()->handle;

@@ -10,8 +10,8 @@ namespace clt::window
 {
     namespace
     {
-        std::atomic<int> framebuffer_width{1280};
-        std::atomic<int> framebuffer_height{720};
+        std::atomic<int> framebuffer_width{};
+        std::atomic<int> framebuffer_height{};
 
         void update_framebuffer_size()
         {
@@ -91,8 +91,9 @@ namespace clt::window
 
     void set_connected(bool connected)
     {
-        get()->title = game::options::get()->graphics.title +
-            (connected ? " | connected" : " | connecting");
+        get()->title = connected
+            ? game::options::get()->graphics.connected_title
+            : game::options::get()->graphics.connecting_title;
         glfwSetWindowTitle(get()->handle, get()->title.c_str());
     }
 

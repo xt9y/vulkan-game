@@ -9,16 +9,11 @@
 namespace clt::input
 {
     namespace {
-        bool captured = true;
+        bool captured{};
         bool previous_tab = false;
         bool previous_escape = false;
         bool previous_f6 = false;
         bool previous_f7 = false;
-        bool previous_overlay = false;
-        bool previous_up = false;
-        bool previous_down = false;
-        bool previous_decrease = false;
-        bool previous_increase = false;
         double last_x = 0;
         double last_y = 0;
     } // namespace
@@ -32,8 +27,6 @@ namespace clt::input
         previous_escape = false;
         previous_f6 = false;
         previous_f7 = false;
-        previous_overlay = previous_up = previous_down = false;
-        previous_decrease = previous_increase = false;
 
         glfwSetInputMode(window, GLFW_CURSOR,
                          captured ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
@@ -91,22 +84,6 @@ namespace clt::input
         result.toggle_tonemapping = f7 && !previous_f7;
         previous_f6 = f6;
         previous_f7 = f7;
-
-        const bool overlay = down(cfg.overlay);
-        const bool up = down(cfg.up);
-        const bool next = down(cfg.down);
-        const bool decrease = down(cfg.decrease);
-        const bool increase = down(cfg.increase);
-        result.toggle_options = overlay && !previous_overlay;
-        result.options_up = up && !previous_up;
-        result.options_down = next && !previous_down;
-        result.options_decrease = decrease && !previous_decrease;
-        result.options_increase = increase && !previous_increase;
-        previous_overlay = overlay;
-        previous_up = up;
-        previous_down = next;
-        previous_decrease = decrease;
-        previous_increase = increase;
 
         if (captured && glfwGetWindowAttrib(window, GLFW_FOCUSED))
         {
