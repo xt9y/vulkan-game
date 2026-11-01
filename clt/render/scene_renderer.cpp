@@ -7,7 +7,6 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cstddef>
 #include <cstdlib>
 #include <filesystem>
@@ -62,7 +61,6 @@ namespace clt::scene_renderer
             vk::Pipeline cull_pipeline{};
             std::array<vec4, 6> last_gpu_planes{};
             bool gpu_planes_valid = false;
-            draw_stats timings{};
 
             vk::RenderPass render_pass{};
             vk::PipelineLayout layout{};
@@ -500,11 +498,6 @@ namespace clt::scene_renderer
             throw;
         }
         vk::shader::destroy(module);
-    }
-
-    draw_stats last_stats()
-    {
-        return get().timings;
     }
 
     gpu_validation validate_gpu_visibility()
@@ -1067,10 +1060,7 @@ namespace clt::scene_renderer
 
     void draw(vk::CommandBuffer command, std::uint32_t image)
     {
-        using clock = std::chrono::steady_clock;
-
         auto& data = get();
-        data.timings = {};
         const auto extent = vk::swapchain::get()->extent;
 
         std::array<vk::ClearValue, 2> clear{};
@@ -1089,7 +1079,6 @@ namespace clt::scene_renderer
         // Compute visibility and compact instance IDs for indirect graphics draws.
         if (data.snapshot)
         {
-            const auto started = clock::now();
             const auto view_projection = camera::projection(
                 float(extent.width) / float(extent.height)
             ) * camera::view();
@@ -1150,7 +1139,6 @@ namespace clt::scene_renderer
                     0, sizeof(params), &params
                 );
                 command.dispatch((params.count + 127u) / 128u, 1, 1);
-                data.timings.gpu_candidates += mesh.transforms.size();
             }
 
             vk::MemoryBarrier finished{};
@@ -1164,9 +1152,6 @@ namespace clt::scene_renderer
                 {}, {finished}, {}, {}
             );
 
-            data.timings.gpu_dispatch_ms =
-                std::chrono::duration<double, std::milli>(
-                    clock::now() - started).count();
         }
 
         command.beginRenderPass(begin, vk::SubpassContents::eInline);
@@ -1222,7 +1207,6 @@ namespace clt::scene_renderer
                     mesh.indirect_buffer.handle, 0, 1,
                     sizeof(vk::DrawIndexedIndirectCommand)
                 );
-                ++data.timings.draw_calls;
             }
         }
 

@@ -7,14 +7,6 @@
 
 namespace clt::scene_renderer
 {
-    struct draw_stats {
-        double gpu_dispatch_ms = 0;
-        std::size_t gpu_candidates = 0;
-        std::size_t draw_calls = 0;
-    };
-
-    draw_stats last_stats();
-
     struct gpu_validation {
         bool available = false;
         std::size_t expected = 0;

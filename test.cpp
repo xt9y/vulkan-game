@@ -216,7 +216,6 @@ namespace
         double fence_ms = 0;
         double upload_ms = 0;
         double gpu_ms = -1;
-        clt::scene_renderer::draw_stats scene{};
     };
 
     // Test-only version of the public renderer frame path. Query commands surround
@@ -353,7 +352,6 @@ namespace
 
             mark = clock::now();
             clt::scene_renderer::draw(frame.command, image);
-            timing.scene = clt::scene_renderer::last_stats();
             timing.record_ms = std::chrono::duration<double, std::milli>(
                 clock::now() - mark).count();
 
@@ -577,7 +575,6 @@ namespace
         std::vector<double> fence_ms;
         std::vector<double> upload_ms;
         std::vector<double> gpu_ms;
-        std::vector<double> gpu_dispatch_ms;
         std::size_t gpu_candidates = 0;
         std::size_t visible_instances = 0;
         std::size_t draw_calls = 0;
@@ -626,11 +623,12 @@ namespace
         output.fence_ms.reserve(10000);
         output.upload_ms.reserve(10000);
         output.gpu_ms.reserve(10000);
-        output.gpu_dispatch_ms.reserve(10000);
 
         // Visibility counts are sampled once per phase, not every frame; the
         // audit must not dominate the renderer's actual frame-time measurement.
         const auto counts = visibility.sample();
+        const auto snapshot = clt::connection::snapshot();
+        output.gpu_candidates = snapshot ? snapshot->instances.size() : 0;
         output.visible_instances = counts.visible;
         output.draw_calls = counts.draw_calls;
         output.collision_query_ms = collision.query_ms;
@@ -669,8 +667,6 @@ namespace
                 output.record_ms.push_back(measured.record_ms);
                 output.fence_ms.push_back(measured.fence_ms);
                 output.upload_ms.push_back(measured.upload_ms);
-                output.gpu_dispatch_ms.push_back(measured.scene.gpu_dispatch_ms);
-                output.gpu_candidates = measured.scene.gpu_candidates;
                 if (measured.gpu_ms >= 0)
                 {
                     output.gpu_ms.push_back(measured.gpu_ms);
@@ -760,7 +756,6 @@ namespace
                   << " aabb_query_ms=" << value.collision_query_ms
                   << " physics_step_ms=" << value.collision_step_ms << '\n';
         std::cout << "  gpu_candidates=" << value.gpu_candidates
-                  << " compute_record_ms=" << average(value.gpu_dispatch_ms)
                   << " visibility=gpu_indirect" << '\n';
     }
 } // namespace
