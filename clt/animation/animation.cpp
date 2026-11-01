@@ -2,6 +2,7 @@
 
 #include <ozz/animation/runtime/animation.h>
 #include <ozz/animation/runtime/local_to_model_job.h>
+#include <ozz/animation/runtime/blending_job.h>
 #include <ozz/animation/runtime/sampling_job.h>
 #include <ozz/animation/runtime/skeleton.h>
 #include <ozz/base/io/archive.h>
@@ -9,6 +10,7 @@
 #include <ozz/base/maths/simd_math.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <memory>
 #include <stdexcept>
@@ -24,6 +26,9 @@ namespace clt::animation
             std::vector<ozz::animation::Animation> clips;
             ozz::animation::SamplingJob::Context context;
             std::vector<ozz::math::SoaTransform> locals;
+            std::vector<ozz::math::SoaTransform> secondary;
+            std::vector<ozz::math::SoaTransform> blended;
+            std::vector<ozz::math::SimdFloat4> mask;
             std::vector<ozz::math::Float4x4> models;
             std::vector<matrix> inverse_bind;
         };
@@ -88,6 +93,9 @@ namespace clt::animation
             }
             item->context.Resize(item->skeleton.num_joints());
             item->locals.resize(item->skeleton.num_soa_joints());
+            item->secondary.resize(item->skeleton.num_soa_joints());
+            item->blended.resize(item->skeleton.num_soa_joints());
+            item->mask.resize(item->skeleton.num_soa_joints());
             item->models.resize(item->skeleton.num_joints());
             skins().push_back(std::move(item));
         }
@@ -100,14 +108,23 @@ namespace clt::animation
     }
 
     bool sample(std::uint32_t skin_id, std::uint32_t clip,
-                float seconds, std::vector<matrix>& palette)
+                float seconds, std::vector<matrix>& palette,
+                std::uint32_t overlay, float weight, std::uint32_t mask_root)
     {
         auto* item = find(skin_id);
-        if (!item || !std::isfinite(seconds)) return false;
-        if (!item->clips.empty())
+        if (!item || !std::isfinite(seconds) || !std::isfinite(weight)) return false;
+
+        auto evaluate = [&](std::uint32_t index,
+                            std::vector<ozz::math::SoaTransform>& output)
         {
-            if (clip >= item->clips.size()) return false;
-            const auto& animation = item->clips[clip];
+            if (item->clips.empty())
+            {
+                std::copy(item->skeleton.joint_rest_poses().begin(),
+                          item->skeleton.joint_rest_poses().end(), output.begin());
+                return true;
+            }
+            if (index >= item->clips.size()) return false;
+            const auto& animation = item->clips[index];
             if (animation.duration() <= 0) return false;
             float t = std::fmod(seconds, animation.duration());
             if (t < 0) t += animation.duration();
@@ -115,18 +132,62 @@ namespace clt::animation
             job.animation = &animation;
             job.context = &item->context;
             job.ratio = t / animation.duration();
-            job.output = ozz::make_span(item->locals);
-            if (!job.Run()) return false;
-        }
-        else
+            job.output = ozz::make_span(output);
+            return job.Run();
+        };
+
+        if (!evaluate(clip, item->locals)) return false;
+        bool blending = overlay != UINT32_MAX && weight > 0.0f;
+        if (blending)
         {
-            std::copy(item->skeleton.joint_rest_poses().begin(),
-                      item->skeleton.joint_rest_poses().end(), item->locals.begin());
+            if (!evaluate(overlay, item->secondary)) return false;
+            weight = std::clamp(weight, 0.0f, 1.0f);
+            const auto parents = item->skeleton.joint_parents();
+
+            if (mask_root != UINT32_MAX)
+            {
+                if (mask_root >= std::uint32_t(item->skeleton.num_joints()))
+                    return false;
+                for (std::size_t i = 0; i < item->mask.size(); ++i)
+                {
+                    float lane[4]{};
+                    for (std::size_t j = 0; j < 4; ++j)
+                    {
+                        auto bone = int(i * 4 + j);
+                        while (bone >= 0 && bone < int(parents.size()))
+                        {
+                            if (std::uint32_t(bone) == mask_root)
+                            {
+                                lane[j] = 1.0f;
+                                break;
+                            }
+                            bone = parents[bone];
+                        }
+                    }
+                    item->mask[i] = ozz::math::simd_float4::Load(
+                        lane[0], lane[1], lane[2], lane[3]);
+                }
+            }
+
+            std::array<ozz::animation::BlendingJob::Layer, 2> layers{};
+            layers[0].weight = std::max(0.0001f, 1.0f - weight);
+            layers[0].transform = ozz::make_span(item->locals);
+            layers[1].weight = weight;
+            layers[1].transform = ozz::make_span(item->secondary);
+            if (mask_root != UINT32_MAX) layers[1].joint_weights = ozz::make_span(item->mask);
+
+            ozz::animation::BlendingJob job;
+            job.threshold = 0.00001f;
+            job.layers = ozz::make_span(layers);
+            job.rest_pose = item->skeleton.joint_rest_poses();
+            job.output = ozz::make_span(item->blended);
+            if (!job.Run()) return false;
         }
 
         ozz::animation::LocalToModelJob job;
         job.skeleton = &item->skeleton;
-        job.input = ozz::make_span(item->locals);
+        job.input = blending ? ozz::make_span(item->blended) :
+            ozz::make_span(item->locals);
         job.output = ozz::make_span(item->models);
         if (!job.Run()) return false;
 
