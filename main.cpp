@@ -36,8 +36,8 @@ namespace
 
         void run(bool server, bool client)
         {
-            const auto* server_data = srv::application::get();
-            const auto* network = clt::connection::get();
+            auto* server_data = srv::application::get();
+            auto* network = clt::connection::get();
             auto& render = clt::renderer::stats();
 
             auto previous_time = clock::now();
