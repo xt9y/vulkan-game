@@ -403,6 +403,102 @@ namespace
         }
     };
 
+    struct gpu_validation {
+        bool available = false;
+        std::size_t expected = 0;
+        std::size_t actual = 0;
+        std::size_t missing = 0;
+        std::size_t unexpected = 0;
+        std::size_t duplicates = 0;
+        std::size_t out_of_range = 0;
+        std::size_t bad_commands = 0;
+
+        bool passed() const
+        {
+            return available && expected == actual && !missing &&
+                !unexpected && !duplicates && !out_of_range && !bad_commands;
+        }
+    };
+
+    gpu_validation validate_gpu_visibility()
+    {
+        const auto data = clt::scene_renderer::culling_data();
+        gpu_validation result;
+        if (!data.valid)
+        {
+            return result;
+        }
+        result.available = true;
+
+        for (const auto& mesh : data.meshes)
+        {
+
+            const auto* draw = static_cast<const vk::DrawIndexedIndirectCommand*>(
+                vk::buffer::map(*mesh.indirect)
+            );
+            const std::size_t actual = draw->instanceCount;
+            result.actual += actual;
+            if (draw->indexCount != mesh.index_count || draw->firstIndex ||
+                draw->vertexOffset || draw->firstInstance)
+            {
+                ++result.bad_commands;
+            }
+
+            std::vector<std::uint8_t> expected(mesh.bounds->size(), 0);
+            for (std::size_t i = 0; i < mesh.bounds->size(); ++i)
+            {
+                const auto& sphere = (*mesh.bounds)[i];
+                bool visible = true;
+                for (const auto& plane : data.planes)
+                {
+                    const float distance = plane.x * sphere[0] +
+                        plane.y * sphere[1] + plane.z * sphere[2] + plane.w;
+                    if (distance < -sphere[3])
+                    {
+                        visible = false;
+                        break;
+                    }
+                }
+                expected[i] = std::uint8_t(visible);
+                result.expected += visible;
+            }
+
+            const auto* ids = static_cast<const std::uint32_t*>(
+                vk::buffer::map(*mesh.visible)
+            );
+            const std::size_t readable = std::min(actual, mesh.bounds->size());
+            result.out_of_range += actual - readable;
+
+            for (std::size_t i = 0; i < readable; ++i)
+            {
+                const auto id = ids[i];
+                if (id >= expected.size())
+                {
+                    ++result.out_of_range;
+                }
+                else if (expected[id] == 0)
+                {
+                    ++result.unexpected;
+                }
+                else if (expected[id] == 2)
+                {
+                    ++result.duplicates;
+                }
+                else
+                {
+                    expected[id] = 2;
+                }
+            }
+
+            for (auto value : expected)
+            {
+                result.missing += value == 1;
+            }
+        }
+
+        return result;
+    }
+
     // Independent visibility audit: reconstruct the same six Vulkan frustum
     // planes and per-instance bounding spheres as the production renderer.
     struct visibility_probe
@@ -949,7 +1045,7 @@ int main()
                 throw std::runtime_error("GPU visibility audit fence failed");
             }
 
-            const auto check = clt::scene_renderer::validate_gpu_visibility();
+            const auto check = validate_gpu_visibility();
             std::cout << "GPU_VISIBILITY " << label
                       << " expected=" << check.expected
                       << " gpu_visible=" << check.actual

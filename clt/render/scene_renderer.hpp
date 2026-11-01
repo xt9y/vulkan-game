@@ -2,31 +2,28 @@
 
 #include <vk/vk.hpp>
 
+#include <array>
 #include <cstddef>
+#include <vector>
 #include <cstdint>
 
 namespace clt::scene_renderer
 {
-    struct gpu_validation {
-        bool available = false;
-        std::size_t expected = 0;
-        std::size_t actual = 0;
-        std::size_t missing = 0;
-        std::size_t unexpected = 0;
-        std::size_t duplicates = 0;
-        std::size_t out_of_range = 0;
-        std::size_t bad_commands = 0;
-
-        bool passed() const
-        {
-            return available && expected == actual && !missing &&
-                !unexpected && !duplicates && !out_of_range && !bad_commands;
-        }
+    struct culling_mesh {
+        const std::vector<std::array<float, 4>>* bounds = nullptr;
+        vk::buffer::resource* visible = nullptr;
+        vk::buffer::resource* indirect = nullptr;
+        std::uint32_t index_count = 0;
     };
 
-    // Call only after waiting for the frame fence. Checks every GPU-produced
-    // instance ID against the exact frustum used by the compute shader.
-    gpu_validation validate_gpu_visibility();
+    struct culling_readback {
+        std::array<vk::util::math::vec4, 6> planes{};
+        std::vector<culling_mesh> meshes;
+        bool valid = false;
+    };
+
+    // Readback views are valid until the next synchronize() or shutdown().
+    culling_readback culling_data();
 
     void create_frame_resources();
     void release_frame_resources();

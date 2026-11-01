@@ -500,83 +500,24 @@ namespace clt::scene_renderer
         vk::shader::destroy(module);
     }
 
-    gpu_validation validate_gpu_visibility()
+    culling_readback culling_data()
     {
         auto& data = get();
-        gpu_validation result;
-        if (!data.gpu_planes_valid)
-        {
-            return result;
-        }
-        result.available = true;
+        culling_readback result;
+        result.planes = data.last_gpu_planes;
+        result.valid = data.gpu_planes_valid;
+        result.meshes.reserve(data.meshes.size());
 
         for (auto& mesh : data.meshes)
         {
-            if (mesh.transforms.empty()) continue;
-
-            const auto* draw = static_cast<const vk::DrawIndexedIndirectCommand*>(
-                vk::buffer::map(mesh.indirect_buffer)
-            );
-            const std::size_t actual = draw->instanceCount;
-            result.actual += actual;
-            if (draw->indexCount != mesh.index_count || draw->firstIndex ||
-                draw->vertexOffset || draw->firstInstance)
+            if (!mesh.transforms.empty())
             {
-                ++result.bad_commands;
-            }
-
-            std::vector<std::uint8_t> expected(mesh.bounds.size(), 0);
-            for (std::size_t i = 0; i < mesh.bounds.size(); ++i)
-            {
-                const auto& sphere = mesh.bounds[i];
-                bool visible = true;
-                for (const auto& plane : data.last_gpu_planes)
-                {
-                    const float distance = plane.x * sphere[0] +
-                        plane.y * sphere[1] + plane.z * sphere[2] + plane.w;
-                    if (distance < -sphere[3])
-                    {
-                        visible = false;
-                        break;
-                    }
-                }
-                expected[i] = std::uint8_t(visible);
-                result.expected += visible;
-            }
-
-            const auto* ids = static_cast<const std::uint32_t*>(
-                vk::buffer::map(mesh.visible_buffer)
-            );
-            const std::size_t readable = std::min(actual, mesh.bounds.size());
-            result.out_of_range += actual - readable;
-
-            for (std::size_t i = 0; i < readable; ++i)
-            {
-                const auto id = ids[i];
-                if (id >= expected.size())
-                {
-                    ++result.out_of_range;
-                }
-                else if (expected[id] == 0)
-                {
-                    ++result.unexpected;
-                }
-                else if (expected[id] == 2)
-                {
-                    ++result.duplicates;
-                }
-                else
-                {
-                    expected[id] = 2;
-                }
-            }
-
-            for (auto value : expected)
-            {
-                result.missing += value == 1;
+                result.meshes.push_back({
+                    &mesh.bounds, &mesh.visible_buffer,
+                    &mesh.indirect_buffer, mesh.index_count
+                });
             }
         }
-
         return result;
     }
 
