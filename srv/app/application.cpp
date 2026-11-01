@@ -186,7 +186,7 @@ namespace srv::application
                     patch.instances = std::move(imported.instances);
                 }
                 const bool final = get()->next_texture == imported.textures.size() &&
-                    !patch.meshes.empty();
+                    (patch.textures.empty() || imported.meshes.empty());
                 append_scene(std::move(patch), final);
                 if (final) get()->importing.reset();
             }
