@@ -12,9 +12,10 @@ namespace game::options
         return &data;
     }
 
-    void init(int argc, char** argv)
+    void init(int argc, char** argv, mode default_mode)
     {
         state result;
+        result.mode = default_mode;
         bool mode_selected = false;
         bool host_specified = false;
         bool bind_specified = false;
