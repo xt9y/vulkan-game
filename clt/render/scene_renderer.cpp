@@ -27,8 +27,17 @@ namespace clt::scene_renderer
             mat4 normal;
         };
 
+        struct draw_parameters {
+            mat4 view_projection;
+            std::array<float, 4> base_color;
+            std::array<float, 4> surface;
+            std::array<float, 4> emissive;
+        };
+        static_assert(sizeof(draw_parameters) <= 128);
+
         struct gpu_mesh {
             std::uint32_t id = 0;
+            ::scene::material surface;
             vk::buffer::resource vertices;
             vk::buffer::resource indices;
             vk::buffer::resource instance_buffer;
@@ -158,9 +167,10 @@ namespace clt::scene_renderer
                 fragment_shader = vk::shader::create(fragment_code);
 
                 vk::PushConstantRange range{};
-                range.stageFlags = vk::ShaderStageFlagBits::eVertex;
+                range.stageFlags = vk::ShaderStageFlagBits::eVertex |
+                    vk::ShaderStageFlagBits::eFragment;
                 range.offset = 0;
-                range.size = sizeof(mat4);
+                range.size = sizeof(draw_parameters);
 
                 vk::PipelineLayoutCreateInfo layout_info{};
                 layout_info.pushConstantRangeCount = 1;
@@ -186,13 +196,16 @@ namespace clt::scene_renderer
                     1, sizeof(std::uint32_t), vk::VertexInputRate::eInstance
                 };
 
-                std::array<vk::VertexInputAttributeDescription, 3> attributes{};
+                std::array<vk::VertexInputAttributeDescription, 4> attributes{};
                 attributes[0] = vk::VertexInputAttributeDescription{0, 0, vk::Format::eR32G32B32Sfloat,
                                  offsetof(::scene::vertex, position)};
                 attributes[1] = vk::VertexInputAttributeDescription{1, 0, vk::Format::eR32G32B32Sfloat,
                                  offsetof(::scene::vertex, normal)};
                 attributes[2] = vk::VertexInputAttributeDescription{
-                    2, 1, vk::Format::eR32Uint, 0
+                    2, 0, vk::Format::eR32G32Sfloat, offsetof(::scene::vertex, u)
+                };
+                attributes[3] = vk::VertexInputAttributeDescription{
+                    3, 1, vk::Format::eR32Uint, 0
                 };
 
                 vk::PipelineVertexInputStateCreateInfo vertex_input{};
@@ -824,6 +837,7 @@ namespace clt::scene_renderer
                 {
                     gpu_mesh result;
                     result.id = mesh.id;
+                    result.surface = mesh.surface;
                     result.index_count =
                         static_cast<std::uint32_t>(mesh.indices.size());
 
@@ -1085,11 +1099,6 @@ namespace clt::scene_renderer
 
         if (data.snapshot)
         {
-            command.pushConstants(
-                data.layout, vk::ShaderStageFlagBits::eVertex,
-                0, sizeof(view_projection), &view_projection
-            );
-
             for (const auto& mesh : data.meshes)
             {
                 if (mesh.transforms.empty())
@@ -1097,6 +1106,19 @@ namespace clt::scene_renderer
                     continue;
                 }
 
+                draw_parameters params{
+                    view_projection,
+                    mesh.surface.base_color,
+                    {mesh.surface.metallic, mesh.surface.roughness,
+                     mesh.surface.occlusion, mesh.surface.alpha_cutoff},
+                    {mesh.surface.emissive[0], mesh.surface.emissive[1],
+                     mesh.surface.emissive[2], float(mesh.surface.alpha_mode)}
+                };
+                command.pushConstants(
+                    data.layout, vk::ShaderStageFlagBits::eVertex |
+                    vk::ShaderStageFlagBits::eFragment,
+                    0, sizeof(params), &params
+                );
                 const std::array<vk::Buffer, 2> buffers{
                     mesh.vertices.handle, mesh.frames.at(image).visible.handle
                 };
