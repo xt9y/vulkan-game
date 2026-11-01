@@ -6,6 +6,7 @@
 #include "srv/shared/net/movement.hpp"
 
 #include <deque>
+#include <exception>
 #include <optional>
 
 #include <atomic>
@@ -32,6 +33,9 @@ namespace clt::connection
         std::mutex scene_mutex;
         std::shared_ptr<const ::scene::state> scene;
 
+        std::mutex error_mutex;
+        std::exception_ptr worker_error;
+
         std::mutex player_mutex;
 
         std::deque<::player::input> outgoing;
@@ -43,6 +47,7 @@ namespace clt::connection
 
     state* get();
     std::shared_ptr<const ::scene::state> snapshot();
+    void check_error();
     void send_input(const ::player::input& input);
     std::optional<net::movement::snapshot> take_authority();
     void init();

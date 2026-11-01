@@ -75,8 +75,10 @@ namespace clt::application
         {
             while (running())
             {
+                connection::check_error();
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
+            connection::check_error();
 
             const bool connected = connection::get()->connected.load(std::memory_order_relaxed);
             const auto scene = connection::snapshot();
@@ -123,6 +125,7 @@ namespace clt::application
             while (running() && !window::should_close() &&
                    !render_stop.load(std::memory_order_relaxed))
             {
+                connection::check_error();
                 window::poll_events();
 
                 const auto frame = input::poll();

@@ -647,6 +647,7 @@ namespace
 
         while (std::chrono::duration<double>(clock::now() - started).count() < seconds)
         {
+            clt::connection::check_error();
             clt::window::poll_events();
 
             if (clt::window::should_close())
@@ -900,6 +901,7 @@ int main()
         while ((!clt::connection::get()->scene_complete.load(std::memory_order_relaxed) ||
                 clt::prediction::ticks() < 10) && clock::now() < deadline)
         {
+            clt::connection::check_error();
             clt::window::poll_events();
 
             if (clock::now() >= next_progress)
