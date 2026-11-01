@@ -452,9 +452,10 @@ namespace clt::postprocess
                 tone[0] = {data.sampler, current.hdr.view, vk::ImageLayout::eGeneral};
                 tone[1] = {{}, current.ldr.view, vk::ImageLayout::eGeneral};
                 update(current.tone, tone, 1);
-                std::vector<vk::DescriptorImageInfo> presented{{
-                    data.sampler, current.ldr.view, vk::ImageLayout::eGeneral
-                }};
+                std::vector<vk::DescriptorImageInfo> presented(1);
+                presented[0].sampler = data.sampler;
+                presented[0].imageView = current.ldr.view;
+                presented[0].imageLayout = vk::ImageLayout::eGeneral;
                 update(current.presentation, presented, 1);
             }
         }

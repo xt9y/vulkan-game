@@ -359,7 +359,6 @@ namespace clt::scene_renderer
             auto& data = get();
             const auto extent = vk::swapchain::get()->extent;
             state::target target{};
-            const auto device = vk::device::get()->handle;
             try
             {
                 for (std::size_t i = 0; i < color_formats.size(); ++i)
