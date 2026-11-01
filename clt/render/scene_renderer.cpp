@@ -1049,6 +1049,7 @@ namespace clt::scene_renderer
 
         auto& data = get();
         data.timings = {};
+        data.timings.gpu_culling = data.gpu_culling;
         const auto extent = vk::swapchain::get()->extent;
 
         std::array<vk::ClearValue, 2> clear{};
@@ -1063,6 +1064,87 @@ namespace clt::scene_renderer
         begin.renderArea = vk::Rect2D{vk::Offset2D{0, 0}, extent};
         begin.clearValueCount = clear.size();
         begin.pClearValues = clear.data();
+
+        // Optional GPU visibility: compact instance IDs into the same vertex
+        // buffer consumed by the graphics pipeline, and write indirect counts.
+        if (data.gpu_culling && data.snapshot)
+        {
+            const auto started = clock::now();
+            const auto view_projection = camera::projection(
+                float(extent.width) / float(extent.height)
+            ) * camera::view();
+            const auto camera_planes = frustum(view_projection);
+            cull_parameters params;
+            for (std::size_t i = 0; i < params.planes.size(); ++i)
+            {
+                const auto& plane = camera_planes[i];
+                const float inverse = 1.0f / std::max(plane.magnitude, 1e-6f);
+                params.planes[i] = {
+                    plane.normal.x * inverse,
+                    plane.normal.y * inverse,
+                    plane.normal.z * inverse,
+                    plane.offset * inverse
+                };
+            }
+
+            for (const auto& mesh : data.meshes)
+            {
+                if (!mesh.instances.empty())
+                {
+                    command.fillBuffer(
+                        mesh.indirect_buffer.handle,
+                        offsetof(vk::DrawIndexedIndirectCommand, instanceCount),
+                        sizeof(std::uint32_t), 0
+                    );
+                }
+            }
+
+            vk::MemoryBarrier transfer{};
+            transfer.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+            transfer.dstAccessMask = vk::AccessFlagBits::eShaderRead |
+                vk::AccessFlagBits::eShaderWrite;
+            command.pipelineBarrier(
+                vk::PipelineStageFlagBits::eTransfer,
+                vk::PipelineStageFlagBits::eComputeShader,
+                {}, {transfer}, {}, {}
+            );
+
+            command.bindPipeline(vk::PipelineBindPoint::eCompute, data.cull_pipeline);
+            for (const auto& mesh : data.meshes)
+            {
+                if (mesh.instances.empty())
+                {
+                    continue;
+                }
+
+                params.count = static_cast<std::uint32_t>(mesh.instances.size());
+                command.bindDescriptorSets(
+                    vk::PipelineBindPoint::eCompute,
+                    data.cull_layout, 0, {mesh.instance_set}, {}
+                );
+                command.pushConstants(
+                    data.cull_layout, vk::ShaderStageFlagBits::eCompute,
+                    0, sizeof(params), &params
+                );
+                command.dispatch((params.count + 127u) / 128u, 1, 1);
+                data.timings.gpu_candidates += mesh.instances.size();
+            }
+
+            vk::MemoryBarrier finished{};
+            finished.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
+            finished.dstAccessMask = vk::AccessFlagBits::eVertexAttributeRead |
+                vk::AccessFlagBits::eIndirectCommandRead;
+            command.pipelineBarrier(
+                vk::PipelineStageFlagBits::eComputeShader,
+                vk::PipelineStageFlagBits::eVertexInput |
+                vk::PipelineStageFlagBits::eDrawIndirect,
+                {}, {finished}, {}, {}
+            );
+
+            data.timings.gpu_dispatch_ms =
+                std::chrono::duration<double, std::milli>(
+                    clock::now() - started).count();
+        }
 
         command.beginRenderPass(begin, vk::SubpassContents::eInline);
 
@@ -1110,6 +1192,33 @@ namespace clt::scene_renderer
 
             for (auto& mesh : data.meshes)
             {
+                if (data.gpu_culling)
+                {
+                    if (mesh.instances.empty())
+                    {
+                        continue;
+                    }
+
+                    const std::array<vk::Buffer, 2> buffers{
+                        mesh.vertices.handle, mesh.visible_buffer.handle
+                    };
+                    const std::array<vk::DeviceSize, 2> offsets{0, 0};
+                    command.bindDescriptorSets(
+                        vk::PipelineBindPoint::eGraphics,
+                        data.layout, 0, {mesh.instance_set}, {}
+                    );
+                    command.bindVertexBuffers(0, buffers, offsets);
+                    command.bindIndexBuffer(
+                        mesh.indices.handle, 0, vk::IndexType::eUint32
+                    );
+                    command.drawIndexedIndirect(
+                        mesh.indirect_buffer.handle, 0, 1,
+                        sizeof(vk::DrawIndexedIndirectCommand)
+                    );
+                    ++data.timings.draw_calls;
+                    continue;
+                }
+
                 if (recull)
                 {
                     const auto start = clock::now();

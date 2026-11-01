@@ -11,6 +11,9 @@ namespace clt::scene_renderer
         double cull_ms = 0;
         double index_upload_ms = 0;
         double commands_ms = 0;
+        double gpu_dispatch_ms = 0;
+        bool gpu_culling = false;
+        std::size_t gpu_candidates = 0;
         std::size_t tested_nodes = 0;
         std::size_t accepted_groups = 0;
         std::size_t cache_hits = 0;
