@@ -4,13 +4,12 @@
 
 namespace clt::postprocess
 {
-    struct settings {
-        bool lighting = true;
-        bool tonemapping = true;
-        float exposure = 1.0f;
-    };
+    enum class effect { lighting, tonemapping };
 
-    settings& options();
+    bool enabled(effect value);
+    void set(effect value, bool enabled);
+    void toggle(effect value);
+    void set_exposure(float exposure);
     void create();
     void release();
     void lighting(vk::CommandBuffer command, std::uint32_t image);

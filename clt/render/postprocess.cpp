@@ -2,6 +2,8 @@
 #include "scene_renderer.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <mutex>
 #include <array>
 #include <cstdlib>
 #include <stdexcept>
@@ -29,7 +31,6 @@ namespace clt::postprocess
         };
 
         struct state {
-            settings controls;
             std::vector<frame> frames;
             vk::Sampler sampler{};
             vk::DescriptorSetLayout lighting_set{};
@@ -50,6 +51,11 @@ namespace clt::postprocess
             static state data;
             return data;
         }
+
+        std::atomic<bool> use_lighting{true};
+        std::atomic<bool> use_tonemapping{true};
+        std::atomic<float> exposure_value{1.0f};
+        std::once_flag environment;
 
         struct push {
             std::int32_t enabled = 1;
@@ -279,7 +285,9 @@ namespace clt::postprocess
                      bool enabled)
         {
             const auto extent = vk::swapchain::get()->extent;
-            const push controls{enabled ? 1 : 0, get().controls.exposure};
+            const push controls{
+                enabled ? 1 : 0, exposure_value.load(std::memory_order_relaxed)
+            };
             command.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline);
             command.bindDescriptorSets(vk::PipelineBindPoint::eCompute, layout, 0, {set}, {});
             command.pushConstants(
@@ -290,9 +298,26 @@ namespace clt::postprocess
         }
     }
 
-    settings& options()
+    bool enabled(effect value)
     {
-        return get().controls;
+        return (value == effect::lighting ? use_lighting : use_tonemapping)
+            .load(std::memory_order_relaxed);
+    }
+
+    void set(effect value, bool active)
+    {
+        (value == effect::lighting ? use_lighting : use_tonemapping)
+            .store(active, std::memory_order_relaxed);
+    }
+
+    void toggle(effect value)
+    {
+        set(value, !enabled(value));
+    }
+
+    void set_exposure(float exposure)
+    {
+        exposure_value.store(std::max(0.0f, exposure), std::memory_order_relaxed);
     }
 
     void create()
@@ -309,10 +334,13 @@ namespace clt::postprocess
                 throw std::runtime_error("Required offscreen storage image format unsupported");
         }
 
-        if (const char* setting = std::getenv("VK_LIGHTING"))
-            data.controls.lighting = setting[0] != '0';
-        if (const char* setting = std::getenv("VK_TONEMAP"))
-            data.controls.tonemapping = setting[0] != '0';
+        std::call_once(environment, []
+        {
+            if (const char* setting = std::getenv("VK_LIGHTING"))
+                use_lighting.store(setting[0] != '0', std::memory_order_relaxed);
+            if (const char* setting = std::getenv("VK_TONEMAP"))
+                use_tonemapping.store(setting[0] != '0', std::memory_order_relaxed);
+        });
 
         try
         {
@@ -463,10 +491,7 @@ namespace clt::postprocess
         if (data.present_set) device.destroyDescriptorSetLayout(data.present_set);
         if (data.sampler) device.destroySampler(data.sampler);
 
-        // The settings survive swapchain resize.
-        const auto options = data.controls;
         data = {};
-        data.controls = options;
     }
 
     void lighting(vk::CommandBuffer command, std::uint32_t image)
@@ -479,7 +504,7 @@ namespace clt::postprocess
             current.initialized = true;
         }
         compute(command, get().lighting_pipeline, get().lighting_layout,
-                current.lighting, get().controls.lighting);
+                current.lighting, enabled(effect::lighting));
     }
 
     void tonemap(vk::CommandBuffer command, std::uint32_t image)
@@ -488,7 +513,7 @@ namespace clt::postprocess
                 vk::AccessFlagBits::eShaderRead);
         const auto& current = get().frames.at(image);
         compute(command, get().tone_pipeline, get().tone_layout,
-                current.tone, get().controls.tonemapping);
+                current.tone, enabled(effect::tonemapping));
     }
 
     void present(vk::CommandBuffer command, std::uint32_t image)

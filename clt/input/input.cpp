@@ -11,6 +11,8 @@ namespace clt::input
         bool captured = true;
         bool previous_tab = false;
         bool previous_escape = false;
+        bool previous_f6 = false;
+        bool previous_f7 = false;
         double last_x = 0;
         double last_y = 0;
     } // namespace
@@ -22,6 +24,8 @@ namespace clt::input
         captured = true;
         previous_tab = false;
         previous_escape = false;
+        previous_f6 = false;
+        previous_f7 = false;
 
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
@@ -69,6 +73,12 @@ namespace clt::input
         glfwGetCursorPos(window, &x, &y);
 
         frame result;
+        const bool f6 = down(GLFW_KEY_F6);
+        const bool f7 = down(GLFW_KEY_F7);
+        result.toggle_lighting = f6 && !previous_f6;
+        result.toggle_tonemapping = f7 && !previous_f7;
+        previous_f6 = f6;
+        previous_f7 = f7;
 
         if (captured && glfwGetWindowAttrib(window, GLFW_FOCUSED))
         {

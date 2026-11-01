@@ -7,6 +7,7 @@
 #include "clt/platform/vulkan_loader.hpp"
 #include "clt/platform/window.hpp"
 #include "clt/render/renderer.hpp"
+#include "clt/render/postprocess.hpp"
 #include "srv/game/application.hpp"
 
 #include <atomic>
@@ -129,6 +130,10 @@ namespace clt::application
                 window::poll_events();
 
                 const auto frame = input::poll();
+                if (frame.toggle_lighting)
+                    postprocess::toggle(postprocess::effect::lighting);
+                if (frame.toggle_tonemapping)
+                    postprocess::toggle(postprocess::effect::tonemapping);
                 camera::look(frame.mouse_x, frame.mouse_y);
                 prediction::controls(frame.buttons, camera::get()->yaw);
 
