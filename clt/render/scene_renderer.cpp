@@ -32,10 +32,14 @@ namespace clt::scene_renderer
             vk::buffer::resource vertices;
             vk::buffer::resource indices;
             vk::buffer::resource instance_buffer;
-            vk::buffer::resource visible_buffer;
             vk::buffer::resource bounds_buffer;
-            vk::buffer::resource indirect_buffer;
-            vk::DescriptorSet instance_set{};
+
+            struct per_image {
+                vk::buffer::resource visible;
+                vk::buffer::resource indirect;
+                vk::DescriptorSet set{};
+            };
+            std::vector<per_image> frames;
             std::vector<std::array<float, 4>> bounds;
             std::vector<instance_data> transforms;
             vec3 center;
@@ -61,6 +65,7 @@ namespace clt::scene_renderer
             vk::Pipeline cull_pipeline{};
             std::array<vec4, 6> last_gpu_planes{};
             bool gpu_planes_valid = false;
+            std::uint32_t last_image = 0;
 
             vk::RenderPass render_pass{};
             vk::PipelineLayout layout{};
@@ -95,17 +100,14 @@ namespace clt::scene_renderer
                 {
                     vk::buffer::destroy(mesh.instance_buffer);
                 }
-                if (mesh.visible_buffer.handle)
-                {
-                    vk::buffer::destroy(mesh.visible_buffer);
-                }
                 if (mesh.bounds_buffer.handle)
                 {
                     vk::buffer::destroy(mesh.bounds_buffer);
                 }
-                if (mesh.indirect_buffer.handle)
+                for (auto& frame : mesh.frames)
                 {
-                    vk::buffer::destroy(mesh.indirect_buffer);
+                    if (frame.visible.handle) vk::buffer::destroy(frame.visible);
+                    if (frame.indirect.handle) vk::buffer::destroy(frame.indirect);
                 }
             }
 
@@ -501,11 +503,12 @@ namespace clt::scene_renderer
 
         for (auto& mesh : data.meshes)
         {
-            if (!mesh.transforms.empty())
+            if (!mesh.transforms.empty() && data.last_image < mesh.frames.size())
             {
+                auto& frame = mesh.frames[data.last_image];
                 result.meshes.push_back({
-                    &mesh.bounds, &mesh.visible_buffer,
-                    &mesh.indirect_buffer, mesh.index_count
+                    &mesh.bounds, &frame.visible,
+                    &frame.indirect, mesh.index_count
                 });
             }
         }
@@ -591,38 +594,39 @@ namespace clt::scene_renderer
 
     void bind_instances(gpu_mesh& mesh)
     {
-        if (!mesh.instance_set || !mesh.instance_buffer.handle ||
-            !mesh.bounds_buffer.handle || !mesh.visible_buffer.handle ||
-            !mesh.indirect_buffer.handle)
+        if (!mesh.instance_buffer.handle || !mesh.bounds_buffer.handle)
         {
             return;
         }
 
-        const std::array<vk::Buffer, 4> buffers{
-            mesh.instance_buffer.handle,
-            mesh.bounds_buffer.handle,
-            mesh.visible_buffer.handle,
-            mesh.indirect_buffer.handle
-        };
-        const std::size_t count = buffers.size();
-        std::array<vk::DescriptorBufferInfo, 4> infos{};
-        std::array<vk::WriteDescriptorSet, 4> writes{};
-
-        for (std::size_t i = 0; i < count; ++i)
+        for (auto& frame : mesh.frames)
         {
-            infos[i].buffer = buffers[i];
-            infos[i].offset = 0;
-            infos[i].range = VK_WHOLE_SIZE;
-            writes[i].dstSet = mesh.instance_set;
-            writes[i].dstBinding = static_cast<std::uint32_t>(i);
-            writes[i].descriptorCount = 1;
-            writes[i].descriptorType = vk::DescriptorType::eStorageBuffer;
-            writes[i].pBufferInfo = &infos[i];
+            if (!frame.set || !frame.visible.handle || !frame.indirect.handle)
+            {
+                continue;
+            }
+            const std::array<vk::Buffer, 4> buffers{
+                mesh.instance_buffer.handle,
+                mesh.bounds_buffer.handle,
+                frame.visible.handle,
+                frame.indirect.handle
+            };
+            std::array<vk::DescriptorBufferInfo, 4> infos{};
+            std::array<vk::WriteDescriptorSet, 4> writes{};
+
+            for (std::uint32_t i = 0; i < buffers.size(); ++i)
+            {
+                infos[i].buffer = buffers[i];
+                infos[i].offset = 0;
+                infos[i].range = VK_WHOLE_SIZE;
+                writes[i].dstSet = frame.set;
+                writes[i].dstBinding = i;
+                writes[i].descriptorCount = 1;
+                writes[i].descriptorType = vk::DescriptorType::eStorageBuffer;
+                writes[i].pBufferInfo = &infos[i];
+            }
+            vk::device::get()->handle.updateDescriptorSets(writes, {});
         }
-        std::vector<vk::WriteDescriptorSet> updates(
-            writes.begin(), writes.begin() + count
-        );
-        vk::device::get()->handle.updateDescriptorSets(updates, {});
     }
 
     void refresh_instances(gpu_mesh& mesh, std::size_t first = 0)
@@ -665,25 +669,38 @@ namespace clt::scene_renderer
             );
         }
 
+
         const auto visible_bytes = mesh.bounds.size() * sizeof(std::uint32_t);
-        if (!mesh.visible_buffer.handle || mesh.visible_buffer.size < visible_bytes)
+        const auto count = vk::swapchain::get()->images.size();
+        mesh.frames.resize(count);
+        for (auto& frame : mesh.frames)
         {
-            auto replacement = vk::buffer::create(
-                std::max<vk::DeviceSize>(
-                    static_cast<vk::DeviceSize>(visible_bytes),
-                    mesh.visible_buffer.size * 2
-                ),
-                vk::BufferUsageFlagBits::eVertexBuffer |
-                vk::BufferUsageFlagBits::eStorageBuffer,
-                vk::MemoryPropertyFlagBits::eHostVisible |
-                vk::MemoryPropertyFlagBits::eHostCoherent
-            );
-            if (mesh.visible_buffer.handle)
+            if (!frame.visible.handle || frame.visible.size < visible_bytes)
             {
-                vk::buffer::destroy(mesh.visible_buffer);
+                auto replacement = vk::buffer::create(
+                    std::max<vk::DeviceSize>(visible_bytes, frame.visible.size * 2),
+                    vk::BufferUsageFlagBits::eVertexBuffer |
+                    vk::BufferUsageFlagBits::eStorageBuffer,
+                    vk::MemoryPropertyFlagBits::eDeviceLocal
+                );
+                if (frame.visible.handle) vk::buffer::destroy(frame.visible);
+                frame.visible = replacement;
             }
-            mesh.visible_buffer = replacement;
-            bind_instances(mesh);
+
+            if (!frame.indirect.handle)
+            {
+                frame.indirect = vk::buffer::create(
+                    sizeof(vk::DrawIndexedIndirectCommand),
+                    vk::BufferUsageFlagBits::eStorageBuffer |
+                    vk::BufferUsageFlagBits::eIndirectBuffer |
+                    vk::BufferUsageFlagBits::eTransferDst,
+                    vk::MemoryPropertyFlagBits::eHostVisible |
+                    vk::MemoryPropertyFlagBits::eHostCoherent
+                );
+                vk::DrawIndexedIndirectCommand draw{};
+                draw.indexCount = mesh.index_count;
+                vk::buffer::write(frame.indirect, &draw, sizeof(draw));
+            }
         }
 
         const auto size = mesh.bounds.size() * sizeof(mesh.bounds.front());
@@ -696,12 +713,8 @@ namespace clt::scene_renderer
                 vk::MemoryPropertyFlagBits::eHostCoherent
             );
             vk::buffer::write(replacement, mesh.bounds.data(), size);
-            if (mesh.bounds_buffer.handle)
-            {
-                vk::buffer::destroy(mesh.bounds_buffer);
-            }
+            if (mesh.bounds_buffer.handle) vk::buffer::destroy(mesh.bounds_buffer);
             mesh.bounds_buffer = replacement;
-            bind_instances(mesh);
         }
         else if (first < mesh.bounds.size())
         {
@@ -711,22 +724,25 @@ namespace clt::scene_renderer
                 first * sizeof(mesh.bounds.front())
             );
         }
+        bind_instances(mesh);
+    }
 
-        if (!mesh.indirect_buffer.handle)
+    bool needs_sync()
+    {
+        return connection::snapshot() != get().snapshot;
+    }
+
+    void reset_scene()
+    {
+        auto& data = get();
+        destroy_meshes(data.meshes);
+        if (data.instance_pool)
         {
-            mesh.indirect_buffer = vk::buffer::create(
-                sizeof(vk::DrawIndexedIndirectCommand),
-                vk::BufferUsageFlagBits::eStorageBuffer |
-                vk::BufferUsageFlagBits::eIndirectBuffer |
-                vk::BufferUsageFlagBits::eTransferDst,
-                vk::MemoryPropertyFlagBits::eHostVisible |
-                vk::MemoryPropertyFlagBits::eHostCoherent
-            );
-            vk::DrawIndexedIndirectCommand draw{};
-            draw.indexCount = mesh.index_count;
-            vk::buffer::write(mesh.indirect_buffer, &draw, sizeof(draw));
-            bind_instances(mesh);
+            vk::device::get()->handle.destroyDescriptorPool(data.instance_pool);
+            data.instance_pool = nullptr;
         }
+        data.snapshot.reset();
+        data.gpu_planes_valid = false;
     }
 
     void synchronize()
@@ -892,12 +908,13 @@ namespace clt::scene_renderer
                 pool_size.type = vk::DescriptorType::eStorageBuffer;
                 pool_size.descriptorCount = static_cast<std::uint32_t>(
                     std::max<std::size_t>(1, meshes.size()) *
-                    4
+                    std::max<std::size_t>(1, vk::swapchain::get()->images.size()) * 4
                 );
 
                 vk::DescriptorPoolCreateInfo pool_info{};
                 pool_info.maxSets = static_cast<std::uint32_t>(
-                    std::max<std::size_t>(1, meshes.size())
+                    std::max<std::size_t>(1, meshes.size()) *
+                    std::max<std::size_t>(1, vk::swapchain::get()->images.size())
                 );
                 pool_info.poolSizeCount = 1;
                 pool_info.pPoolSizes = &pool_size;
@@ -913,11 +930,14 @@ namespace clt::scene_renderer
 
                     refresh_instances(mesh);
 
-                    vk::DescriptorSetAllocateInfo allocate{};
-                    allocate.descriptorPool = new_pool;
-                    allocate.descriptorSetCount = 1;
-                    allocate.pSetLayouts = &data.instance_layout;
-                    mesh.instance_set = device.allocateDescriptorSets(allocate).front();
+                    for (auto& frame : mesh.frames)
+                    {
+                        vk::DescriptorSetAllocateInfo allocate{};
+                        allocate.descriptorPool = new_pool;
+                        allocate.descriptorSetCount = 1;
+                        allocate.pSetLayouts = &data.instance_layout;
+                        frame.set = device.allocateDescriptorSets(allocate).front();
+                    }
                     bind_instances(mesh);
                 }
             }
@@ -946,6 +966,7 @@ namespace clt::scene_renderer
     {
         auto& data = get();
         const auto extent = vk::swapchain::get()->extent;
+        data.last_image = image;
 
         std::array<vk::ClearValue, 4> clear{};
         for (std::size_t i = 0; i < 3; ++i)
@@ -991,7 +1012,7 @@ namespace clt::scene_renderer
                 if (!mesh.transforms.empty())
                 {
                     command.fillBuffer(
-                        mesh.indirect_buffer.handle,
+                        mesh.frames.at(image).indirect.handle,
                         offsetof(vk::DrawIndexedIndirectCommand, instanceCount),
                         sizeof(std::uint32_t), 0
                     );
@@ -1019,7 +1040,7 @@ namespace clt::scene_renderer
                 params.count = static_cast<std::uint32_t>(mesh.transforms.size());
                 command.bindDescriptorSets(
                     vk::PipelineBindPoint::eCompute,
-                    data.cull_layout, 0, {mesh.instance_set}, {}
+                    data.cull_layout, 0, {mesh.frames.at(image).set}, {}
                 );
                 command.pushConstants(
                     data.cull_layout, vk::ShaderStageFlagBits::eCompute,
@@ -1079,19 +1100,19 @@ namespace clt::scene_renderer
                 }
 
                 const std::array<vk::Buffer, 2> buffers{
-                    mesh.vertices.handle, mesh.visible_buffer.handle
+                    mesh.vertices.handle, mesh.frames.at(image).visible.handle
                 };
                 const std::array<vk::DeviceSize, 2> offsets{0, 0};
                 command.bindDescriptorSets(
                     vk::PipelineBindPoint::eGraphics,
-                    data.layout, 0, {mesh.instance_set}, {}
+                    data.layout, 0, {mesh.frames.at(image).set}, {}
                 );
                 command.bindVertexBuffers(0, buffers, offsets);
                 command.bindIndexBuffer(
                     mesh.indices.handle, 0, vk::IndexType::eUint32
                 );
                 command.drawIndexedIndirect(
-                    mesh.indirect_buffer.handle, 0, 1,
+                    mesh.frames.at(image).indirect.handle, 0, 1,
                     sizeof(vk::DrawIndexedIndirectCommand)
                 );
             }
