@@ -64,8 +64,7 @@ namespace srv::assets
         vk::util::math::vec3 normal(const fastgltf::math::nmat4x4& m,
                                     fastgltf::math::fvec3 n)
         {
-            // The inverse-transpose of a 3x3 matrix equals its cofactor
-            // matrix up to a scalar. Preserve mirrored scale separately.
+            // Transform normals with the inverse transpose, including mirrored scale.
             using vec3 = vk::util::math::vec3;
             const vec3 a{float(m[0][0]), float(m[0][1]), float(m[0][2])};
             const vec3 b{float(m[1][0]), float(m[1][1]), float(m[1][2])};
@@ -73,7 +72,8 @@ namespace srv::assets
             const auto x = cross(b, c);
             const auto y = cross(c, a);
             const auto z = cross(a, b);
-            auto transformed = x * n[0] + y * n[1] + z * n[2];
+            auto transformed = (x * n[0] + y * n[1] + z * n[2]) *
+                (dot(a, x) < 0.0f ? -1.0f : 1.0f);
             const float d = length(transformed);
             return d > 1e-8f ? transformed * (1.f / d) : vec3{0, 1, 0};
         }
@@ -157,6 +157,35 @@ namespace srv::assets
 
                 if (mesh.indices.empty() || mesh.indices.size() % 3)
                     throw std::runtime_error("Invalid triangle index count");
+
+                if (n == primitive.attributes.end())
+                {
+                    for (auto& vertex : mesh.vertices)
+                        vertex.normal = {0, 0, 0};
+                    for (std::size_t i = 0; i < mesh.indices.size(); i += 3)
+                    {
+                        const auto a = mesh.indices[i];
+                        const auto b = mesh.indices[i + 1];
+                        const auto c = mesh.indices[i + 2];
+                        if (a >= mesh.vertices.size() || b >= mesh.vertices.size() ||
+                            c >= mesh.vertices.size())
+                            throw std::runtime_error("Invalid glTF mesh indices");
+                        const auto face = cross(
+                            mesh.vertices[b].position - mesh.vertices[a].position,
+                            mesh.vertices[c].position - mesh.vertices[a].position
+                        );
+                        mesh.vertices[a].normal = mesh.vertices[a].normal + face;
+                        mesh.vertices[b].normal = mesh.vertices[b].normal + face;
+                        mesh.vertices[c].normal = mesh.vertices[c].normal + face;
+                    }
+                    for (auto& vertex : mesh.vertices)
+                    {
+                        const auto length_squared = dot(vertex.normal, vertex.normal);
+                        vertex.normal = length_squared > 1e-12f ?
+                            vertex.normal * (1.0f / std::sqrt(length_squared)) :
+                            vk::util::math::vec3{0, 1, 0};
+                    }
+                }
 
                 ::scene::instance instance;
                 instance.id = first_instance++;
