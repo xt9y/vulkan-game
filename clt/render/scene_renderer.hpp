@@ -2,10 +2,23 @@
 
 #include <vk/vk.hpp>
 
+#include <cstddef>
 #include <cstdint>
 
 namespace clt::scene_renderer
 {
+    struct draw_stats {
+        double cull_ms = 0;
+        double index_upload_ms = 0;
+        double commands_ms = 0;
+        std::size_t tested_nodes = 0;
+        std::size_t accepted_groups = 0;
+        std::size_t visible_instances = 0;
+        std::size_t draw_calls = 0;
+    };
+
+    draw_stats last_stats();
+
     void create_frame_resources();
     void release_frame_resources();
     
