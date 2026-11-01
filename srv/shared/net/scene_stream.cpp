@@ -105,7 +105,7 @@ namespace net::scene_stream
             throw std::runtime_error("Scene snapshot exceeds 8 MiB");
         }
 
-        std::vector<std::uint8_t> bytes{'S', 'C', 'N', '1'};
+        std::vector<std::uint8_t> bytes{'S', 'C', 'N', '2'};
 
         add(bytes, std::uint32_t(scene.meshes.size()));
         add(bytes, std::uint32_t(scene.instances.size()));
@@ -124,6 +124,15 @@ namespace net::scene_stream
             add(bytes, mesh.id);
             add(bytes, std::uint32_t(mesh.vertices.size()));
             add(bytes, std::uint32_t(mesh.indices.size()));
+
+            for (auto value : mesh.surface.base_color) add_float(bytes, value);
+            for (auto value : mesh.surface.emissive) add_float(bytes, value);
+            add_float(bytes, mesh.surface.metallic);
+            add_float(bytes, mesh.surface.roughness);
+            add_float(bytes, mesh.surface.occlusion);
+            add_float(bytes, mesh.surface.alpha_cutoff);
+            add(bytes, mesh.surface.alpha_mode);
+            add(bytes, mesh.surface.double_sided ? 1u : 0u);
 
             for (const auto& vertex : mesh.vertices)
             {
@@ -180,7 +189,7 @@ namespace net::scene_stream
             bytes[0] != 'S' ||
             bytes[1] != 'C' ||
             bytes[2] != 'N' ||
-            bytes[3] != '1')
+            bytes[3] != '2')
         {
             return false;
         }
@@ -217,6 +226,21 @@ namespace net::scene_stream
             {
                 return false;
             }
+
+            if (input.remaining() < 52) return false;
+            for (auto& value : mesh.surface.base_color)
+                if (!input.take_float(value)) return false;
+            for (auto& value : mesh.surface.emissive)
+                if (!input.take_float(value)) return false;
+            if (!input.take_float(mesh.surface.metallic) ||
+                !input.take_float(mesh.surface.roughness) ||
+                !input.take_float(mesh.surface.occlusion) ||
+                !input.take_float(mesh.surface.alpha_cutoff) ||
+                !input.take(mesh.surface.alpha_mode)) return false;
+            std::uint32_t double_sided = 0;
+            if (!input.take(double_sided) || double_sided > 1 ||
+                mesh.surface.alpha_mode > 2) return false;
+            mesh.surface.double_sided = double_sided != 0;
 
             mesh.vertices.resize(vertices);
             mesh.indices.resize(indices);
