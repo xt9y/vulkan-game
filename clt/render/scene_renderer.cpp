@@ -1196,7 +1196,7 @@ namespace clt::scene_renderer
                     float(extent.width) / float(extent.height)
                 ) * camera::view();
 
-            command.pushConstants(            command.pushConstants(
+            command.pushConstants(
                 data.layout, vk::ShaderStageFlagBits::eVertex,
                 0, sizeof(view_projection), &view_projection
             );
