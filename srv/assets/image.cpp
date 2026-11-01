@@ -1,4 +1,5 @@
 #include "image.hpp"
+#include "srv/shared/net/scene_stream.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_STDIO
@@ -53,7 +54,7 @@ namespace srv::assets
                 reinterpret_cast<const stbi_uc*>(source.data()),
                 int(source.size()), &w, &h, &channels, 4);
             if (!pixels || w <= 0 || h <= 0 ||
-                std::uint64_t(w) * h * 4 > 8 * 1024 * 1024 - 128)
+                std::uint64_t(w) * h * 4 > net::scene_stream::max_scene_bytes - 128)
             {
                 stbi_image_free(pixels);
                 throw std::runtime_error("Invalid or oversized glTF texture");
