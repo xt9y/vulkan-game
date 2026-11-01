@@ -1,5 +1,6 @@
 #include "model.hpp"
 #include "image.hpp"
+#include "rig.hpp"
 
 #include <fastgltf/core.hpp>
 #include <fastgltf/tools.hpp>
@@ -99,6 +100,14 @@ namespace srv::assets
         auto asset = std::move(parsed.get());
         ::scene::state result;
         result.textures = images(asset, 1000);
+        std::vector<std::vector<std::uint32_t>> remaps;
+        remaps.reserve(asset.skins.size());
+        for (std::size_t i = 0; i < asset.skins.size(); ++i)
+        {
+            auto imported = import_rig(asset, i);
+            remaps.push_back(std::move(imported.skin_joints));
+            result.skins.push_back(serialize_rig(asset, i, 1000 + std::uint32_t(i)));
+        }
         if (asset.scenes.empty()) return result;
 
         const auto scene_index = asset.defaultScene.value_or(std::size_t(0));
@@ -109,9 +118,7 @@ namespace srv::assets
             [&](fastgltf::Node& node, const fastgltf::math::nmat4x4& world)
         {
             if (!node.meshIndex || !node.visible) return;
-            if (node.skinIndex)
-                throw std::runtime_error("Skinned glTF needs animation asset import");
-
+            const bool skinned = node.skinIndex.has_value();
             const auto& source_mesh = asset.meshes.at(*node.meshIndex);
             for (const auto& primitive : source_mesh.primitives)
             {
@@ -124,21 +131,34 @@ namespace srv::assets
                 const auto& positions = asset.accessors.at(p->accessorIndex);
                 const auto n = primitive.findAttribute("NORMAL");
                 const auto u = primitive.findAttribute("TEXCOORD_0");
+                const auto joints = primitive.findAttribute("JOINTS_0");
+                const auto weights = primitive.findAttribute("WEIGHTS_0");
+                if (skinned && (joints == primitive.attributes.end() ||
+                                weights == primitive.attributes.end()))
+                    throw std::runtime_error("Skin requires JOINTS_0 and WEIGHTS_0");
 
                 ::scene::mesh mesh;
                 mesh.id = first_mesh++;
+                mesh.skin_id = skinned ? 1000 + std::uint32_t(*node.skinIndex) : 0;
                 mesh.surface = material(asset, primitive, 1000);
                 mesh.vertices.resize(positions.count);
 
                 for (std::size_t i = 0; i < positions.count; ++i)
                 {
                     auto& vertex = mesh.vertices[i];
-                    vertex.position = position(world,
-                        fastgltf::getAccessorElement<fastgltf::math::fvec3>(asset, positions, i));
+                    const auto p = fastgltf::getAccessorElement<fastgltf::math::fvec3>(
+                        asset, positions, i);
+                    vertex.position = skinned ? vk::util::math::vec3{p[0], p[1], p[2]} :
+                        position(world, p);
                     if (n != primitive.attributes.end())
-                        vertex.normal = normal(world,
-                            fastgltf::getAccessorElement<fastgltf::math::fvec3>(
-                                asset, asset.accessors[n->accessorIndex], i));
+                    {
+                        const auto normal_value = fastgltf::getAccessorElement<
+                            fastgltf::math::fvec3>(asset, asset.accessors[n->accessorIndex], i);
+                        vertex.normal = skinned ?
+                            vk::util::math::vec3{normal_value[0], normal_value[1],
+                                                 normal_value[2]} :
+                            normal(world, normal_value);
+                    }
                     else
                         vertex.normal = {0, 1, 0};
                     if (u != primitive.attributes.end())
@@ -147,6 +167,26 @@ namespace srv::assets
                             asset, asset.accessors[u->accessorIndex], i);
                         vertex.u = uv[0];
                         vertex.v = uv[1];
+                    }
+                    if (skinned)
+                    {
+                        const auto indices = fastgltf::getAccessorElement<
+                            fastgltf::math::u16vec4>(
+                            asset, asset.accessors[joints->accessorIndex], i);
+                        const auto w = fastgltf::getAccessorElement<fastgltf::math::fvec4>(
+                            asset, asset.accessors[weights->accessorIndex], i);
+                        const auto& remap = remaps.at(*node.skinIndex);
+                        float total = 0;
+                        for (int k = 0; k < 4; ++k)
+                        {
+                            if (indices[k] >= remap.size())
+                                throw std::runtime_error("Invalid skin joint index");
+                            vertex.joints[k] = remap[indices[k]];
+                            vertex.weights[k] = std::max(0.0f, w[k]);
+                            total += vertex.weights[k];
+                        }
+                        if (total <= 0.0f) throw std::runtime_error("Zero skin weights");
+                        for (float& weight : vertex.weights) weight /= total;
                     }
                 }
 
@@ -190,6 +230,8 @@ namespace srv::assets
                 ::scene::instance instance;
                 instance.id = first_instance++;
                 instance.mesh_id = mesh.id;
+                instance.animation = 0;
+                instance.animation_tick = 0;
                 result.meshes.push_back(std::move(mesh));
                 result.instances.push_back(instance);
             }
