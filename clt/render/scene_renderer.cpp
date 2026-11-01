@@ -771,7 +771,7 @@ namespace clt::scene_renderer
         // Scene batches are append-only; reuse immutable GPU meshes and grow
         // only the buffers containing newly generated instances.
         bool appended = data.snapshot && source &&
-            source->textures.size() == data.snapshot->textures.size() &&
+            source->textures.size() >= data.snapshot->textures.size() &&
             source->meshes.size() == data.snapshot->meshes.size() &&
             source->instances.size() >= data.snapshot->instances.size();
 
@@ -799,6 +799,8 @@ namespace clt::scene_renderer
 
         if (appended)
         {
+            if (source->textures.size() != data.snapshot->textures.size())
+                texture::synchronize(*source);
             std::vector<std::size_t> previous_counts;
             previous_counts.reserve(data.meshes.size());
             for (const auto& mesh : data.meshes)
