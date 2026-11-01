@@ -6,6 +6,7 @@
 
 #include "srv/shared/net/endpoint.hpp"
 #include "srv/shared/net/message.hpp"
+#include "srv/shared/net/animation.hpp"
 #include "srv/shared/net/scene_stream.hpp"
 #include "srv/shared/net/movement.hpp"
 #include "srv/shared/net/socket.hpp"
@@ -14,6 +15,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <cmath>
 #include <string>
 
 #include "srv/scene/test.hpp"
@@ -30,6 +32,7 @@ namespace srv::application
     {
         void receive_messages();
         void send_scene_fragments();
+        void send_animation_states();
         void handle(const net::endpoint::resource& peer, const net::message::resource& message);
         void reply(
             const net::endpoint::resource& peer,
@@ -143,6 +146,33 @@ namespace srv::application
         data.scene_batches.push_back({std::move(bytes), hash, final});
     }
 
+    bool play_animation(std::uint32_t instance_id, std::uint32_t clip,
+                        std::uint32_t overlay, float blend, std::uint32_t mask_root)
+    {
+        if (!std::isfinite(blend) || blend < 0.f || blend > 1.f)
+            return false;
+        auto& world = get()->scene;
+        const auto it = std::find_if(world.instances.begin(), world.instances.end(),
+            [=](const ::scene::instance& instance) { return instance.id == instance_id; });
+        if (it == world.instances.end()) return false;
+        const auto mesh = std::find_if(world.meshes.begin(), world.meshes.end(),
+            [&](const ::scene::mesh& entry) { return entry.id == it->mesh_id; });
+        if (mesh == world.meshes.end() || !mesh->skin_id) return false;
+        const auto skin = std::find_if(world.skins.begin(), world.skins.end(),
+            [&](const ::scene::skin& entry) { return entry.id == mesh->skin_id; });
+        if (skin == world.skins.end() || clip >= skin->clips.size() ||
+            (overlay != UINT32_MAX && overlay >= skin->clips.size()) ||
+            (mask_root != UINT32_MAX && mask_root >= skin->inverse_bind.size()))
+            return false;
+
+        it->animation = clip;
+        it->animation_tick = get()->tick;
+        it->overlay_animation = overlay;
+        it->overlay_weight = blend;
+        it->overlay_root = mask_root;
+        return true;
+    }
+
     int run()
     {
         if (!get()->initialized)
@@ -171,6 +201,7 @@ namespace srv::application
             // amount of network work done inside one authoritative tick.
             receive_messages();
             tick_players();
+            send_animation_states();
 
             // Publish at most one CPU asset batch per authoritative tick.
             if (get()->importing)
@@ -234,6 +265,7 @@ namespace srv::application
         get()->scene = {};
         get()->importing.reset();
         get()->next_texture = 0;
+        get()->animation_cursor = 0;
         get()->terrain = {};
         get()->tick = 0;
         get()->initialized = false;
@@ -383,6 +415,35 @@ namespace srv::application
                 existing->scene_request = message.value;
                 existing->scene_pending = true;
             }
+        }
+
+        void send_animation_states()
+        {
+            if (get()->tick % 6 != 0 || get()->scene.instances.empty()) return;
+            const auto& instances = get()->scene.instances;
+            const std::size_t count = std::min<std::size_t>(64, instances.size());
+            const std::size_t start = get()->animation_cursor % instances.size();
+            for (auto& client : session::get()->clients)
+            {
+                if (!client.active) continue;
+                for (std::size_t i = 0; i < count; ++i)
+                {
+                    const auto& instance = instances[(start + i) % instances.size()];
+                    const auto mesh = std::find_if(
+                        get()->scene.meshes.begin(), get()->scene.meshes.end(),
+                        [&](const ::scene::mesh& m) { return m.id == instance.mesh_id; });
+                    if (mesh == get()->scene.meshes.end() || !mesh->skin_id)
+                        continue;
+                    const auto message = net::animation::encode({
+                        client.token, get()->tick, instance.id, instance.animation,
+                        instance.animation_tick, instance.overlay_animation,
+                        instance.overlay_root, instance.overlay_weight
+                    });
+                    net::socket::send(
+                        get()->socket, client.endpoint, message.data(), message.size());
+                }
+            }
+            get()->animation_cursor = (start + count) % instances.size();
         }
 
         void send_scene_fragments()
