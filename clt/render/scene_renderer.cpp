@@ -2,6 +2,7 @@
 
 #include "clt/network/connection.hpp"
 #include "clt/render/upload.hpp"
+#include "clt/render/texture.hpp"
 #include "clt/view/camera.hpp"
 #include "srv/shared/scene/scene.hpp"
 
@@ -465,17 +466,19 @@ namespace clt::scene_renderer
         auto& data = get();
         data.shaders = {vertex_path, fragment_path};
 
-        std::array<vk::DescriptorSetLayoutBinding, 4> bindings{};
+        std::array<vk::DescriptorSetLayoutBinding, 9> bindings{};
         for (std::uint32_t i = 0; i < bindings.size(); ++i)
         {
             bindings[i].binding = i;
-            bindings[i].descriptorType = vk::DescriptorType::eStorageBuffer;
+            bindings[i].descriptorType = i < 4 ?
+                vk::DescriptorType::eStorageBuffer :
+                vk::DescriptorType::eCombinedImageSampler;
             bindings[i].descriptorCount = 1;
-            bindings[i].stageFlags = vk::ShaderStageFlagBits::eCompute;
+            bindings[i].stageFlags = i < 4 ?
+                vk::ShaderStageFlags(vk::ShaderStageFlagBits::eCompute) :
+                vk::ShaderStageFlags(vk::ShaderStageFlagBits::eFragment);
             if (i == 0)
-            {
                 bindings[i].stageFlags |= vk::ShaderStageFlagBits::eVertex;
-            }
         }
 
         const auto device = vk::device::get()->handle;
@@ -483,6 +486,7 @@ namespace clt::scene_renderer
         info.bindingCount = static_cast<std::uint32_t>(bindings.size());
         info.pBindings = bindings.data();
         data.instance_layout = device.createDescriptorSetLayout(info);
+        texture::init();
 
 
         vk::PushConstantRange range{};
@@ -649,6 +653,7 @@ namespace clt::scene_renderer
                 writes[i].pBufferInfo = &infos[i];
             }
             vk::device::get()->handle.updateDescriptorSets(writes, {});
+            texture::bind(frame.set, mesh.surface);
         }
     }
 
@@ -743,6 +748,7 @@ namespace clt::scene_renderer
     {
         auto& data = get();
         destroy_meshes(data.meshes);
+        texture::reset();
         if (data.instance_pool)
         {
             vk::device::get()->handle.destroyDescriptorPool(data.instance_pool);
@@ -765,6 +771,7 @@ namespace clt::scene_renderer
         // Scene batches are append-only; reuse immutable GPU meshes and grow
         // only the buffers containing newly generated instances.
         bool appended = data.snapshot && source &&
+            source->textures.size() == data.snapshot->textures.size() &&
             source->meshes.size() == data.snapshot->meshes.size() &&
             source->instances.size() >= data.snapshot->instances.size();
 
@@ -825,6 +832,11 @@ namespace clt::scene_renderer
 
         std::vector<gpu_mesh> meshes;
         vk::DescriptorPool new_pool{};
+
+        if (source)
+            texture::synchronize(*source);
+        else
+            texture::reset();
 
         if (source)
         {
@@ -920,20 +932,20 @@ namespace clt::scene_renderer
 
                 // Each mesh owns a descriptor referencing its persistent
                 // transform storage; no per-frame matrix upload is required.
-                vk::DescriptorPoolSize pool_size{};
-                pool_size.type = vk::DescriptorType::eStorageBuffer;
-                pool_size.descriptorCount = static_cast<std::uint32_t>(
-                    std::max<std::size_t>(1, meshes.size()) *
-                    std::max<std::size_t>(1, vk::swapchain::get()->images.size()) * 4
-                );
+                const auto count = std::max<std::size_t>(1, meshes.size()) *
+                    std::max<std::size_t>(1, vk::swapchain::get()->images.size());
+                std::array<vk::DescriptorPoolSize, 2> pool_sizes{{
+                    {vk::DescriptorType::eStorageBuffer, std::uint32_t(count * 4)},
+                    {vk::DescriptorType::eCombinedImageSampler, std::uint32_t(count * 5)}
+                }};
 
                 vk::DescriptorPoolCreateInfo pool_info{};
                 pool_info.maxSets = static_cast<std::uint32_t>(
                     std::max<std::size_t>(1, meshes.size()) *
                     std::max<std::size_t>(1, vk::swapchain::get()->images.size())
                 );
-                pool_info.poolSizeCount = 1;
-                pool_info.pPoolSizes = &pool_size;
+                pool_info.poolSizeCount = pool_sizes.size();
+                pool_info.pPoolSizes = pool_sizes.data();
                 const auto device = vk::device::get()->handle;
                 new_pool = device.createDescriptorPool(pool_info);
 
@@ -1106,13 +1118,20 @@ namespace clt::scene_renderer
                     continue;
                 }
 
+                const auto& m = mesh.surface;
+                const auto flags =
+                    (m.base_color_texture ? 1u : 0u) |
+                    (m.metallic_roughness_texture ? 2u : 0u) |
+                    (m.normal_texture ? 4u : 0u) |
+                    (m.occlusion_texture ? 8u : 0u) |
+                    (m.emissive_texture ? 16u : 0u) |
+                    (m.alpha_mode << 5);
                 draw_parameters params{
                     view_projection,
-                    mesh.surface.base_color,
-                    {mesh.surface.metallic, mesh.surface.roughness,
-                     mesh.surface.occlusion, mesh.surface.alpha_cutoff},
-                    {mesh.surface.emissive[0], mesh.surface.emissive[1],
-                     mesh.surface.emissive[2], float(mesh.surface.alpha_mode)}
+                    m.base_color,
+                    {m.metallic, m.roughness, m.occlusion, m.alpha_cutoff},
+                    {m.emissive[0], m.emissive[1],
+                     m.emissive[2], float(flags)}
                 };
                 command.pushConstants(
                     data.layout, vk::ShaderStageFlagBits::eVertex |
@@ -1165,6 +1184,7 @@ namespace clt::scene_renderer
             vk::device::get()->handle.destroyPipelineLayout(data.cull_layout);
             data.cull_layout = nullptr;
         }
+        texture::shutdown();
         if (data.instance_layout)
         {
             vk::device::get()->handle.destroyDescriptorSetLayout(data.instance_layout);
