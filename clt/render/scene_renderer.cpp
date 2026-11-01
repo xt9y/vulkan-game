@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdlib>
 #include <filesystem>
@@ -29,7 +30,6 @@ namespace clt::scene_renderer
         };
 
         struct prepared_instance {
-            instance_data transforms;
             vec3 center;
             float radius = 0;
         };
@@ -39,8 +39,11 @@ namespace clt::scene_renderer
             vk::buffer::resource vertices;
             vk::buffer::resource indices;
             vk::buffer::resource instance_buffer;
+            vk::buffer::resource visible_buffer;
+            vk::DescriptorSet instance_set{};
             std::vector<prepared_instance> instances;
-            std::vector<instance_data> visible;
+            std::vector<instance_data> transforms;
+            std::vector<std::uint32_t> visible;
             spatial::index visibility_index;
             vec3 center;
             float radius = 0;
@@ -53,6 +56,9 @@ namespace clt::scene_renderer
         struct state {
             std::shared_ptr<const ::scene::state> snapshot;
             std::vector<gpu_mesh> meshes;
+            vk::DescriptorSetLayout instance_layout{};
+            vk::DescriptorPool instance_pool{};
+            draw_stats timings{};
 
             vk::RenderPass render_pass{};
             vk::PipelineLayout layout{};
@@ -83,12 +89,52 @@ namespace clt::scene_renderer
                 {
                     vk::buffer::destroy(mesh.instance_buffer);
                 }
+                if (mesh.visible_buffer.handle)
+                {
+                    vk::buffer::destroy(mesh.visible_buffer);
+                }
             }
 
             meshes.clear();
         }
 
-        void update_shader(const std::string& name)
+        // The checked-in SPIR-V can be older than the GLSL source even when
+        // its file timestamp is newer (for example after git checkout).
+        bool has_instance_inputs(const std::string& path)
+        {
+            if (!std::filesystem::exists(path))
+            {
+                return false;
+            }
+
+            const auto words = vk::shader::read(path);
+            bool model = false;
+            bool normal = false;
+
+            for (std::size_t i = 5; i < words.size();)
+            {
+                const auto count = words[i] >> 16;
+                const auto opcode = words[i] & 0xffffu;
+                if (!count || count > words.size() - i)
+                {
+                    return false;
+                }
+
+                // SPIR-V OpDecorate with Location decoration (30).
+                if (opcode == 71 && count >= 4 && words[i + 2] == 30)
+                {
+                    model |= words[i + 3] == 2;
+                    normal |= words[i + 3] == 6;
+                }
+                i += count;
+            }
+
+            // The new shader reads matrices from a storage buffer; location
+            // 2 is a single uint and location 6 must no longer be present.
+            return model && !normal;
+        }
+
+        void update_shader(const std::string& name, bool instanced = false)
         {
             const std::filesystem::path binary(name);
             if (binary.extension() != ".spv")
@@ -98,10 +144,20 @@ namespace clt::scene_renderer
 
             auto source = binary;
             source.replace_extension();
-            if (!std::filesystem::exists(source) ||
-                (std::filesystem::exists(binary) &&
-                 std::filesystem::last_write_time(binary) >=
-                     std::filesystem::last_write_time(source)))
+            const bool valid = std::filesystem::exists(binary) &&
+                (!instanced || has_instance_inputs(name));
+
+            if (!std::filesystem::exists(source))
+            {
+                if (!valid)
+                {
+                    throw std::runtime_error("Missing compatible shader: " + name);
+                }
+                return;
+            }
+
+            if (valid && std::filesystem::last_write_time(binary) >=
+                         std::filesystem::last_write_time(source))
             {
                 return;
             }
@@ -117,6 +173,11 @@ namespace clt::scene_renderer
             if (std::system(command.c_str()) != 0)
             {
                 throw std::runtime_error("Shader compilation failed: " + source.string());
+            }
+
+            if (instanced && !has_instance_inputs(name))
+            {
+                throw std::runtime_error("Compiled shader lacks instance attributes: " + name);
             }
         }
 
@@ -147,23 +208,14 @@ namespace clt::scene_renderer
                     near, make(2, -1)};
         }
 
-        bool visible(const std::array<plane, 6>& planes, vec3 center, float radius)
-        {
-            for (const auto& p : planes)
-            {
-                if (dot(p.normal, center) + p.offset < -radius * p.magnitude)
-                {
-                    return false;
-                }
-            }
-            return true;
-        }
+        // Visibility is tested by the shared spatial index, including
+        // whole-subtree acceptance and conservative leaf bounds.
 
         void create_pipeline()
         {
             auto& data = get();
 
-            update_shader(data.shaders[0]);
+            update_shader(data.shaders[0], true);
             update_shader(data.shaders[1]);
             const auto vertex_code = vk::shader::read(data.shaders[0]);
             const auto fragment_code = vk::shader::read(data.shaders[1]);
@@ -184,6 +236,8 @@ namespace clt::scene_renderer
                 vk::PipelineLayoutCreateInfo layout_info{};
                 layout_info.pushConstantRangeCount = 1;
                 layout_info.pPushConstantRanges = &range;
+                layout_info.setLayoutCount = 1;
+                layout_info.pSetLayouts = &data.instance_layout;
 
                 data.layout = vk::pipeline_layout::create(layout_info);
 
@@ -199,20 +253,18 @@ namespace clt::scene_renderer
 
                 std::array<vk::VertexInputBindingDescription, 2> bindings{};
                 bindings[0] = vk::VertexInputBindingDescription{0, sizeof(::scene::vertex), vk::VertexInputRate::eVertex};
-                bindings[1] = vk::VertexInputBindingDescription{1, sizeof(instance_data), vk::VertexInputRate::eInstance};
+                bindings[1] = vk::VertexInputBindingDescription{
+                    1, sizeof(std::uint32_t), vk::VertexInputRate::eInstance
+                };
 
-                std::array<vk::VertexInputAttributeDescription, 10> attributes{};
+                std::array<vk::VertexInputAttributeDescription, 3> attributes{};
                 attributes[0] = vk::VertexInputAttributeDescription{0, 0, vk::Format::eR32G32B32Sfloat,
                                  offsetof(::scene::vertex, position)};
                 attributes[1] = vk::VertexInputAttributeDescription{1, 0, vk::Format::eR32G32B32Sfloat,
                                  offsetof(::scene::vertex, normal)};
-                for (std::uint32_t i = 0; i < 8; ++i)
-                {
-                    attributes[i + 2] = vk::VertexInputAttributeDescription{
-                        i + 2, 1, vk::Format::eR32G32B32A32Sfloat,
-                        std::uint32_t(i * sizeof(vec4))
-                    };
-                }
+                attributes[2] = vk::VertexInputAttributeDescription{
+                    2, 1, vk::Format::eR32Uint, 0
+                };
 
                 vk::PipelineVertexInputStateCreateInfo vertex_input{};
                 vertex_input.vertexBindingDescriptionCount = bindings.size();
@@ -387,6 +439,23 @@ namespace clt::scene_renderer
         }
 
         get().shaders = {vertex_path, fragment_path};
+
+        vk::DescriptorSetLayoutBinding binding{};
+        binding.binding = 0;
+        binding.descriptorType = vk::DescriptorType::eStorageBuffer;
+        binding.descriptorCount = 1;
+        binding.stageFlags = vk::ShaderStageFlagBits::eVertex;
+
+        vk::DescriptorSetLayoutCreateInfo info{};
+        info.bindingCount = 1;
+        info.pBindings = &binding;
+        get().instance_layout =
+            vk::device::get()->handle.createDescriptorSetLayout(info);
+    }
+
+    draw_stats last_stats()
+    {
+        return get().timings;
     }
 
     void release_frame_resources()
@@ -492,11 +561,34 @@ namespace clt::scene_renderer
             std::abs(pose.scale.x), std::abs(pose.scale.y), std::abs(pose.scale.z)
         });
         mesh.instances.push_back({
-            {trs(pose.position, pose.rotation, pose.scale),
-             rotation(pose.rotation) * scale(inverse)},
             pose.position + rotate(pose.rotation, center),
             mesh.radius * max_scale
         });
+        mesh.transforms.push_back({
+            trs(pose.position, pose.rotation, pose.scale),
+            rotation(pose.rotation) * scale(inverse)
+        });
+    }
+
+    void bind_instances(gpu_mesh& mesh)
+    {
+        if (!mesh.instance_set || !mesh.instance_buffer.handle)
+        {
+            return;
+        }
+
+        vk::DescriptorBufferInfo buffer{};
+        buffer.buffer = mesh.instance_buffer.handle;
+        buffer.offset = 0;
+        buffer.range = VK_WHOLE_SIZE;
+
+        vk::WriteDescriptorSet write{};
+        write.dstSet = mesh.instance_set;
+        write.dstBinding = 0;
+        write.descriptorCount = 1;
+        write.descriptorType = vk::DescriptorType::eStorageBuffer;
+        write.pBufferInfo = &buffer;
+        vk::device::get()->handle.updateDescriptorSets({write}, {});
     }
 
     void refresh_instances(gpu_mesh& mesh, std::size_t first = 0)
@@ -528,22 +620,56 @@ namespace clt::scene_renderer
         }
         mesh.visible.reserve(mesh.instances.size());
 
-        const auto needed = mesh.instances.size() * sizeof(instance_data);
-        if (!mesh.instance_buffer.handle || mesh.instance_buffer.size < needed)
+        const auto transform_bytes = mesh.transforms.size() * sizeof(instance_data);
+        if (!mesh.instance_buffer.handle ||
+            mesh.instance_buffer.size < transform_bytes)
         {
             auto replacement = vk::buffer::create(
                 std::max<vk::DeviceSize>(
-                    static_cast<vk::DeviceSize>(needed), mesh.instance_buffer.size * 2
+                    static_cast<vk::DeviceSize>(transform_bytes),
+                    mesh.instance_buffer.size * 2
                 ),
-                vk::BufferUsageFlagBits::eVertexBuffer,
+                vk::BufferUsageFlagBits::eStorageBuffer,
                 vk::MemoryPropertyFlagBits::eHostVisible |
                 vk::MemoryPropertyFlagBits::eHostCoherent
             );
+            vk::buffer::write(
+                replacement, mesh.transforms.data(), transform_bytes
+            );
+
             if (mesh.instance_buffer.handle)
             {
                 vk::buffer::destroy(mesh.instance_buffer);
             }
             mesh.instance_buffer = replacement;
+            bind_instances(mesh);
+        }
+        else if (first < mesh.transforms.size())
+        {
+            vk::buffer::write(
+                mesh.instance_buffer, mesh.transforms.data() + first,
+                (mesh.transforms.size() - first) * sizeof(instance_data),
+                first * sizeof(instance_data)
+            );
+        }
+
+        const auto visible_bytes = mesh.instances.size() * sizeof(std::uint32_t);
+        if (!mesh.visible_buffer.handle || mesh.visible_buffer.size < visible_bytes)
+        {
+            auto replacement = vk::buffer::create(
+                std::max<vk::DeviceSize>(
+                    static_cast<vk::DeviceSize>(visible_bytes),
+                    mesh.visible_buffer.size * 2
+                ),
+                vk::BufferUsageFlagBits::eVertexBuffer,
+                vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent
+            );
+            if (mesh.visible_buffer.handle)
+            {
+                vk::buffer::destroy(mesh.visible_buffer);
+            }
+            mesh.visible_buffer = replacement;
         }
     }
 
@@ -634,6 +760,7 @@ namespace clt::scene_renderer
         }
 
         std::vector<gpu_mesh> meshes;
+        vk::DescriptorPool new_pool{};
 
         if (source)
         {
@@ -716,30 +843,64 @@ namespace clt::scene_renderer
                     append_instance(*it, instance);
                 }
 
+                // Each mesh owns a descriptor referencing its persistent
+                // transform storage; no per-frame matrix upload is required.
+                vk::DescriptorPoolSize pool_size{};
+                pool_size.type = vk::DescriptorType::eStorageBuffer;
+                pool_size.descriptorCount =
+                    static_cast<std::uint32_t>(std::max<std::size_t>(1, meshes.size()));
+
+                vk::DescriptorPoolCreateInfo pool_info{};
+                pool_info.maxSets = pool_size.descriptorCount;
+                pool_info.poolSizeCount = 1;
+                pool_info.pPoolSizes = &pool_size;
+                const auto device = vk::device::get()->handle;
+                new_pool = device.createDescriptorPool(pool_info);
+
                 for (auto& mesh : meshes)
                 {
                     if (mesh.instances.empty())
                     {
                         continue;
                     }
+
                     refresh_instances(mesh);
+
+                    vk::DescriptorSetAllocateInfo allocate{};
+                    allocate.descriptorPool = new_pool;
+                    allocate.descriptorSetCount = 1;
+                    allocate.pSetLayouts = &data.instance_layout;
+                    mesh.instance_set = device.allocateDescriptorSets(allocate).front();
+                    bind_instances(mesh);
                 }
             }
         }
         catch (...)
         {
             destroy_meshes(meshes);
+            if (new_pool)
+            {
+                vk::device::get()->handle.destroyDescriptorPool(new_pool);
+            }
             throw;
         }
 
         destroy_meshes(data.meshes);
+        if (data.instance_pool)
+        {
+            vk::device::get()->handle.destroyDescriptorPool(data.instance_pool);
+        }
+        data.instance_pool = new_pool;
         data.meshes = std::move(meshes);
         data.snapshot = source;
     }
 
     void draw(vk::CommandBuffer command, std::uint32_t image)
     {
+        using clock = std::chrono::steady_clock;
+
         auto& data = get();
+        data.timings = {};
         const auto extent = vk::swapchain::get()->extent;
 
         std::array<vk::ClearValue, 2> clear{};
@@ -795,38 +956,53 @@ namespace clt::scene_renderer
 
             for (auto& mesh : data.meshes)
             {
+                const auto start = clock::now();
                 mesh.visible.clear();
-                mesh.visibility_index.query_frustum(
+
+                const auto stats = mesh.visibility_index.query_frustum_fast(
                     visibility_planes,
                     [&](std::uint32_t id)
                     {
-                        const auto& instance = mesh.instances[id];
-
-                        if (visible(planes, instance.center, instance.radius))
-                        {
-                            mesh.visible.push_back(instance.transforms);
-                        }
+                        mesh.visible.push_back(id);
                     }
                 );
+
+                data.timings.cull_ms += std::chrono::duration<double, std::milli>(
+                    clock::now() - start).count();
+                data.timings.tested_nodes += stats.tested_nodes;
+                data.timings.accepted_groups += stats.accepted_groups;
+                data.timings.visible_instances += mesh.visible.size();
+
                 if (mesh.visible.empty())
                 {
                     continue;
                 }
 
+                const auto upload_begin = clock::now();
                 vk::buffer::write(
-                    mesh.instance_buffer, mesh.visible.data(),
-                    mesh.visible.size() * sizeof(instance_data)
+                    mesh.visible_buffer, mesh.visible.data(),
+                    mesh.visible.size() * sizeof(std::uint32_t)
                 );
+                data.timings.index_upload_ms += std::chrono::duration<double, std::milli>(
+                    clock::now() - upload_begin).count();
 
+                const auto record_begin = clock::now();
                 const std::array<vk::Buffer, 2> buffers{
-                    mesh.vertices.handle, mesh.instance_buffer.handle
+                    mesh.vertices.handle, mesh.visible_buffer.handle
                 };
                 const std::array<vk::DeviceSize, 2> offsets{0, 0};
+                command.bindDescriptorSets(
+                    vk::PipelineBindPoint::eGraphics,
+                    data.layout, 0, {mesh.instance_set}, {}
+                );
                 command.bindVertexBuffers(0, buffers, offsets);
                 command.bindIndexBuffer(mesh.indices.handle, 0, vk::IndexType::eUint32);
                 command.drawIndexed(
                     mesh.index_count, static_cast<std::uint32_t>(mesh.visible.size()), 0, 0, 0
                 );
+                data.timings.commands_ms += std::chrono::duration<double, std::milli>(
+                    clock::now() - record_begin).count();
+                ++data.timings.draw_calls;
             }
         }
 
@@ -839,7 +1015,18 @@ namespace clt::scene_renderer
 
         destroy_meshes(data.meshes);
         data.snapshot.reset();
+        if (data.instance_pool)
+        {
+            vk::device::get()->handle.destroyDescriptorPool(data.instance_pool);
+            data.instance_pool = nullptr;
+        }
 
         release_frame_resources();
+
+        if (data.instance_layout)
+        {
+            vk::device::get()->handle.destroyDescriptorSetLayout(data.instance_layout);
+            data.instance_layout = nullptr;
+        }
     }
 } // namespace clt::scene_renderer

@@ -216,6 +216,7 @@ namespace
         double fence_ms = 0;
         double upload_ms = 0;
         double gpu_ms = -1;
+        clt::scene_renderer::draw_stats scene{};
     };
 
     // Test-only version of the public renderer frame path. Query commands surround
@@ -352,6 +353,7 @@ namespace
 
             mark = clock::now();
             clt::scene_renderer::draw(frame.command, image);
+            timing.scene = clt::scene_renderer::last_stats();
             timing.record_ms = std::chrono::duration<double, std::milli>(
                 clock::now() - mark).count();
 
@@ -575,6 +577,12 @@ namespace
         std::vector<double> fence_ms;
         std::vector<double> upload_ms;
         std::vector<double> gpu_ms;
+        std::vector<double> cull_ms;
+        std::vector<double> index_upload_ms;
+        std::vector<double> commands_ms;
+        std::size_t tested_nodes = 0;
+        std::size_t accepted_groups = 0;
+        std::size_t gpu_visible = 0;
         std::size_t visible_instances = 0;
         std::size_t draw_calls = 0;
         double collision_query_ms = 0;
@@ -621,6 +629,9 @@ namespace
         output.fence_ms.reserve(10000);
         output.upload_ms.reserve(10000);
         output.gpu_ms.reserve(10000);
+        output.cull_ms.reserve(10000);
+        output.index_upload_ms.reserve(10000);
+        output.commands_ms.reserve(10000);
 
         // Visibility counts are sampled once per phase, not every frame; the
         // audit must not dominate the renderer's actual frame-time measurement.
@@ -662,6 +673,12 @@ namespace
                 output.record_ms.push_back(measured.record_ms);
                 output.fence_ms.push_back(measured.fence_ms);
                 output.upload_ms.push_back(measured.upload_ms);
+                output.cull_ms.push_back(measured.scene.cull_ms);
+                output.index_upload_ms.push_back(measured.scene.index_upload_ms);
+                output.commands_ms.push_back(measured.scene.commands_ms);
+                output.tested_nodes = measured.scene.tested_nodes;
+                output.accepted_groups = measured.scene.accepted_groups;
+                output.gpu_visible = measured.scene.visible_instances;
                 if (measured.gpu_ms >= 0)
                 {
                     output.gpu_ms.push_back(measured.gpu_ms);
@@ -750,11 +767,22 @@ namespace
                   << " draws=" << value.draw_calls
                   << " aabb_query_ms=" << value.collision_query_ms
                   << " physics_step_ms=" << value.collision_step_ms << '\n';
+        std::cout << "  cull_pack_ms=" << average(value.cull_ms)
+                  << " p95=" << percentile(value.cull_ms, 0.95)
+                  << " visible_id_upload_ms=" << average(value.index_upload_ms)
+                  << " commands_ms=" << average(value.commands_ms)
+                  << " gpu_visible=" << value.gpu_visible
+                  << " bvh_nodes=" << value.tested_nodes
+                  << " accepted_groups=" << value.accepted_groups << '\n';
     }
 } // namespace
 
 int main()
 {
+    // Keep the last completed workload phase visible even after a driver fault.
+    std::cout << std::unitbuf;
+    std::cerr << std::unitbuf;
+
     proxy_state proxy;
     std::atomic<bool> generate{false};
     std::atomic<std::uint64_t> generation_ops{0};
@@ -1012,19 +1040,42 @@ int main()
     proxy.loss.store(0, std::memory_order_relaxed);
     proxy.delay_ms.store(0, std::memory_order_relaxed);
 
+    std::cout << "SHUTDOWN prediction\n";
     clt::prediction::shutdown();
+
+    // The final command buffer can still reference the timestamp query pool.
+    // Wait for Vulkan execution to finish before freeing that pool.
+    std::cout << "SHUTDOWN gpu_idle\n";
+    if (vk::device::get()->handle)
+    {
+        try
+        {
+            vk::device::idle();
+        }
+        catch (const std::exception& error)
+        {
+            std::cerr << "WORKLOAD GPU idle: " << error.what() << '\n';
+            exit_code = 1;
+        }
+    }
+
+    std::cout << "SHUTDOWN gpu_queries\n";
     gpu.shutdown();
+    std::cout << "SHUTDOWN renderer\n";
     clt::renderer::shutdown();
     clt::input::shutdown();
     clt::window::shutdown();
+    std::cout << "SHUTDOWN connection\n";
     clt::connection::shutdown();
 
     proxy.stop.store(true, std::memory_order_relaxed);
     game::application::get()->stop.store(true, std::memory_order_relaxed);
 
+    std::cout << "SHUTDOWN workers\n";
     if (proxy_thread.joinable()) proxy_thread.join();
     if (server_thread.joinable()) server_thread.join();
 
+    std::cout << "SHUTDOWN game\n";
     game::application::shutdown();
 
     if (!worker_error.empty())
@@ -1033,5 +1084,6 @@ int main()
         exit_code = 1;
     }
 
+    std::cout << "WORKLOAD EXIT " << exit_code << '\n';
     return exit_code;
 }
