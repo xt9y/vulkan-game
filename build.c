@@ -75,7 +75,7 @@ void build(C_Build* b)
     c_include(game, ".");
     c_warnings_strict(game);
 
-    c_flag(game, "-std=c++17");
+    c_flag(game, "-std=c++20");
 
     C_Dependency* engine =
         c_git(b, "VulkanEngine", "https://github.com/xt9y/vulkan-engine.git", "2aa9b9c265995c76859952c6f32b8a75873d22f3");
@@ -88,6 +88,46 @@ void build(C_Build* b)
     c_dep_header_only(headers);
     c_dep_include(headers, "include");
     c_use(game, headers);
+
+    C_Dependency* fastgltf =
+        c_git(b, "fastgltf", "https://github.com/spnda/fastgltf.git", "0b800b4a584704f9e9add67c79c4c8732e552787");
+    c_dep_cmake(fastgltf);
+    c_dep_cmake_option(fastgltf, "-DBUILD_SHARED_LIBS=OFF");
+    c_dep_cmake_option(fastgltf, "-DFASTGLTF_ENABLE_INSTALL=OFF");
+    c_dep_include(fastgltf, "include");
+    c_dep_link(fastgltf, "fastgltf");
+    c_dep_link(fastgltf, "fastgltf_simdjson");
+    c_dep_link(fastgltf, "fastgltf_simdutf");
+    c_use(game, fastgltf);
+
+    C_Dependency* ozz =
+        c_git(b, "ozz", "https://github.com/guillaumeblanc/ozz-animation.git", "744eb9d99f606eda849acb0b1204f7a3dc20bca1");
+    c_dep_cmake(ozz);
+    c_dep_cmake_option(ozz, "-DBUILD_SHARED_LIBS=OFF");
+    c_dep_cmake_option(ozz, "-Dozz_build_tools=OFF");
+    c_dep_cmake_option(ozz, "-Dozz_build_samples=OFF");
+    c_dep_cmake_option(ozz, "-Dozz_build_howtos=OFF");
+    c_dep_cmake_option(ozz, "-Dozz_build_tests=OFF");
+    c_dep_cmake_option(ozz, "-Dozz_build_postfix=OFF");
+    c_dep_include(ozz, "include");
+    c_dep_link(ozz, "ozz_animation_offline");
+    c_dep_link(ozz, "ozz_animation");
+    c_dep_link(ozz, "ozz_geometry");
+    c_dep_link(ozz, "ozz_base");
+    c_use(game, ozz);
+
+    C_Dependency* stb =
+        c_git(b, "stb", "https://github.com/nothings/stb.git", "d14d46f6b44456eb88beac58cba833a4135d4c89");
+    c_dep_header_only(stb);
+    c_dep_include(stb, ".");
+    c_use(game, stb);
+
+    C_Dependency* mikktspace =
+        c_git(b, "MikkTSpace", "https://github.com/mmikk/MikkTSpace.git", "3e895b49d05ea07e4c2133156cfa94369e19e409");
+    c_dep_source(mikktspace);
+    c_dep_sources(mikktspace, "mikktspace.c");
+    c_dep_include(mikktspace, ".");
+    c_use(game, mikktspace);
 
     C_Dependency* glfw = c_git(b, "GLFW", "https://github.com/glfw/glfw.git", "3.4");
     c_dep_cmake(glfw);
@@ -144,10 +184,14 @@ void build(C_Build* b)
     c_sources(workload, "clt/player/*.cpp");
     c_include(workload, ".");
     c_warnings_strict(workload);
-    c_flag(workload, "-std=c++17");
+    c_flag(workload, "-std=c++20");
     c_use(workload, engine);
     c_use(workload, headers);
     c_use(workload, glfw);
+    c_use(workload, fastgltf);
+    c_use(workload, ozz);
+    c_use(workload, stb);
+    c_use(workload, mikktspace);
 #ifdef __APPLE__
     c_framework(workload, "Cocoa");
     c_framework(workload, "IOKit");
