@@ -808,6 +808,8 @@ namespace clt::scene_renderer
             meshes.reserve(source->meshes.size());
 
             upload::batch transfers;
+            try
+            {
             for (const auto& mesh : source->meshes)
             {
                 gpu_mesh result;
@@ -868,6 +870,12 @@ namespace clt::scene_renderer
                 }
             }
             transfers.finish();
+            }
+            catch (...)
+            {
+                destroy_meshes(meshes);
+                throw;
+            }
         }
 
         try
