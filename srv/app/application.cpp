@@ -108,6 +108,11 @@ namespace srv::application
         auto bytes = net::scene_stream::serialize(patch);
         auto hash = net::scene_stream::checksum(bytes);
 
+        for (auto& texture : patch.textures)
+        {
+            data.scene.textures.push_back(std::move(texture));
+        }
+
         for (auto& mesh : patch.meshes)
         {
             data.scene.meshes.push_back(std::move(mesh));
