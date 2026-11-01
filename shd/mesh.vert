@@ -18,6 +18,7 @@ layout(std430, set = 0, binding = 0) readonly buffer InstanceBuffer
 
 layout(location = 0) out vec3 world_normal;
 layout(location = 1) out vec2 uv;
+layout(location = 2) out vec3 world_position;
 
 layout(push_constant) uniform Draw
 {
