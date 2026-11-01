@@ -3,6 +3,7 @@
 #include <vector>
 #include <memory>
 #include <cstddef>
+#include "srv/shared/net/animation.hpp"
 
 #include "srv/game/options.hpp"
 
@@ -25,6 +26,9 @@ namespace srv::application
         std::shared_ptr<scene::state> importing;
         std::size_t next_texture = 0;
         std::size_t animation_cursor = 0;
+        struct pending_event { net::animation::attachment_event event; std::uint32_t repeats = 3; };
+        std::vector<pending_event> attachment_events;
+        std::uint32_t next_event = 0;
         player::collision_world colliders;
         spatial::index collision_index;
         std::vector<std::uint8_t> scene_bytes;
@@ -49,6 +53,9 @@ namespace srv::application
     bool play_animation(std::uint32_t instance_id, std::uint32_t clip,
                         std::uint32_t overlay = UINT32_MAX, float blend = 0.0f,
                         std::uint32_t mask_root = UINT32_MAX);
+    // Send a named game effect at a skeleton socket; replicated to clients.
+    bool emit_attachment_event(std::uint32_t instance_id, std::uint32_t joint,
+                               std::uint32_t kind);
     int run();
     void shutdown() noexcept;
 } // namespace srv::application
