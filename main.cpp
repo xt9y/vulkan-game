@@ -91,6 +91,8 @@ namespace
                     const auto movement = clt::prediction::ticks();
                     const auto snapshots = network->player_snapshots.load(
                         std::memory_order_relaxed);
+                    const auto fence_sum = render.fence_wait_us.exchange(
+                        0, std::memory_order_relaxed);
                     const auto fence_max = render.max_fence_wait_us.exchange(
                         0, std::memory_order_relaxed);
                     const auto frame_max = render.max_frame_us.exchange(
@@ -110,6 +112,9 @@ namespace
                               << " net_gap_max=" << double(snapshot_gap) / 1000.0 << "ms"
                               << " correction_max=" << correction_peak << "m"
                               << " frame_max=" << double(frame_max) / 1000.0 << "ms"
+                              << " fence_avg=" << (frames > previous_frames ?
+                                  double(fence_sum) / double(frames - previous_frames) / 1000.0 :
+                                  0.0) << "ms"
                               << " fence_max=" << double(fence_max) / 1000.0 << "ms"
                               << " deferred=" << deferrals
                               << " scene_updates=" << scene_updates
