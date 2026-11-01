@@ -160,18 +160,31 @@ namespace clt::upload
             command.end();
             fence = device.createFence({});
 
-            vk::SubmitInfo submit{};
-            submit.commandBufferCount = 1;
-            submit.pCommandBuffers = &command;
-            vk::submit::queue(vk::queue::get()->graphics, {submit}, fence);
-            submitted = true;
+            // Allocate the retirement entry before submitting. An allocation
+            // failure must not strand already-submitted staging buffers.
+            auto& pending = in_flight();
+            pending.emplace_back();
+            try
+            {
+                vk::SubmitInfo submit{};
+                submit.commandBufferCount = 1;
+                submit.pCommandBuffers = &command;
+                vk::submit::queue(vk::queue::get()->graphics, {submit}, fence);
+                submitted = true;
 
-            // If allocating the retirement entry fails, ~batch waits and
-            // releases its still-owned submitted resources safely.
-            in_flight().push_back({command, fence, std::move(staging)});
-            command = nullptr;
-            fence = nullptr;
-            submitted = false;
+                auto& entry = pending.back();
+                entry.command = command;
+                entry.fence = fence;
+                entry.staging = std::move(staging);
+                command = nullptr;
+                fence = nullptr;
+                submitted = false;
+            }
+            catch (...)
+            {
+                pending.pop_back();
+                throw;
+            }
         }
 
         ~batch()

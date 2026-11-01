@@ -64,7 +64,6 @@ namespace clt::renderer
         }
 
         get()->initialized = true;
-
         if (const auto* setting = std::getenv("VK_UNCAPPED"))
         {
             get()->uncapped = setting[0] == '1' && setting[1] == '\0';
