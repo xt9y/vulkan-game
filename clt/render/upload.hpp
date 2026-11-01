@@ -4,13 +4,62 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <deque>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace clt::upload
 {
-    // Accumulate immutable mesh copies into one submission and retire staging
-    // allocations only after its fence signals. Never idle the entire queue.
+    struct pending {
+        vk::CommandBuffer command{};
+        vk::Fence fence{};
+        std::vector<vk::buffer::resource> staging;
+    };
+
+    inline std::deque<pending>& in_flight()
+    {
+        static std::deque<pending> jobs;
+        return jobs;
+    }
+
+    inline void retire(bool wait = false)
+    {
+        auto& jobs = in_flight();
+        const auto device = vk::device::get()->handle;
+        for (auto it = jobs.begin(); it != jobs.end();)
+        {
+            const auto result = wait
+                ? device.waitForFences(it->fence, true, UINT64_MAX)
+                : device.getFenceStatus(it->fence);
+            if (result == vk::Result::eNotReady && !wait)
+            {
+                ++it;
+                continue;
+            }
+            if (result != vk::Result::eSuccess)
+            {
+                throw std::runtime_error("GPU upload fence failed");
+            }
+
+            vk::command::free({it->command});
+            for (auto& source : it->staging)
+            {
+                vk::buffer::destroy(source);
+            }
+            device.destroyFence(it->fence);
+            it = jobs.erase(it);
+        }
+    }
+
+    inline bool ready()
+    {
+        retire();
+        return in_flight().empty();
+    }
+
+    // Buffer copies are enqueued on the graphics queue. Staging memory and
+    // command buffers live until their submission fences signal.
     class batch
     {
         vk::CommandBuffer command{};
@@ -65,9 +114,7 @@ namespace clt::upload
                    std::size_t bytes, std::size_t offset = 0)
         {
             if (!data || !bytes || offset > target.size || bytes > target.size - offset)
-            {
                 throw std::invalid_argument("Invalid staged buffer update");
-            }
 
             auto source = vk::buffer::create(
                 bytes, vk::BufferUsageFlagBits::eTransferSrc,
@@ -94,46 +141,41 @@ namespace clt::upload
         void finish()
         {
             if (!command) return;
-            auto device = vk::device::get()->handle;
+            const auto device = vk::device::get()->handle;
 
+            // Shader-visible GPU buffers need an explicit transfer-to-read
+            // dependency even though upload and rendering use the same queue.
+            vk::MemoryBarrier barrier{};
+            barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+            barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead |
+                vk::AccessFlagBits::eVertexAttributeRead |
+                vk::AccessFlagBits::eIndexRead;
+            command.pipelineBarrier(
+                vk::PipelineStageFlagBits::eTransfer,
+                vk::PipelineStageFlagBits::eComputeShader |
+                    vk::PipelineStageFlagBits::eVertexShader |
+                    vk::PipelineStageFlagBits::eVertexInput,
+                {}, {barrier}, {}, {}
+            );
             command.end();
-            vk::FenceCreateInfo info{};
-            fence = device.createFence(info);
+            fence = device.createFence({});
 
             vk::SubmitInfo submit{};
             submit.commandBufferCount = 1;
             submit.pCommandBuffers = &command;
             vk::submit::queue(vk::queue::get()->graphics, {submit}, fence);
             submitted = true;
-            if (device.waitForFences(fence, true, UINT64_MAX) != vk::Result::eSuccess)
-                throw std::runtime_error("Mesh upload fence failed");
 
-            release();
-        }
-
-        void release()
-        {
-            if (command)
-            {
-                vk::command::free({command});
-                command = nullptr;
-            }
-            for (auto& source : staging)
-                vk::buffer::destroy(source);
-            staging.clear();
-
-            if (fence)
-            {
-                vk::device::get()->handle.destroyFence(fence);
-                fence = nullptr;
-            }
+            // If allocating the retirement entry fails, ~batch waits and
+            // releases its still-owned submitted resources safely.
+            in_flight().push_back({command, fence, std::move(staging)});
+            command = nullptr;
+            fence = nullptr;
             submitted = false;
         }
 
         ~batch()
         {
-            // The caller must call finish() for pending copies. The destructor
-            // releases unsubmitted work during exception unwinding.
             if (submitted && fence)
             {
                 try
@@ -144,7 +186,12 @@ namespace clt::upload
                 {
                 }
             }
-            release();
+            if (command) vk::command::free({command});
+            for (auto& source : staging)
+            {
+                vk::buffer::destroy(source);
+            }
+            if (fence) vk::device::get()->handle.destroyFence(fence);
         }
     };
 }
