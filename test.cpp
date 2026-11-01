@@ -3,6 +3,7 @@
 #include "clt/platform/window.hpp"
 #include "clt/player/prediction.hpp"
 #include "clt/render/renderer.hpp"
+#include "clt/render/passes.hpp"
 #include "clt/render/scene_renderer.hpp"
 #include "clt/view/camera.hpp"
 #include "srv/app/application.hpp"
@@ -351,7 +352,7 @@ namespace
             }
 
             mark = clock::now();
-            clt::scene_renderer::draw(frame.command, image);
+            clt::passes::record(frame.command, image);
             timing.record_ms = std::chrono::duration<double, std::milli>(
                 clock::now() - mark).count();
 
