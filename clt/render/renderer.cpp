@@ -222,11 +222,16 @@ namespace clt::renderer
             vk::command::init(family);
 
             auto device = vk::device::get()->handle;
-            auto commands = vk::command::allocate();
-            get()->command = commands.front();
-            get()->image_ready = device.createSemaphore({});
-            get()->frame_fence =
-                device.createFence(vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled));
+            auto commands = vk::command::allocate(2);
+            for (std::size_t i = 0; i < get()->frames.size(); ++i)
+            {
+                auto& frame = get()->frames[i];
+                frame.command = commands[i];
+                frame.image_ready = device.createSemaphore({});
+                frame.fence = device.createFence(
+                    vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled)
+                );
+            }
                 
             scene_renderer::init(vertex_path, fragment_path);
 
@@ -249,6 +254,8 @@ namespace clt::renderer
         passes::release();
         postprocess::release();
         scene_renderer::release_frame_resources();
+        scene_renderer::reset_scene();
+        data.image_in_flight.clear();
 
         for (auto semaphore : data.render_ready)
         {
@@ -323,6 +330,7 @@ namespace clt::renderer
         {
             data.render_ready.push_back(device.createSemaphore({}));
         }
+        data.image_in_flight.assign(vk::swapchain::get()->size, vk::Fence{});
     }
 
     void draw_frame()
@@ -346,41 +354,65 @@ namespace clt::renderer
             return;
         }
 
-        if (device.waitForFences(data.frame_fence, true, UINT64_MAX) != vk::Result::eSuccess)
+        auto& frame = data.frames[data.next_frame];
+        if (device.waitForFences(frame.fence, true, UINT64_MAX) != vk::Result::eSuccess)
         {
             throw std::runtime_error("Frame fence wait failed");
         }
-        scene_renderer::synchronize();
+
+        if (scene_renderer::needs_sync())
+        {
+            for (const auto& context : data.frames)
+            {
+                if (device.waitForFences(context.fence, true, UINT64_MAX) !=
+                    vk::Result::eSuccess)
+                {
+                    throw std::runtime_error("Scene update frame fence failed");
+                }
+            }
+            scene_renderer::synchronize();
+        }
 
         uint32_t image = 0;
-
         try
         {
-            image = vk::swapchain::acquire(UINT64_MAX, data.image_ready).value;
+            image = vk::swapchain::acquire(UINT64_MAX, frame.image_ready).value;
         }
         catch (const vk::OutOfDateKHRError&)
         {
             resize();
-
             return;
         }
 
-        device.resetFences(data.frame_fence);
-        data.command.reset();
-        data.command.begin(vk::CommandBufferBeginInfo{});
-        passes::record(data.command, image);
-        data.command.end();
+        if (data.image_in_flight[image] &&
+            device.waitForFences(data.image_in_flight[image], true, UINT64_MAX) !=
+                vk::Result::eSuccess)
+        {
+            throw std::runtime_error("Swapchain image fence failed");
+        }
+
+        for (auto& pending : data.image_in_flight)
+        {
+            if (pending == frame.fence) pending = nullptr;
+        }
+        data.image_in_flight[image] = frame.fence;
+
+        device.resetFences(frame.fence);
+        frame.command.reset();
+        frame.command.begin(vk::CommandBufferBeginInfo{});
+        passes::record(frame.command, image);
+        frame.command.end();
 
         vk::PipelineStageFlags wait_stage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
         vk::SubmitInfo submit{};
         submit.waitSemaphoreCount = 1;
-        submit.pWaitSemaphores = &data.image_ready;
+        submit.pWaitSemaphores = &frame.image_ready;
         submit.pWaitDstStageMask = &wait_stage;
         submit.commandBufferCount = 1;
-        submit.pCommandBuffers = &data.command;
+        submit.pCommandBuffers = &frame.command;
         submit.signalSemaphoreCount = 1;
         submit.pSignalSemaphores = &data.render_ready[image];
-        vk::submit::queue(vk::queue::get()->graphics, {submit}, data.frame_fence);
+        vk::submit::queue(vk::queue::get()->graphics, {submit}, frame.fence);
 
         vk::PresentInfoKHR present{};
         present.waitSemaphoreCount = 1;
@@ -388,6 +420,8 @@ namespace clt::renderer
         present.swapchainCount = 1;
         present.pSwapchains = &vk::swapchain::get()->handle;
         present.pImageIndices = &image;
+
+        data.next_frame = (data.next_frame + 1) % data.frames.size();
 
         try
         {
@@ -429,14 +463,10 @@ namespace clt::renderer
                 device.destroySemaphore(semaphore);
             }
 
-            if (get()->frame_fence)
+            for (const auto& frame : get()->frames)
             {
-                device.destroyFence(get()->frame_fence);
-            }
-
-            if (get()->image_ready)
-            {
-                device.destroySemaphore(get()->image_ready);
+                if (frame.fence) device.destroyFence(frame.fence);
+                if (frame.image_ready) device.destroySemaphore(frame.image_ready);
             }
 
             passes::release();

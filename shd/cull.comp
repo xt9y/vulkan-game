@@ -36,6 +36,7 @@ layout(push_constant) uniform Culling
 {
     vec4 planes[6];
     uint count;
+    uint indices;
 } pc;
 
 // One atomic per workgroup instead of one per visible instance.
@@ -46,6 +47,14 @@ void main()
 {
     uint id = gl_GlobalInvocationID.x;
     uint lane = gl_LocalInvocationID.x;
+
+    if (id == 0u)
+    {
+        index_count = pc.indices;
+        first_index = 0u;
+        vertex_offset = 0;
+        first_instance = 0u;
+    }
     bool keep = id < pc.count;
 
     if (keep)

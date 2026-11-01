@@ -217,6 +217,7 @@ namespace
         double fence_ms = 0;
         double upload_ms = 0;
         double gpu_ms = -1;
+        clt::passes::timings stages{};
     };
 
     // Test-only version of the public renderer frame path. Query commands surround
@@ -227,6 +228,7 @@ namespace
         std::uint32_t valid_bits = 0;
         float period = 0;
         bool pending = false;
+        std::uint32_t last_image = 0;
 
         void init()
         {
@@ -268,7 +270,8 @@ namespace
         render_sample frame()
         {
             render_sample timing;
-            auto& frame = *clt::renderer::get();
+            auto& render = *clt::renderer::get();
+            auto& frame = render.frames[0];
             const auto device = vk::device::get()->handle;
 
             int width = 0, height = 0;
@@ -296,7 +299,7 @@ namespace
             }
 
             auto mark = clock::now();
-            if (device.waitForFences(frame.frame_fence, true, UINT64_MAX) !=
+            if (device.waitForFences(frame.fence, true, UINT64_MAX) !=
                 vk::Result::eSuccess)
             {
                 throw std::runtime_error("Workload frame fence failed");
@@ -322,10 +325,23 @@ namespace
                     timing.gpu_ms = double(elapsed_ticks) * double(period) / 1000000.0;
                 }
             }
+            if (pending)
+            {
+                timing.stages = clt::passes::read(last_image);
+            }
             pending = false;
 
             mark = clock::now();
-            clt::scene_renderer::synchronize();
+            if (clt::scene_renderer::needs_sync())
+            {
+                for (const auto& context : render.frames)
+                {
+                    if (device.waitForFences(context.fence, true, UINT64_MAX) !=
+                        vk::Result::eSuccess)
+                        throw std::runtime_error("Workload scene synchronization failed");
+                }
+                clt::scene_renderer::synchronize();
+            }
             timing.upload_ms = std::chrono::duration<double, std::milli>(
                 clock::now() - mark).count();
 
@@ -340,7 +356,16 @@ namespace
                 return timing;
             }
 
-            device.resetFences(frame.frame_fence);
+            if (render.image_in_flight[image] &&
+                device.waitForFences(render.image_in_flight[image], true, UINT64_MAX) !=
+                    vk::Result::eSuccess)
+            {
+                throw std::runtime_error("Workload swapchain fence failed");
+            }
+            for (auto& pending : render.image_in_flight)
+                if (pending == frame.fence) pending = nullptr;
+            render.image_in_flight[image] = frame.fence;
+            device.resetFences(frame.fence);
             frame.command.reset();
             frame.command.begin(vk::CommandBufferBeginInfo{});
 
@@ -353,6 +378,7 @@ namespace
 
             mark = clock::now();
             clt::passes::record(frame.command, image);
+            last_image = image;
             timing.record_ms = std::chrono::duration<double, std::milli>(
                 clock::now() - mark).count();
 
@@ -373,12 +399,12 @@ namespace
             submit.commandBufferCount = 1;
             submit.pCommandBuffers = &frame.command;
             submit.signalSemaphoreCount = 1;
-            submit.pSignalSemaphores = &frame.render_ready[image];
-            vk::submit::queue(vk::queue::get()->graphics, {submit}, frame.frame_fence);
+            submit.pSignalSemaphores = &render.render_ready[image];
+            vk::submit::queue(vk::queue::get()->graphics, {submit}, frame.fence);
 
             vk::PresentInfoKHR present{};
             present.waitSemaphoreCount = 1;
-            present.pWaitSemaphores = &frame.render_ready[image];
+            present.pWaitSemaphores = &render.render_ready[image];
             present.swapchainCount = 1;
             present.pSwapchains = &vk::swapchain::get()->handle;
             present.pImageIndices = &image;
@@ -672,6 +698,7 @@ namespace
         std::vector<double> fence_ms;
         std::vector<double> upload_ms;
         std::vector<double> gpu_ms;
+        std::array<std::vector<double>, 4> pass_ms;
         std::size_t gpu_candidates = 0;
         std::size_t visible_instances = 0;
         std::size_t draw_calls = 0;
@@ -720,6 +747,7 @@ namespace
         output.fence_ms.reserve(10000);
         output.upload_ms.reserve(10000);
         output.gpu_ms.reserve(10000);
+        for (auto& pass : output.pass_ms) pass.reserve(10000);
 
         // Visibility counts are sampled once per phase, not every frame; the
         // audit must not dominate the renderer's actual frame-time measurement.
@@ -768,6 +796,13 @@ namespace
                 if (measured.gpu_ms >= 0)
                 {
                     output.gpu_ms.push_back(measured.gpu_ms);
+                }
+                if (measured.stages.valid)
+                {
+                    for (std::size_t i = 0; i < output.pass_ms.size(); ++i)
+                    {
+                        output.pass_ms[i].push_back(measured.stages.milliseconds[i]);
+                    }
                 }
             }
 
@@ -854,7 +889,15 @@ namespace
                   << " aabb_query_ms=" << value.collision_query_ms
                   << " physics_step_ms=" << value.collision_step_ms << '\n';
         std::cout << "  gpu_candidates=" << value.gpu_candidates
-                  << " visibility=gpu_indirect" << '\n';
+                  << " visibility=gpu_indirect";
+        const auto& passes = clt::passes::ordered();
+        for (std::size_t i = 0; i < value.pass_ms.size(); ++i)
+        {
+            std::cout << " " << passes[i].name << "_gpu_ms=";
+            if (value.pass_ms[i].empty()) std::cout << "n/a";
+            else std::cout << average(value.pass_ms[i]);
+        }
+        std::cout << '\n';
     }
 } // namespace
 
@@ -1039,12 +1082,7 @@ int main()
         const auto audit_gpu = [&](const char* label)
         {
             const auto device = vk::device::get()->handle;
-            if (device.waitForFences(
-                    clt::renderer::get()->frame_fence, true, UINT64_MAX) !=
-                vk::Result::eSuccess)
-            {
-                throw std::runtime_error("GPU visibility audit fence failed");
-            }
+            vk::device::idle();
 
             const auto check = validate_gpu_visibility();
             std::cout << "GPU_VISIBILITY " << label
