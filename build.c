@@ -69,6 +69,7 @@ void build(C_Build* b)
     c_sources(game, "clt/network/*.cpp");
     c_sources(game, "clt/platform/*.cpp");
     c_sources(game, "clt/render/*.cpp");
+    c_sources(game, "clt/animation/*.cpp");
     c_sources(game, "clt/input/*.cpp");
     c_sources(game, "clt/view/*.cpp");
     c_sources(game, "clt/player/*.cpp");
@@ -196,6 +197,7 @@ void build(C_Build* b)
     c_sources(client, "clt/network/*.cpp");
     c_sources(client, "clt/platform/*.cpp");
     c_sources(client, "clt/render/*.cpp");
+    c_sources(client, "clt/animation/*.cpp");
     c_sources(client, "clt/input/*.cpp");
     c_sources(client, "clt/view/*.cpp");
     c_sources(client, "clt/player/*.cpp");
@@ -254,6 +256,7 @@ void build(C_Build* b)
     c_sources(workload, "clt/network/*.cpp");
     c_sources(workload, "clt/platform/*.cpp");
     c_sources(workload, "clt/render/*.cpp");
+    c_sources(workload, "clt/animation/*.cpp");
     c_sources(workload, "clt/input/*.cpp");
     c_sources(workload, "clt/view/*.cpp");
     c_sources(workload, "clt/player/*.cpp");
