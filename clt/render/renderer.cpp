@@ -312,52 +312,6 @@ namespace clt::renderer
         if (std::find(modes.begin(), modes.end(), info.presentMode) == modes.end())
             throw std::runtime_error("Configured presentation mode unsupported");
 
-ormats.end(),
-            [&](const vk::SurfaceFormatKHR& value)
-            {
-                return value.format == requested_format &&
-                    value.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;
-            });
-        if (selected == formats.end())
-            throw std::runtime_error("Configured swapchain format unsupported");
-        const auto format = *selected;
-
-        vk::SwapchainCreateInfoKHR info{};
-        info.surface = vk::surface::get()->handle;
-        info.minImageCount = caps.minImageCount + 1;
-
-        if (caps.maxImageCount && info.minImageCount > caps.maxImageCount)
-        {
-            info.minImageCount = caps.maxImageCount;
-        }
-
-        info.imageFormat = format.format;
-        info.imageColorSpace = format.colorSpace;
-        info.imageExtent = framebuffer_extent(caps);
-        info.imageArrayLayers = 1;
-        info.imageUsage = vk::ImageUsageFlagBits::eColorAttachment;
-        info.imageSharingMode = vk::SharingMode::eExclusive;
-        info.preTransform = caps.currentTransform;
-        info.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
-        info.presentMode = vk::PresentModeKHR::eFifo;
-        if (data.uncapped)
-        {
-            const auto modes = vk::surface::present_modes();
-            const auto supports = [&](vk::PresentModeKHR mode)
-            {
-                return std::find(modes.begin(), modes.end(), mode) != modes.end();
-            };
-
-            if (supports(vk::PresentModeKHR::eImmediate))
-            {
-                info.presentMode = vk::PresentModeKHR::eImmediate;
-            }
-            else if (supports(vk::PresentModeKHR::eMailbox))
-            {
-                info.presentMode = vk::PresentModeKHR::eMailbox;
-            }
-        }
-
         data.present_mode = info.presentMode;
         info.clipped = true;
         vk::swapchain::init(info);
