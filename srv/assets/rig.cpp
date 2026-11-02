@@ -192,6 +192,13 @@ namespace srv::assets
                                 std::size_t skin_index, std::uint32_t id)
     {
         auto imported = import_rig(asset, skin_index);
+        return serialize_rig(asset, skin_index, id, imported);
+    }
+
+    ::scene::skin serialize_rig(
+        const fastgltf::Asset& asset, std::size_t skin_index, std::uint32_t id, const rig& imported
+    )
+    {
         ::scene::skin result;
         result.id = id;
         result.skeleton = archive(*imported.skeleton);

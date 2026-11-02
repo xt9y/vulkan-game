@@ -11,10 +11,20 @@ namespace clt::camera
         float sensitivity = 0;
     };
 
+    struct frame
+    {
+        state pose;
+        vk::util::math::mat4 view;
+    };
+
     state* get();
     void init();
     void look(float dx, float dy);
     state snapshot();
+    // Freeze mouse look, recoil and predicted eye position for one render frame.
+    frame capture();
+    void kick(float radians);
+    void aim(float fraction);
     vk::util::math::mat4 view_projection(float aspect);
 
     vk::util::math::mat4 view();

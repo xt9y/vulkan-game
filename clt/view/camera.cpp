@@ -1,9 +1,10 @@
 #include "camera.hpp"
 
-#include "clt/player/prediction.hpp"
 #include "clt/network/connection.hpp"
+#include "clt/player/prediction.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <mutex>
 
@@ -13,6 +14,18 @@ namespace clt::camera
     namespace
     {
         std::mutex camera_mutex;
+        float recoil = 0, aim_fraction = 0;
+        std::chrono::steady_clock::time_point recoil_time{};
+
+        float current_recoil()
+        {
+            return recoil *
+                   std::exp(
+                       -12.f *
+                       std::chrono::duration<float>(std::chrono::steady_clock::now() - recoil_time)
+                           .count()
+                   );
+        }
 
         vec3 eye_position()
         {
@@ -31,6 +44,8 @@ namespace clt::camera
     {
         std::lock_guard<std::mutex> lock(camera_mutex);
         *get() = {};
+        recoil = aim_fraction = 0;
+        recoil_time = std::chrono::steady_clock::now();
         get()->fov = 1.04719755f;
         get()->sensitivity = 0.0025f;
     }
@@ -55,10 +70,26 @@ namespace clt::camera
     state snapshot()
     {
         std::lock_guard<std::mutex> lock(camera_mutex);
-        return *get();
+        auto result = *get();
+        result.pitch = std::clamp(result.pitch + current_recoil(), -1.55f, 1.55f);
+        result.fov *= 1.f - aim_fraction;
+        return result;
     }
 
-    mat4 view()
+    void kick(float radians)
+    {
+        std::lock_guard<std::mutex> lock(camera_mutex);
+        recoil = std::min(current_recoil() + radians, .08f);
+        recoil_time = std::chrono::steady_clock::now();
+    }
+
+    void aim(float fraction)
+    {
+        std::lock_guard<std::mutex> lock(camera_mutex);
+        aim_fraction = std::clamp(fraction, 0.f, .95f);
+    }
+
+    frame capture()
     {
         const auto camera = snapshot();
         const vec3 eye = eye_position();
@@ -67,7 +98,12 @@ namespace clt::camera
             std::sin(camera.pitch),
             -std::cos(camera.yaw) * std::cos(camera.pitch)
         };
-        return look_at(eye, eye + direction);
+        return {camera, look_at(eye, eye + direction)};
+    }
+
+    mat4 view()
+    {
+        return capture().view;
     }
 
     mat4 projection(float aspect)
@@ -77,14 +113,7 @@ namespace clt::camera
 
     mat4 view_projection(float aspect)
     {
-        const auto camera = snapshot();
-        const vec3 eye = eye_position();
-        const vec3 direction{
-            std::sin(camera.yaw) * std::cos(camera.pitch),
-            std::sin(camera.pitch),
-            -std::cos(camera.yaw) * std::cos(camera.pitch)
-        };
-        return perspective(camera.fov, aspect, 0.1f, 1000.0f) *
-            look_at(eye, eye + direction);
+        const auto frame = capture();
+        return perspective(frame.pose.fov, aspect, 0.1f, 1000.0f) * frame.view;
     }
 } // namespace clt::camera

@@ -123,6 +123,38 @@ namespace clt::connection
         return events;
     }
 
+    bool send_weapon(net::weapon::command command)
+    {
+        auto& data = *get();
+        std::lock_guard<std::mutex> lock(data.weapon_mutex);
+        if (data.weapon_outgoing.size() < 64)
+        {
+            data.weapon_outgoing.push_back(command);
+            return true;
+        }
+        return false;
+    }
+
+    std::vector<net::weapon::snapshot> take_weapon_updates()
+    {
+        auto& data = *get();
+        std::lock_guard<std::mutex> lock(data.weapon_mutex);
+        std::vector<net::weapon::snapshot> result(
+            data.weapon_updates.begin(), data.weapon_updates.end()
+        );
+        data.weapon_updates.clear();
+        return result;
+    }
+
+    std::vector<net::weapon::shot> take_weapon_shots()
+    {
+        auto& data = *get();
+        std::lock_guard<std::mutex> lock(data.weapon_mutex);
+        std::vector<net::weapon::shot> result(data.weapon_shots.begin(), data.weapon_shots.end());
+        data.weapon_shots.clear();
+        return result;
+    }
+
     void check_error()
     {
         std::exception_ptr error;
@@ -269,12 +301,21 @@ namespace clt::connection
                 auto next_send = clock::now();
                 auto next_scene_send = next_send;
                 auto next_move_send = next_send;
+                auto next_weapon_send = next_send;
                 auto last_received = next_send;
                 auto retry = std::chrono::milliseconds(net::limits::retry_ms);
                 std::array<std::uint8_t, net::scene_stream::packet_size + 1> buffer{};
-                
+
                 auto clear_scene = [&]
                 {
+                    {
+                        std::lock_guard<std::mutex> lock(data.weapon_mutex);
+                        data.weapon_outgoing.clear();
+                        data.weapon_updates.clear();
+                        data.weapon_shots.clear();
+                        data.weapon_ack = data.weapon_tick = 0;
+                        data.weapon_versions.clear();
+                    }
                     scene_bytes.clear();
                     scene_received.clear();
                     stream_started = {};
@@ -324,7 +365,64 @@ namespace clt::connection
                         {
                             break;
                         }
-                        
+
+                        auto accept_weapon = [&](const net::weapon::snapshot& update)
+                        {
+                            std::lock_guard<std::mutex> lock(data.weapon_mutex);
+                            const auto previous = data.weapon_versions.find(update.weapon_id);
+                            if (previous != data.weapon_versions.end() &&
+                                (net::message::newer(previous->second.first, update.sequence) ||
+                                 (update.sequence == previous->second.first &&
+                                  net::message::newer(previous->second.second, update.tick))))
+                            {
+                                return false;
+                            }
+                            data.weapon_versions[update.weapon_id] = {update.sequence, update.tick};
+                            if (!net::message::newer(data.weapon_ack, update.sequence))
+                            {
+                                data.weapon_ack = update.sequence;
+                                data.weapon_tick = update.tick;
+                            }
+                            while (!data.weapon_outgoing.empty() &&
+                                   !net::message::newer(
+                                       data.weapon_outgoing.front().sequence, data.weapon_ack
+                                   ))
+                            {
+                                data.weapon_outgoing.pop_front();
+                            }
+                            if (data.weapon_updates.size() >= 64)
+                            {
+                                data.weapon_updates.pop_front();
+                            }
+                            data.weapon_updates.push_back(update);
+                            last_received = now;
+                            return true;
+                        };
+                        if (const auto shot = net::weapon::decode_shot(buffer.data(), *size))
+                        {
+                            if (net::endpoint::equal(peer, server) && shot->state.token == token &&
+                                data.connected.load(std::memory_order_relaxed))
+                            {
+                                accept_weapon(shot->state);
+                                std::lock_guard<std::mutex> lock(data.weapon_mutex);
+                                if (data.weapon_shots.size() >= 64)
+                                {
+                                    data.weapon_shots.pop_front();
+                                }
+                                data.weapon_shots.push_back(*shot);
+                            }
+                            continue;
+                        }
+                        if (const auto update = net::weapon::decode_snapshot(buffer.data(), *size))
+                        {
+                            if (net::endpoint::equal(peer, server) && update->token == token &&
+                                data.connected.load(std::memory_order_relaxed))
+                            {
+                                accept_weapon(*update);
+                            }
+                            continue;
+                        }
+
                         if (const auto event = net::animation::decode_event(
                                 buffer.data(), *size))
                         {
@@ -619,6 +717,18 @@ namespace clt::connection
 
                         requested_until = scene_fragment + net::limits::fragments_per_tick;
                         next_scene_send = now + std::chrono::milliseconds(net::limits::scene_request_ms);
+                    }
+
+                    if (data.connected.load(std::memory_order_relaxed) && now >= next_weapon_send)
+                    {
+                        std::lock_guard<std::mutex> lock(data.weapon_mutex);
+                        for (auto command : data.weapon_outgoing)
+                        {
+                            command.token = token;
+                            const auto packet = net::weapon::encode_command(command);
+                            net::socket::send(data.socket, server, packet.data(), packet.size());
+                        }
+                        next_weapon_send = now + 30ms;
                     }
 
                     std::deque<::player::input> inputs;

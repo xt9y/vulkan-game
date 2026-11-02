@@ -1,0 +1,490 @@
+{
+  "asset": "glock",
+  "coordinates": "glTF right-handed Y-up, meters",
+  "default_clip": "Glock_Idle",
+  "default_arms": "ArmsMale",
+  "omitted_optional_meshes": [
+    "ArmsFemale",
+    "LeupoldRedDot",
+    "LeupoldRedDotGlass",
+    "Supressor"
+  ],
+  "clips": [
+    {
+      "name": "Glock_ADS_Fire1",
+      "source": "animations/Glock_ADS_Fire1.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 21,
+      "fps": 30,
+      "duration_seconds": 0.6666666666666666,
+      "sample_count": 21,
+      "retarget_translation_error_m": 7.623499637716301e-07
+    },
+    {
+      "name": "Glock_ADS_Fire2",
+      "source": "animations/Glock_ADS_Fire2.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 21,
+      "fps": 30,
+      "duration_seconds": 0.6666666666666666,
+      "sample_count": 21,
+      "retarget_translation_error_m": 7.623499637716301e-07
+    },
+    {
+      "name": "Glock_ADS_Fire3",
+      "source": "animations/Glock_ADS_Fire3.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 21,
+      "fps": 30,
+      "duration_seconds": 0.6666666666666666,
+      "sample_count": 21,
+      "retarget_translation_error_m": 7.623499637716301e-07
+    },
+    {
+      "name": "Glock_ADS_Idle",
+      "source": "animations/Glock_ADS_Idle.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 60,
+      "fps": 30,
+      "duration_seconds": 1.9666666666666666,
+      "sample_count": 60,
+      "retarget_translation_error_m": 4.917524301426144e-07
+    },
+    {
+      "name": "Glock_ADS_In",
+      "source": "animations/Glock_ADS_In.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 16,
+      "fps": 30,
+      "duration_seconds": 0.5,
+      "sample_count": 16,
+      "retarget_translation_error_m": 5.014080214020979e-07
+    },
+    {
+      "name": "Glock_ADS_Out",
+      "source": "animations/Glock_ADS_Out.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 16,
+      "fps": 30,
+      "duration_seconds": 0.5,
+      "sample_count": 16,
+      "retarget_translation_error_m": 7.623499637716301e-07
+    },
+    {
+      "name": "Glock_ADS_Walk",
+      "source": "animations/Glock_ADS_Walk.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 21,
+      "fps": 30,
+      "duration_seconds": 0.6666666666666666,
+      "sample_count": 21,
+      "retarget_translation_error_m": 4.917524301426144e-07
+    },
+    {
+      "name": "Glock_Draw",
+      "source": "animations/Glock_Draw.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 21,
+      "fps": 30,
+      "duration_seconds": 0.6666666666666666,
+      "sample_count": 21,
+      "retarget_translation_error_m": 3.956531896397994e-07
+    },
+    {
+      "name": "Glock_DrawFirst",
+      "source": "animations/Glock_DrawFirst.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 31,
+      "fps": 30,
+      "duration_seconds": 1.0,
+      "sample_count": 31,
+      "retarget_translation_error_m": 4.043270215754251e-07
+    },
+    {
+      "name": "Glock_Fire1",
+      "source": "animations/Glock_Fire1.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 21,
+      "fps": 30,
+      "duration_seconds": 0.6666666666666666,
+      "sample_count": 21,
+      "retarget_translation_error_m": 5.014080214020979e-07
+    },
+    {
+      "name": "Glock_Fire2",
+      "source": "animations/Glock_Fire2.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 21,
+      "fps": 30,
+      "duration_seconds": 0.6666666666666666,
+      "sample_count": 21,
+      "retarget_translation_error_m": 5.014080214020979e-07
+    },
+    {
+      "name": "Glock_Fire3",
+      "source": "animations/Glock_Fire3.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 21,
+      "fps": 30,
+      "duration_seconds": 0.6666666666666666,
+      "sample_count": 21,
+      "retarget_translation_error_m": 5.014080214020979e-07
+    },
+    {
+      "name": "Glock_Idle",
+      "source": "animations/Glock_Idle.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 61,
+      "fps": 30,
+      "duration_seconds": 2.0,
+      "sample_count": 61,
+      "retarget_translation_error_m": 5.014080214020979e-07
+    },
+    {
+      "name": "Glock_Melee",
+      "source": "animations/Glock_Melee.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 36,
+      "fps": 30,
+      "duration_seconds": 1.1666666666666667,
+      "sample_count": 36,
+      "retarget_translation_error_m": 4.314265755356379e-07
+    },
+    {
+      "name": "Glock_Origin",
+      "source": "animations/Glock_Origin.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 1,
+      "fps": 30,
+      "duration_seconds": 0.0,
+      "sample_count": 1,
+      "retarget_translation_error_m": 2.3466372114455137e-07
+    },
+    {
+      "name": "Glock_Reload",
+      "source": "animations/Glock_Reload.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 51,
+      "fps": 30,
+      "duration_seconds": 1.6666666666666667,
+      "sample_count": 51,
+      "retarget_translation_error_m": 5.014080214020979e-07
+    },
+    {
+      "name": "Glock_ReloadEmpty",
+      "source": "animations/Glock_ReloadEmpty.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 51,
+      "fps": 30,
+      "duration_seconds": 1.6666666666666667,
+      "sample_count": 51,
+      "retarget_translation_error_m": 5.206884506242319e-07
+    },
+    {
+      "name": "Glock_Walk",
+      "source": "animations/Glock_Walk.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 21,
+      "fps": 30,
+      "duration_seconds": 0.6666666666666666,
+      "sample_count": 21,
+      "retarget_translation_error_m": 5.014080214020979e-07
+    }
+  ],
+  "sockets_idle_frame0_gltf": {
+    "camera": [
+      [
+        -1.0,
+        -3.8941436741879443e-07,
+        -1.2378126139096085e-14,
+        -2.5406754907253964e-17
+      ],
+      [
+        -1.4227680177666263e-14,
+        6.832260623923503e-08,
+        -1.0,
+        0.8256739377975464
+      ],
+      [
+        3.8941436741879443e-07,
+        -1.0,
+        -6.832260623923503e-08,
+        -0.024150969460606575
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "Muzzle": [
+      [
+        1.0,
+        2.384222170803696e-07,
+        0.0,
+        -0.09928794950246811
+      ],
+      [
+        -4.128147544396783e-14,
+        1.7314440015070431e-07,
+        -1.0,
+        0.7487948536872864
+      ],
+      [
+        -2.384222170803696e-07,
+        1.0,
+        1.7314440015070431e-07,
+        0.5267171263694763
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "EjectionPort": [
+      [
+        1.0,
+        2.3842218865866016e-07,
+        -1.6940658945086007e-21,
+        -0.09928794950246811
+      ],
+      [
+        2.9924149367189373e-14,
+        -1.2550910355457745e-07,
+        -1.0,
+        0.7504456639289856
+      ],
+      [
+        -2.3842218865866016e-07,
+        1.0,
+        -1.2550910355457745e-07,
+        0.3600839376449585
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "weapon": [
+      [
+        1.0,
+        3.637983143900403e-12,
+        0.0,
+        -0.09928794950246811
+      ],
+      [
+        1.373300245609139e-19,
+        -3.774894707930798e-08,
+        -1.0,
+        0.733771562576294
+      ],
+      [
+        -3.637983143900403e-12,
+        1.0,
+        -3.774894707930798e-08,
+        0.34973856806755066
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "Slide": [
+      [
+        1.0,
+        -8.662515824653383e-07,
+        2.573294225274858e-14,
+        -0.0992879569530487
+      ],
+      [
+        -8.662515256219194e-07,
+        -1.0,
+        -2.3103304158667015e-07,
+        0.7475022077560425
+      ],
+      [
+        2.2586458799187664e-13,
+        3.502423453483061e-07,
+        -1.0,
+        0.3113994300365448
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "Magazine": [
+      [
+        1.0,
+        4.768423877976602e-07,
+        -1.3260185050684159e-12,
+        -0.09317753463983536
+      ],
+      [
+        1.7474282287821552e-07,
+        -0.3664608895778656,
+        -0.9304333925247192,
+        0.6626083850860596
+      ],
+      [
+        -4.4367052964844333e-07,
+        0.9304335713386536,
+        -0.3664608597755432,
+        0.3275817334651947
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "Magazine2": [
+      [
+        1.0,
+        4.768423309542413e-07,
+        1.3639588590519391e-14,
+        -0.09928794950246811
+      ],
+      [
+        1.7474380342719087e-07,
+        -0.36646029353141785,
+        -0.9304335713386536,
+        0.6621747016906738
+      ],
+      [
+        -4.436702170096396e-07,
+        0.9304336309432983,
+        -0.36646026372909546,
+        -0.16866330802440643
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  "camera_idle_frame0_gltf": [
+    [
+      -1.0,
+      -3.8941436741879443e-07,
+      -1.2378126139096085e-14,
+      -2.5406754907253964e-17
+    ],
+    [
+      -1.4227680177666263e-14,
+      6.832260623923503e-08,
+      -1.0,
+      0.8256739377975464
+    ],
+    [
+      3.8941436741879443e-07,
+      -1.0,
+      -6.832260623923503e-08,
+      -0.024150969460606575
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "camera_idle_frame0_inverse_gltf": [
+    [
+      -1.0,
+      -1.422767848360037e-14,
+      3.8941436741879443e-07,
+      9.404745426877525e-09
+    ],
+    [
+      -3.8941436741879443e-07,
+      6.832260623923503e-08,
+      -1.0,
+      -0.024151025339961052
+    ],
+    [
+      -1.237812444503019e-14,
+      -1.0,
+      -6.832260623923503e-08,
+      0.8256739377975464
+    ],
+    [
+      0.0,
+      0.0,
+      -0.0,
+      1.0
+    ]
+  ],
+  "socket_bones": [
+    "camera",
+    "Muzzle",
+    "EjectionPort"
+  ],
+  "retargeting": "Final source armature matrices baked against Glock.fbx shared rest skeleton at 30 Hz; source per-clip rest poses differ.",
+  "optical_camera_world_gltf": [
+    [
+      -0.9999982118606567,
+      -0.0018720269436016679,
+      0.00023460245574824512,
+      0.0
+    ],
+    [
+      -0.0018718360224738717,
+      0.9999979138374329,
+      0.0008116508251987398,
+      0.8256739377975464
+    ],
+    [
+      -0.00023612139921169728,
+      0.0008112102514132857,
+      -0.9999995827674866,
+      -0.024150965735316277
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "optical_camera_view_gltf": [
+    [
+      -0.9999982118606567,
+      -0.0018718359060585499,
+      -0.0002361214137636125,
+      0.0015398235991597176
+    ],
+    [
+      -0.0018720269436016679,
+      0.9999979138374329,
+      0.0008112103096209466,
+      -0.8256525993347168
+    ],
+    [
+      0.00023460247030016035,
+      0.0008116508834064007,
+      -0.9999997019767761,
+      -0.024821117520332336
+    ],
+    [
+      -0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "horizontal_fov_degrees": 90,
+  "reload_source_frame20_seconds": 0.6333333333333333
+}

@@ -27,4 +27,7 @@ namespace srv::assets
     rig import_rig(const fastgltf::Asset& asset, std::size_t skin_index);
     ::scene::skin serialize_rig(const fastgltf::Asset& asset,
                                 std::size_t skin_index, std::uint32_t id);
+    ::scene::skin serialize_rig(
+        const fastgltf::Asset& asset, std::size_t skin_index, std::uint32_t id, const rig& imported
+    );
 } // namespace srv::assets

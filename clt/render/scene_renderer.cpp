@@ -1,21 +1,22 @@
 #include "scene_renderer.hpp"
+
+#include "clt/animation/animation.hpp"
+#include "clt/network/connection.hpp"
+#include "clt/render/texture.hpp"
+#include "clt/render/upload.hpp"
+#include "clt/view/camera.hpp"
+#include "clt/weapon/weapon.hpp"
 #include "srv/game/options.hpp"
 #include "srv/shared/net/limits.hpp"
-
-#include "clt/network/connection.hpp"
-#include "clt/render/upload.hpp"
-#include "clt/render/texture.hpp"
-#include "clt/animation/animation.hpp"
-#include "clt/view/camera.hpp"
 #include "srv/shared/scene/scene.hpp"
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <filesystem>
-#include <cmath>
-#include <chrono>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -55,6 +56,7 @@ namespace clt::scene_renderer
                 vk::buffer::resource visible;
                 vk::buffer::resource indirect;
                 vk::buffer::resource skin_palette;
+                vk::buffer::resource local_instances;
                 vk::DescriptorSet set{};
             };
             std::vector<per_image> frames;
@@ -79,6 +81,8 @@ namespace clt::scene_renderer
         struct state {
             std::shared_ptr<const ::scene::state> snapshot;
             std::vector<gpu_mesh> meshes;
+            std::vector<gpu_mesh> local_meshes;
+            vk::DescriptorPool local_pool{};
             vk::DescriptorSetLayout instance_layout{};
             vk::DescriptorPool instance_pool{};
             vk::PipelineLayout cull_layout{};
@@ -131,6 +135,10 @@ namespace clt::scene_renderer
                     if (frame.visible.handle) vk::buffer::destroy(frame.visible);
                     if (frame.indirect.handle) vk::buffer::destroy(frame.indirect);
                     if (frame.skin_palette.handle) vk::buffer::destroy(frame.skin_palette);
+                    if (frame.local_instances.handle)
+                    {
+                        vk::buffer::destroy(frame.local_instances);
+                    }
                 }
             }
 
@@ -508,7 +516,9 @@ namespace clt::scene_renderer
         info.pBindings = bindings.data();
         data.instance_layout = device.createDescriptorSetLayout(info);
         texture::init();
-
+        weapon::initialize();
+        texture::pin(weapon::assets());
+        texture::synchronize(::scene::state{});
 
         vk::PushConstantRange range{};
         range.stageFlags = vk::ShaderStageFlagBits::eCompute;
@@ -572,9 +582,135 @@ namespace clt::scene_renderer
         }, vk::swapchain::get()->extent};
     }
 
+    void release_local_frames()
+    {
+        auto& data = get();
+        for (auto& mesh : data.local_meshes)
+        {
+            for (auto& frame : mesh.frames)
+            {
+                if (frame.local_instances.handle)
+                {
+                    vk::buffer::destroy(frame.local_instances);
+                }
+                if (frame.visible.handle)
+                {
+                    vk::buffer::destroy(frame.visible);
+                }
+                if (frame.skin_palette.handle)
+                {
+                    vk::buffer::destroy(frame.skin_palette);
+                }
+            }
+            mesh.frames.clear();
+        }
+        if (data.local_pool)
+        {
+            vk::device::get()->handle.destroyDescriptorPool(data.local_pool);
+        }
+        data.local_pool = nullptr;
+    }
+
+    void create_local_frames()
+    {
+        auto& data = get();
+        const auto& source = weapon::assets();
+        if (source.meshes.empty())
+        {
+            return;
+        }
+        if (data.local_meshes.empty())
+        {
+            upload::batch transfers;
+            for (const auto& mesh : source.meshes)
+            {
+                gpu_mesh output;
+                output.id = mesh.id;
+                output.skin_id = mesh.skin_id;
+                output.joint_count = animation::joints(mesh.skin_id);
+                output.surface = mesh.surface;
+                output.index_count = mesh.indices.size();
+                output.vertices = transfers.add(
+                    mesh.vertices.data(),
+                    mesh.vertices.size() * sizeof(::scene::vertex),
+                    vk::BufferUsageFlagBits::eVertexBuffer
+                );
+                output.indices = transfers.add(
+                    mesh.indices.data(),
+                    mesh.indices.size() * sizeof(std::uint32_t),
+                    vk::BufferUsageFlagBits::eIndexBuffer
+                );
+                data.local_meshes.push_back(std::move(output));
+            }
+            transfers.finish();
+        }
+        const auto count =
+            std::uint32_t(data.local_meshes.size() * vk::swapchain::get()->images.size());
+        const std::array<vk::DescriptorPoolSize, 2> sizes{
+            {{vk::DescriptorType::eStorageBuffer, count * 5},
+             {vk::DescriptorType::eCombinedImageSampler, count * 5}}
+        };
+        vk::DescriptorPoolCreateInfo pool{};
+        pool.maxSets = count;
+        pool.poolSizeCount = sizes.size();
+        pool.pPoolSizes = sizes.data();
+        const auto device = vk::device::get()->handle;
+        data.local_pool = device.createDescriptorPool(pool);
+        std::array<std::uint32_t, 192> identities{};
+        for (std::uint32_t i = 0; i < identities.size(); ++i)
+        {
+            identities[i] = i;
+        }
+        for (auto& mesh : data.local_meshes)
+        {
+            mesh.frames.resize(vk::swapchain::get()->images.size());
+            for (auto& frame : mesh.frames)
+            {
+                const auto memory = vk::MemoryPropertyFlagBits::eHostVisible |
+                                    vk::MemoryPropertyFlagBits::eHostCoherent;
+                frame.local_instances = vk::buffer::create(
+                    192 * sizeof(instance_data), vk::BufferUsageFlagBits::eStorageBuffer, memory
+                );
+                frame.visible = vk::buffer::create(
+                    sizeof(identities),
+                    vk::BufferUsageFlagBits::eVertexBuffer |
+                        vk::BufferUsageFlagBits::eStorageBuffer,
+                    memory
+                );
+                vk::buffer::write(frame.visible, identities.data(), sizeof(identities));
+                frame.skin_palette = vk::buffer::create(
+                    std::max<std::uint32_t>(1, mesh.joint_count) * sizeof(animation::matrix),
+                    vk::BufferUsageFlagBits::eStorageBuffer,
+                    memory
+                );
+                vk::DescriptorSetAllocateInfo allocate{};
+                allocate.descriptorPool = data.local_pool;
+                allocate.descriptorSetCount = 1;
+                allocate.pSetLayouts = &data.instance_layout;
+                frame.set = device.allocateDescriptorSets(allocate).front();
+                std::array<vk::DescriptorBufferInfo, 5> infos{};
+                std::array<vk::WriteDescriptorSet, 5> writes{};
+                for (std::uint32_t i = 0; i < 5; ++i)
+                {
+                    infos[i].buffer =
+                        i == 4 ? frame.skin_palette.handle : frame.local_instances.handle;
+                    infos[i].range = VK_WHOLE_SIZE;
+                    writes[i].dstSet = frame.set;
+                    writes[i].dstBinding = i == 4 ? 9 : i;
+                    writes[i].descriptorCount = 1;
+                    writes[i].descriptorType = vk::DescriptorType::eStorageBuffer;
+                    writes[i].pBufferInfo = &infos[i];
+                }
+                device.updateDescriptorSets(writes, {});
+                texture::bind(frame.set, mesh.surface);
+            }
+        }
+    }
+
     void release_frame_resources()
     {
         auto& data = get();
+        release_local_frames();
         vk::pipeline::destroy(data.pipeline);
         data.pipeline = nullptr;
         vk::pipeline_layout::destroy(data.layout);
@@ -606,6 +742,7 @@ namespace clt::scene_renderer
                 create_target();
             }
             create_pipeline();
+            create_local_frames();
         }
         catch (...)
         {
@@ -795,7 +932,9 @@ namespace clt::scene_renderer
         auto& data = get();
         destroy_meshes(data.meshes);
         texture::reset();
+        texture::synchronize(::scene::state{});
         animation::reset();
+        animation::synchronize(weapon::assets());
         if (data.instance_pool)
         {
             vk::device::get()->handle.destroyDescriptorPool(data.instance_pool);
@@ -892,6 +1031,7 @@ namespace clt::scene_renderer
         {
             animation::reset();
             texture::reset();
+            texture::synchronize(::scene::state{});
         }
 
         if (source)
@@ -1046,16 +1186,26 @@ namespace clt::scene_renderer
         data.instance_pool = new_pool;
         data.meshes = std::move(meshes);
         data.snapshot = source;
+        for (auto& mesh : data.local_meshes)
+        {
+            for (auto& frame : mesh.frames)
+            {
+                texture::bind(frame.set, mesh.surface);
+            }
+        }
     }
 
     void draw(vk::CommandBuffer command, std::uint32_t image)
     {
         auto& data = get();
+        const auto camera = camera::capture();
+        const auto& weapon_draws = weapon::update(camera.view);
         const auto extent = vk::swapchain::get()->extent;
         data.last_image = image;
-        const auto view_projection = camera::view_projection(
-            float(extent.width) / float(extent.height)
-        );
+        const float aspect = float(extent.width) / float(extent.height);
+        const auto view_projection =
+            perspective(camera.pose.fov, aspect, 0.1f, 1000.0f) * camera.view;
+        const auto weapon_view_projection = weapon::view_projection(aspect, camera.view);
 
         std::array<vk::ClearValue, 4> clear{};
         for (std::size_t i = 0; i < 3; ++i)
@@ -1189,6 +1339,35 @@ namespace clt::scene_renderer
             }
         }
 
+        for (const auto& item : weapon_draws)
+        {
+            auto found = std::find_if(
+                data.local_meshes.begin(),
+                data.local_meshes.end(),
+                [&](const gpu_mesh& mesh)
+                {
+                    return mesh.id == item.mesh_id;
+                }
+            );
+            if (found == data.local_meshes.end())
+            {
+                continue;
+            }
+            auto& frame = found->frames.at(image);
+            vk::buffer::write(
+                frame.local_instances,
+                item.instances.data(),
+                item.instances.size() * sizeof(weapon::instance_data)
+            );
+            if (!item.palette.empty())
+            {
+                vk::buffer::write(
+                    frame.skin_palette,
+                    item.palette.data(),
+                    item.palette.size() * sizeof(animation::matrix)
+                );
+            }
+        }
         command.beginRenderPass(begin, vk::SubpassContents::eInline);
 
         command.bindPipeline(
@@ -1196,14 +1375,9 @@ namespace clt::scene_renderer
             data.pipeline
         );
 
-        command.setViewport(0, vk::Viewport{
-            0.0f,
-            0.0f,
-            float(extent.width),
-            float(extent.height),
-            0.0f,
-            1.0f
-        });
+        command.setViewport(
+            0, vk::Viewport{0.0f, 0.0f, float(extent.width), float(extent.height), 0.1f, 1.0f}
+        );
 
         command.setScissor(0, vk::Rect2D{{0, 0}, extent});
 
@@ -1256,6 +1430,73 @@ namespace clt::scene_renderer
             }
         }
 
+        // Disjoint depth ranges give the viewmodel independent depth testing while
+        // preserving world depth for deferred HDR lighting and sky classification.
+        for (bool viewmodel : {false, true})
+        {
+            command.setViewport(
+                0,
+                vk::Viewport{
+                    0,
+                    0,
+                    float(extent.width),
+                    float(extent.height),
+                    viewmodel ? 0.f : .1f,
+                    viewmodel ? .099f : 1.f
+                }
+            );
+            for (const auto& item : weapon_draws)
+            {
+                if (item.viewmodel != viewmodel)
+                {
+                    continue;
+                }
+                const auto found = std::find_if(
+                    data.local_meshes.begin(),
+                    data.local_meshes.end(),
+                    [&](const gpu_mesh& mesh)
+                    {
+                        return mesh.id == item.mesh_id;
+                    }
+                );
+                if (found == data.local_meshes.end())
+                {
+                    continue;
+                }
+                const auto& mesh = *found;
+                const auto& frame = mesh.frames.at(image);
+                const auto& m = mesh.surface;
+                const auto flags = (m.base_color_texture ? 1u : 0u) |
+                                   (m.metallic_roughness_texture ? 2u : 0u) |
+                                   (m.normal_texture ? 4u : 0u) | (m.occlusion_texture ? 8u : 0u) |
+                                   (m.emissive_texture ? 16u : 0u) | (m.alpha_mode << 5);
+                draw_parameters params{
+                    viewmodel ? weapon_view_projection : view_projection,
+                    m.base_color,
+                    {m.metallic, m.roughness, m.occlusion, m.alpha_cutoff},
+                    {m.emissive[0], m.emissive[1], m.emissive[2], float(flags)},
+                    mesh.joint_count
+                };
+                command.pushConstants(
+                    data.layout,
+                    vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+                    0,
+                    sizeof(params),
+                    &params
+                );
+                command.bindDescriptorSets(
+                    vk::PipelineBindPoint::eGraphics, data.layout, 0, {frame.set}, {}
+                );
+                command.bindVertexBuffers(
+                    0,
+                    std::array<vk::Buffer, 2>{mesh.vertices.handle, frame.visible.handle},
+                    std::array<vk::DeviceSize, 2>{0, 0}
+                );
+                command.bindIndexBuffer(mesh.indices.handle, 0, vk::IndexType::eUint32);
+                command.drawIndexed(mesh.index_count, item.instances.size(), 0, 0, 0);
+            }
+        }
+
         command.endRenderPass();
     }
 
@@ -1264,6 +1505,9 @@ namespace clt::scene_renderer
         auto& data = get();
 
         destroy_meshes(data.meshes);
+        release_local_frames();
+        destroy_meshes(data.local_meshes);
+        weapon::shutdown();
         data.snapshot.reset();
         if (data.instance_pool)
         {

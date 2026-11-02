@@ -108,9 +108,16 @@ namespace clt::animation
         return item ? std::uint32_t(item->skeleton.num_joints()) : 0;
     }
 
-    bool sample(std::uint32_t skin_id, std::uint32_t clip,
-                float seconds, std::vector<matrix>& palette,
-                std::uint32_t overlay, float weight, std::uint32_t mask_root)
+    bool sample(
+        std::uint32_t skin_id,
+        std::uint32_t clip,
+        float seconds,
+        std::vector<matrix>& palette,
+        std::uint32_t overlay,
+        float weight,
+        std::uint32_t mask_root,
+        bool loop
+    )
     {
         auto* item = find(skin_id);
         if (!item || !std::isfinite(seconds) || !std::isfinite(weight)) return false;
@@ -127,7 +134,8 @@ namespace clt::animation
             if (index >= item->clips.size()) return false;
             const auto& animation = item->clips[index];
             if (animation.duration() <= 0) return false;
-            float t = std::fmod(seconds, animation.duration());
+            float t = loop ? std::fmod(seconds, animation.duration())
+                           : std::clamp(seconds, 0.0f, animation.duration());
             if (t < 0) t += animation.duration();
             ozz::animation::SamplingJob job;
             job.animation = &animation;
@@ -203,6 +211,12 @@ namespace clt::animation
         return true;
     }
 
+    float duration(std::uint32_t skin_id, std::uint32_t clip)
+    {
+        const auto* skin = find(skin_id);
+        return skin && clip < skin->clips.size() ? skin->clips[clip].duration() : 0.f;
+    }
+
     std::uint32_t joint(std::uint32_t skin_id, std::string_view name)
     {
         const auto* skin = find(skin_id);
@@ -219,6 +233,43 @@ namespace clt::animation
         if (!skin || index >= skin->models.size()) return false;
         for (int c = 0; c < 4; ++c)
             ozz::math::StorePtrU(skin->models[index].cols[c], out.data() + c * 4);
+        return true;
+    }
+
+    bool offset_joint(
+        std::uint32_t skin_id,
+        std::uint32_t root,
+        vk::util::math::vec3 offset,
+        std::vector<matrix>& palette
+    )
+    {
+        auto* skin = find(skin_id);
+        if (!skin || root >= skin->models.size() || palette.size() != skin->models.size())
+        {
+            return false;
+        }
+        const auto parents = skin->skeleton.joint_parents();
+        for (std::size_t i = 0; i < skin->models.size(); ++i)
+        {
+            int ancestor = int(i);
+            while (ancestor >= 0 && std::uint32_t(ancestor) != root)
+            {
+                ancestor = parents[ancestor];
+            }
+            if (ancestor < 0)
+            {
+                continue;
+            }
+            auto& model = skin->models[i];
+            model.cols[3] =
+                model.cols[3] + ozz::math::simd_float4::Load(offset.x, offset.y, offset.z, 0);
+            matrix world{};
+            for (int c = 0; c < 4; ++c)
+            {
+                ozz::math::StorePtrU(model.cols[c], world.data() + c * 4);
+            }
+            palette[i] = multiply(world, skin->inverse_bind[i]);
+        }
         return true;
     }
 

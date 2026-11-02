@@ -106,8 +106,10 @@ namespace srv::assets
         for (std::size_t i = 0; i < asset.skins.size(); ++i)
         {
             auto imported = import_rig(asset, i);
+            result.skins.push_back(
+                serialize_rig(asset, i, first_skin + std::uint32_t(i), imported)
+            );
             remaps.push_back(std::move(imported.skin_joints));
-            result.skins.push_back(serialize_rig(asset, i, first_skin + std::uint32_t(i)));
         }
         if (asset.scenes.empty()) return result;
 

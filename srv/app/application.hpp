@@ -1,20 +1,20 @@
 #pragma once
 
-#include <vector>
-#include <filesystem>
-#include <string>
-#include <memory>
-#include <cstddef>
-#include "srv/shared/net/animation.hpp"
-
 #include "srv/game/options.hpp"
-
+#include "srv/shared/net/animation.hpp"
 #include "srv/shared/net/message.hpp"
 #include "srv/shared/net/socket.hpp"
-
-#include "srv/shared/scene/scene.hpp"
+#include "srv/shared/net/weapon.hpp"
 #include "srv/shared/player/movement.hpp"
+#include "srv/shared/scene/scene.hpp"
+#include "srv/shared/weapon/weapon.hpp"
 
+#include <cstddef>
+#include <filesystem>
+#include <functional>
+#include <memory>
+#include <string>
+#include <vector>
 
 namespace srv::application
 {
@@ -24,6 +24,18 @@ namespace srv::application
         ::scene::transform pose;
         std::uint32_t animation;
     };
+
+    struct weapon_command_context
+    {
+        const net::weapon::command& command;
+        const ::weapon::definition& definition;
+        ::weapon::state& state;
+        const ::player::state& player;
+        double now;
+        const ::weapon::world& world;
+    };
+
+    using weapon_command_handler = std::function<::weapon::hit(weapon_command_context&)>;
 
     struct state
     {
@@ -42,6 +54,9 @@ namespace srv::application
         std::vector<pending_event> attachment_events;
         std::uint32_t next_event = 0;
         player::collision_world colliders;
+        ::weapon::world weapon_world;
+        ::weapon::registry weapons;
+        weapon_command_handler on_weapon_command;
         spatial::index collision_index;
         std::vector<std::uint8_t> scene_bytes;
         std::uint32_t scene_hash = 0;
@@ -60,6 +75,9 @@ namespace srv::application
     void set_scene(::scene::state scene);
     void load_model(std::filesystem::path path, ::scene::transform pose,
                     std::uint32_t animation);
+    // Register game rules and receive authenticated, owned, equipped weapon commands.
+    void add_weapon(::weapon::definition definition);
+    void on_weapon_command(weapon_command_handler handler);
     void init();
     // Publish append-only mesh/instance batches; called on the server thread.
     // Background jobs return a completion that invokes append_scene().

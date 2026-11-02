@@ -2,12 +2,12 @@
 
 #include "clt/input/input.hpp"
 #include "clt/network/connection.hpp"
-#include "clt/player/prediction.hpp"
-#include "clt/view/camera.hpp"
 #include "clt/platform/vulkan_loader.hpp"
 #include "clt/platform/window.hpp"
-#include "clt/render/renderer.hpp"
+#include "clt/player/prediction.hpp"
 #include "clt/render/postprocess.hpp"
+#include "clt/render/renderer.hpp"
+#include "clt/view/camera.hpp"
 #include "srv/game/application.hpp"
 
 #include <atomic>
@@ -22,6 +22,15 @@ namespace clt::application
     {
         static state data;
         return &data;
+    }
+
+    void set_callbacks(callbacks value)
+    {
+        if (get()->initialized)
+        {
+            throw std::logic_error("Register game callbacks before client initialization");
+        }
+        get()->hooks = value;
     }
 
     void init()
@@ -128,6 +137,10 @@ namespace clt::application
                 const auto frame = input::poll();
                 camera::look(frame.mouse_x, frame.mouse_y);
                 prediction::controls(frame.buttons, camera::snapshot().yaw);
+                if (get()->hooks.on_input)
+                {
+                    get()->hooks.on_input(frame);
+                }
 
                 const bool current = connection::get()->connected.load(std::memory_order_relaxed);
                 if (current != connected)

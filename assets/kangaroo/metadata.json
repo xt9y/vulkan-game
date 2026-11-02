@@ -1,0 +1,66 @@
+{
+  "clips": [
+    {
+      "name": "Kangaroo_Idle",
+      "source": "animations/Kangaroo_Idle.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 301,
+      "fps": 30,
+      "duration_seconds": 10.0,
+      "sample_count": 301,
+      "retarget_translation_error_m": 0.005152307555618872
+    },
+    {
+      "name": "Kangaroo_Hop",
+      "source": "animations/Kangaroo_Hop.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 19,
+      "fps": 30,
+      "duration_seconds": 0.6,
+      "sample_count": 19,
+      "retarget_translation_error_m": 0.000115912603449181
+    },
+    {
+      "name": "Kangaroo_Bite",
+      "source": "animations/Kangaroo_Bite.fbx",
+      "source_first_frame": 2,
+      "source_last_frame": 46,
+      "fps": 30,
+      "duration_seconds": 1.4666666666666666,
+      "sample_count": 45,
+      "retarget_translation_error_m": 0.00013650158914928648
+    },
+    {
+      "name": "Kangaroo_Kick",
+      "source": "animations/Kangaroo_Kick.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 59,
+      "fps": 30,
+      "duration_seconds": 1.9333333333333333,
+      "sample_count": 59,
+      "retarget_translation_error_m": 0.00013723542075926875
+    },
+    {
+      "name": "Kangaroo_HopToIdle",
+      "source": "animations/Kangaroo_HopToIdle.fbx",
+      "source_first_frame": 1,
+      "source_last_frame": 21,
+      "fps": 30,
+      "duration_seconds": 0.6666666666666666,
+      "sample_count": 21,
+      "retarget_translation_error_m": 0.0005114812210178728
+    },
+    {
+      "name": "Kangaroo_IdleToHop",
+      "source": "animations/Kangaroo_IdleToHop.fbx",
+      "source_first_frame": 2,
+      "source_last_frame": 28,
+      "fps": 30,
+      "duration_seconds": 0.8666666666666667,
+      "sample_count": 27,
+      "retarget_translation_error_m": 0.0001375852940191408
+    }
+  ],
+  "coordinates": "glTF Y-up meters",
+  "default_clip": "Kangaroo_Idle"
+}

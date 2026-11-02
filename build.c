@@ -139,6 +139,8 @@ void build(C_Build* b)
     c_sources(client, "clt/input/*.cpp");
     c_sources(client, "clt/view/*.cpp");
     c_sources(client, "clt/player/*.cpp");
+    c_sources(client, "clt/weapon/*.cpp");
+    c_sources(client, "srv/assets/*.cpp");
     c_sources(client, "srv/shared/net/*.cpp");
     c_sources(client, "srv/shared/player/*.cpp");
     c_sources(client, "srv/game/options.cpp");
@@ -149,6 +151,7 @@ void build(C_Build* b)
     c_use(client, engine);
     c_use(client, headers);
     c_use(client, glfw);
+    c_use(client, fastgltf);
     c_use(client, ozz);
     c_use(client, stb);
 

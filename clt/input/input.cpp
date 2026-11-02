@@ -20,6 +20,21 @@ namespace clt::input
         glfwGetCursorPos(window, &last_x, &last_y);
     }
 
+    bool key_down(int key)
+    {
+        auto* window = clt::window::get()->handle;
+        return window && key >= GLFW_KEY_SPACE && key <= GLFW_KEY_LAST &&
+               glfwGetWindowAttrib(window, GLFW_FOCUSED) && glfwGetKey(window, key) == GLFW_PRESS;
+    }
+
+    bool mouse_down(int button)
+    {
+        auto* window = clt::window::get()->handle;
+        return window && button >= 0 && button <= GLFW_MOUSE_BUTTON_LAST &&
+               glfwGetWindowAttrib(window, GLFW_FOCUSED) &&
+               glfwGetMouseButton(window, button) == GLFW_PRESS;
+    }
+
     frame poll()
     {
         auto* window = clt::window::get()->handle;

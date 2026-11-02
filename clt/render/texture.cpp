@@ -1,11 +1,13 @@
 #include "texture.hpp"
-#define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_STDIO
-#include <stb_image.h>
 #include "upload.hpp"
 
+#include <algorithm>
 #include <array>
+#include <climits>
 #include <cstdint>
+#include <memory>
+#include <stb_image.h>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -53,12 +55,41 @@ namespace clt::texture
         {
             resource result;
             result.id = source.id;
-            result.hash = checksum(source.pixels);
+            result.hash = checksum(source.encoded.empty() ? source.pixels : source.encoded);
             try
             {
-                result.image = batch.add_image(
-                    source.pixels.data(), source.width, source.height
+                // Locally imported models retain compressed images just like the
+                // server. Streamed images can already contain decoded pixels.
+                std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> decoded(
+                    nullptr, stbi_image_free
                 );
+                const auto* pixels = source.pixels.data();
+                if (source.pixels.empty())
+                {
+                    int width = 0, height = 0, channels = 0;
+                    if (source.encoded.empty() || source.encoded.size() > INT_MAX)
+                    {
+                        throw std::runtime_error("Missing local texture data");
+                    }
+                    decoded.reset(stbi_load_from_memory(
+                        source.encoded.data(),
+                        int(source.encoded.size()),
+                        &width,
+                        &height,
+                        &channels,
+                        4
+                    ));
+                    if (!decoded || width != int(source.width) || height != int(source.height))
+                    {
+                        throw std::runtime_error("Invalid local texture dimensions");
+                    }
+                    pixels = decoded.get();
+                }
+                else if (source.pixels.size() != std::size_t(source.width) * source.height * 4)
+                {
+                    throw std::runtime_error("Invalid texture pixel count");
+                }
+                result.image = batch.add_image(pixels, source.width, source.height);
                 vk::ImageViewCreateInfo info{};
                 info.image = result.image.handle;
                 info.viewType = vk::ImageViewType::e2D;
@@ -112,17 +143,49 @@ namespace clt::texture
         }
     }
 
+    namespace
+    {
+        std::vector<::scene::texture> pinned;
+    }
+
+    void pin(const ::scene::state& source)
+    {
+        pinned = source.textures;
+    }
+
     void synchronize(const ::scene::state& source)
     {
         auto& data = get();
         upload::batch batch;
         std::vector<resource> replacement;
-        replacement.reserve(source.textures.size());
+        replacement.reserve(source.textures.size() + pinned.size());
+        std::vector<const ::scene::texture*> incoming;
+        for (const auto& t : source.textures)
+        {
+            incoming.push_back(&t);
+        }
+        for (const auto& t : pinned)
+        {
+            incoming.push_back(&t);
+        }
         try
         {
-            for (const auto& texture : source.textures)
+            for (const auto* entry : incoming)
             {
-                const auto hash = checksum(texture.pixels);
+                const auto& texture = *entry;
+                if (std::any_of(
+                        replacement.begin(),
+                        replacement.end(),
+                        [&](const resource& item)
+                        {
+                            return item.id == texture.id;
+                        }
+                    ))
+                {
+                    continue;
+                }
+                const auto hash =
+                    checksum(texture.encoded.empty() ? texture.pixels : texture.encoded);
                 bool reused = false;
                 for (auto& old : data.textures)
                 {
@@ -180,6 +243,7 @@ namespace clt::texture
     void shutdown()
     {
         reset();
+        pinned.clear();
         auto& data = get();
         destroy(data.fallback);
         if (data.sampler) vk::device::get()->handle.destroySampler(data.sampler);

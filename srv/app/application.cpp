@@ -1,30 +1,28 @@
 #include "application.hpp"
 
-#include "srv/game/application.hpp"
 #include "srv/assets/model.hpp"
-#include "srv/network/session.hpp"
-
-#include "srv/shared/net/endpoint.hpp"
-#include "srv/shared/net/message.hpp"
-#include "srv/shared/net/animation.hpp"
-#include "srv/shared/net/scene_stream.hpp"
-#include "srv/shared/net/movement.hpp"
-#include "srv/shared/net/socket.hpp"
-#include "srv/shared/player/movement.hpp"
+#include "srv/game/application.hpp"
 #include "srv/jobs/worker.hpp"
+#include "srv/network/session.hpp"
+#include "srv/shared/net/animation.hpp"
+#include "srv/shared/net/endpoint.hpp"
 #include "srv/shared/net/limits.hpp"
+#include "srv/shared/net/message.hpp"
+#include "srv/shared/net/movement.hpp"
+#include "srv/shared/net/scene_stream.hpp"
+#include "srv/shared/net/socket.hpp"
+#include "srv/shared/net/weapon.hpp"
+#include "srv/shared/player/movement.hpp"
 
 #include <algorithm>
-#include <iostream>
-#include <filesystem>
 #include <cmath>
-#include <string>
+#include <filesystem>
+#include <iostream>
 #include <iterator>
-#include <vector>
-
-
 #include <stdexcept>
+#include <string>
 #include <thread>
+#include <vector>
 
 namespace srv::application
 {
@@ -44,6 +42,14 @@ namespace srv::application
             const net::message::resource& request
         );
         void tick_players();
+        void tick_weapons();
+        void
+        handle_weapon(const net::endpoint::resource& peer, const net::weapon::command& command);
+        net::weapon::snapshot weapon_snapshot(
+            const session::resource& client,
+            const session::resource::owned_weapon& owned,
+            double now
+        );
     } // namespace
 
     state* get()
@@ -68,6 +74,24 @@ namespace srv::application
         get()->models.push_back({std::move(path), pose, animation});
     }
 
+    void add_weapon(::weapon::definition definition)
+    {
+        if (get()->initialized)
+        {
+            throw std::runtime_error("Register weapons before init");
+        }
+        get()->weapons.add(std::move(definition));
+    }
+
+    void on_weapon_command(weapon_command_handler handler)
+    {
+        if (get()->initialized)
+        {
+            throw std::runtime_error("Configure weapon handler before init");
+        }
+        get()->on_weapon_command = std::move(handler);
+    }
+
     void init()
     {
         if (get()->initialized)
@@ -82,6 +106,7 @@ namespace srv::application
         session::init();
         get()->colliders = player::build_colliders(get()->scene);
         get()->collision_index = player::build_index(get()->colliders);
+        get()->weapon_world.append(get()->scene.meshes, get()->scene.instances);
         srv::generation::init();
         get()->scene_bytes = net::scene_stream::serialize(get()->scene);
         get()->scene_hash = net::scene_stream::checksum(get()->scene_bytes);
@@ -214,6 +239,7 @@ namespace srv::application
         }
 
         // Only the new geometry needs collision bounds and a new BVH root.
+        data.weapon_world.append(data.scene.meshes, patch.instances);
         auto added_colliders = player::build_colliders(data.scene.meshes, patch.instances);
         std::vector<spatial::bounds> boxes;
         boxes.reserve(added_colliders.size());
@@ -312,6 +338,7 @@ namespace srv::application
             // amount of network work done inside one authoritative tick.
             receive_messages();
             tick_players();
+            tick_weapons();
             send_animation_states();
             send_attachment_events();
 
@@ -431,6 +458,9 @@ namespace srv::application
         get()->scene_bytes.clear();
         get()->scene_batches.clear();
         get()->colliders.clear();
+        get()->weapon_world = {};
+        get()->weapons = {};
+        get()->on_weapon_command = {};
         get()->scene_hash = 0;
         get()->scene = {};
         get()->models.clear();
@@ -453,7 +483,7 @@ namespace srv::application
         {
             // One extra byte ensures oversized datagrams can never look like valid packets after
             // truncation.
-            std::array<std::uint8_t, 25> buffer{};
+            std::array<std::uint8_t, net::weapon::command_packet{}.size() + 1> buffer{};
 
             const auto deadline = clock::now() +
                 std::chrono::milliseconds(net::limits::receive_ms);
@@ -467,6 +497,12 @@ namespace srv::application
                 if (!size)
                 {
                     break;
+                }
+
+                if (const auto command = net::weapon::decode_command(buffer.data(), *size))
+                {
+                    handle_weapon(peer, *command);
+                    continue;
                 }
 
                 if (const auto command = net::movement::decode_input(buffer.data(), *size))
@@ -523,6 +559,223 @@ namespace srv::application
             }
         }
 
+        net::weapon::snapshot weapon_snapshot(
+            const session::resource& client,
+            const session::resource::owned_weapon& owned,
+            double now
+        )
+        {
+            const auto& value = owned.state;
+            net::weapon::snapshot snapshot;
+            snapshot.token = client.token;
+            snapshot.sequence = client.weapon_sequence;
+            snapshot.weapon_id = owned.id;
+            snapshot.active_weapon_id = client.active_weapon;
+            snapshot.tick = get()->tick;
+            snapshot.magazine = value.magazine;
+            snapshot.reserve = value.reserve;
+            snapshot.reload = value.reload;
+            snapshot.outcome = value.last_result;
+            if (value.reload != ::weapon::reload_phase::none)
+            {
+                snapshot.reload_duration = float(value.reload_finishes - value.reload_started);
+                snapshot.reload_elapsed =
+                    std::clamp(float(now - value.reload_started), 0.0f, snapshot.reload_duration);
+                snapshot.refill_time = float(value.refill_at - value.reload_started);
+            }
+            return snapshot;
+        }
+
+        void handle_weapon(const net::endpoint::resource& peer, const net::weapon::command& command)
+        {
+            for (auto& client : session::get()->clients)
+            {
+                if (!client.active || client.token != command.token ||
+                    !net::endpoint::equal(client.endpoint, peer))
+                {
+                    continue;
+                }
+                const auto now = clock::now();
+                client.last_seen = now;
+                if (!net::message::newer(command.sequence, client.weapon_sequence))
+                {
+                    if (client.last_shot && client.last_shot->state.sequence == command.sequence &&
+                        client.last_shot->state.weapon_id == command.weapon_id)
+                    {
+                        const auto packet = net::weapon::encode_shot(*client.last_shot);
+                        net::socket::send(
+                            get()->socket, client.endpoint, packet.data(), packet.size()
+                        );
+                    }
+                    return;
+                }
+                // Retry queues use one shared sequence across equipment changes. Hold
+                // later datagrams until missing commands arrive rather than acknowledging
+                // past a dropped equip/fire and permanently discarding it on the client.
+                if (command.sequence - client.weapon_sequence > 256)
+                {
+                    return;
+                }
+                const auto duplicate = std::find_if(
+                    client.weapon_commands.begin(),
+                    client.weapon_commands.end(),
+                    [&](const net::weapon::command& value)
+                    {
+                        return value.sequence == command.sequence;
+                    }
+                );
+                if (duplicate == client.weapon_commands.end())
+                {
+                    auto expected = client.weapon_sequence + 1;
+                    if (!expected)
+                    {
+                        ++expected;
+                    }
+                    if (client.weapon_commands.size() >= 64)
+                    {
+                        if (command.sequence != expected)
+                        {
+                            return;
+                        }
+                        client.weapon_commands.pop_back();
+                    }
+                    const auto position = std::find_if(
+                        client.weapon_commands.begin(),
+                        client.weapon_commands.end(),
+                        [&](const net::weapon::command& value)
+                        {
+                            return net::message::newer(value.sequence, command.sequence);
+                        }
+                    );
+                    client.weapon_commands.insert(position, command);
+                }
+                const double seconds =
+                    std::chrono::duration<double>(now.time_since_epoch()).count();
+                while (!client.weapon_commands.empty())
+                {
+                    auto expected = client.weapon_sequence + 1;
+                    if (!expected)
+                    {
+                        ++expected;
+                    }
+                    if (client.weapon_commands.front().sequence != expected)
+                    {
+                        break;
+                    }
+                    const auto next = client.weapon_commands.front();
+                    client.weapon_commands.pop_front();
+                    client.weapon_sequence = next.sequence;
+                    // Outcomes describe this global acknowledgement. A different
+                    // item must not retain a prior command's fired/reload outcome.
+                    for (auto& item : client.weapons)
+                    {
+                        item.state.last_result = ::weapon::result::none;
+                    }
+                    const auto* definition = get()->weapons.find(next.weapon_id);
+                    auto owned = std::find_if(
+                        client.weapons.begin(),
+                        client.weapons.end(),
+                        [&](const session::resource::owned_weapon& value)
+                        {
+                            return value.id == next.weapon_id;
+                        }
+                    );
+                    if (!definition || owned == client.weapons.end() ||
+                        (next.kind != ::weapon::action::equip &&
+                         client.active_weapon != next.weapon_id))
+                    {
+                        continue;
+                    }
+                    if (next.kind == ::weapon::action::equip)
+                    {
+                        client.active_weapon = next.weapon_id;
+                        owned->state.sequence = next.sequence;
+                        owned->state.last_result = ::weapon::result::equipped;
+                    }
+                    else if (get()->on_weapon_command)
+                    {
+                        weapon_command_context context{
+                            next,
+                            *definition,
+                            owned->state,
+                            client.avatar,
+                            seconds,
+                            get()->weapon_world
+                        };
+                        const auto impact = get()->on_weapon_command(context);
+                        if (next.kind == ::weapon::action::fire)
+                        {
+                            net::weapon::shot shot{
+                                weapon_snapshot(client, *owned, seconds), impact
+                            };
+                            client.last_shot = shot;
+                            if (client.shots.size() >= 32)
+                            {
+                                client.shots.pop_front();
+                            }
+                            client.shots.push_back({shot, 3});
+                        }
+                    }
+                }
+                return;
+            }
+        }
+
+        void tick_weapons()
+        {
+            const double now =
+                std::chrono::duration<double>(clock::now().time_since_epoch()).count();
+            for (auto& client : session::get()->clients)
+            {
+                if (!client.active)
+                {
+                    continue;
+                }
+                for (auto& owned : client.weapons)
+                {
+                    const auto* definition = get()->weapons.find(owned.id);
+                    if (!definition)
+                    {
+                        continue;
+                    }
+                    ::weapon::advance(owned.state, now, *definition);
+                    // Publish every active state and changes to inactive ammunition,
+                    // reload phase or acknowledgement. Clients can reconcile each item
+                    // independently without treating prediction as accepted authority.
+                    const auto update = weapon_snapshot(client, owned, now);
+                    const auto& old = owned.published;
+                    const bool changed =
+                        !old || old->sequence != update.sequence ||
+                        old->active_weapon_id != update.active_weapon_id ||
+                        old->magazine != update.magazine || old->reserve != update.reserve ||
+                        old->reload != update.reload || old->outcome != update.outcome;
+                    const bool refresh = old && get()->tick - old->tick >= 30;
+                    if (owned.id != client.active_weapon && !changed && !refresh)
+                    {
+                        continue;
+                    }
+                    const auto snapshot = net::weapon::encode_snapshot(update);
+                    net::socket::send(
+                        get()->socket, client.endpoint, snapshot.data(), snapshot.size()
+                    );
+                    owned.published = update;
+                }
+                for (auto& pending : client.shots)
+                {
+                    const auto packet = net::weapon::encode_shot(pending.value);
+                    net::socket::send(get()->socket, client.endpoint, packet.data(), packet.size());
+                    --pending.repeats;
+                }
+                std::erase_if(
+                    client.shots,
+                    [](const session::resource::pending_shot& pending)
+                    {
+                        return !pending.repeats;
+                    }
+                );
+            }
+        }
+
         void handle(const net::endpoint::resource& peer, const net::message::resource& message)
         {
             session::resource* existing = nullptr;
@@ -557,6 +810,16 @@ namespace srv::application
                     client->token = message.token;
                     client->active = true;
                     client->avatar.position = player::parameters().spawn;
+                    for (const auto& definition : get()->weapons.all())
+                    {
+                        client->weapons.push_back(
+                            {definition.id, ::weapon::make_state(definition), std::nullopt}
+                        );
+                    }
+                    if (!client->weapons.empty())
+                    {
+                        client->active_weapon = client->weapons.front().id;
+                    }
                 }
 
                 client->last_seen = clock::now();

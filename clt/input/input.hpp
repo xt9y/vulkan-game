@@ -9,6 +9,9 @@ namespace clt::input
         float mouse_y = 0;
     };
     void init();
+    // GLFW key/button identifiers; query on the main thread. Unfocused input is released.
+    bool key_down(int key);
+    bool mouse_down(int button);
     frame poll();
     void shutdown();
 } // namespace clt::input
