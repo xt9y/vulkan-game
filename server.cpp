@@ -89,8 +89,8 @@ int main(int argc, char** argv)
             5.0f,      // walking speed
             8.0f,      // sprint speed
             20.0f,     // gravity
-            0.3f,      // collision radius
-            1.8f       // collision height
+            0.3f,      // player radius (collision width)
+            1.8f       // player height (collision and camera)
         });
 
         net::socket::init();
