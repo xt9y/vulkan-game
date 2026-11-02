@@ -1,6 +1,7 @@
 #include "camera.hpp"
 
 #include "clt/player/prediction.hpp"
+#include "clt/network/connection.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -12,6 +13,12 @@ namespace clt::camera
     namespace
     {
         std::mutex camera_mutex;
+
+        vec3 eye_position()
+        {
+            const auto parameters = connection::movement_parameters();
+            return prediction::position() + vec3{0, parameters ? parameters->height : 0.0f, 0};
+        }
     } // namespace
 
     state* get()
@@ -54,7 +61,7 @@ namespace clt::camera
     mat4 view()
     {
         const auto camera = snapshot();
-        const vec3 eye = prediction::position() + vec3{0, 1.65f, 0};
+        const vec3 eye = eye_position();
         const vec3 direction{
             std::sin(camera.yaw) * std::cos(camera.pitch),
             std::sin(camera.pitch),
@@ -71,7 +78,7 @@ namespace clt::camera
     mat4 view_projection(float aspect)
     {
         const auto camera = snapshot();
-        const vec3 eye = prediction::position() + vec3{0, 1.65f, 0};
+        const vec3 eye = eye_position();
         const vec3 direction{
             std::sin(camera.yaw) * std::cos(camera.pitch),
             std::sin(camera.pitch),
