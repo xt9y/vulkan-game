@@ -98,6 +98,13 @@ namespace net::socket
             flags >= 0 && fcntl(result.handle, F_SETFL, flags | O_NONBLOCK) == 0;
 #endif
 
+        // Scene streaming can arrive in bursts. Keep enough kernel receive
+        // capacity to avoid losing a full window before the network worker drains it.
+        const int receive_bytes = 2 * 1024 * 1024;
+        ::setsockopt(result.handle, SOL_SOCKET, SO_RCVBUF,
+                     reinterpret_cast<const char*>(&receive_bytes),
+                     sizeof(receive_bytes));
+
         if (!configured || ::bind(
                                result.handle,
                                reinterpret_cast<const sockaddr*>(&local.address),

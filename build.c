@@ -150,6 +150,7 @@ void build(C_Build* b)
     c_use(client, headers);
     c_use(client, glfw);
     c_use(client, ozz);
+    c_use(client, stb);
 
 #ifdef __APPLE__
     c_link_system(server, "c++");

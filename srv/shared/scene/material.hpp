@@ -14,6 +14,7 @@ namespace scene
         std::uint32_t width = 0;
         std::uint32_t height = 0;
         std::vector<std::uint8_t> pixels;
+        std::vector<std::uint8_t> encoded; // Original PNG/JPEG bytes for compact network transfer.
     };
 
     struct material

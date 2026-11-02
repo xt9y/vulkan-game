@@ -262,6 +262,8 @@ namespace clt::connection
                 std::uint32_t scene_hash = 0;
                 std::uint32_t requested_until = 0;
                 bool scene_last = false;
+                clock::time_point stream_started{};
+                std::size_t transferred_bytes = 0;
                 bool scene_ready = false;
 
                 auto next_send = clock::now();
@@ -275,6 +277,8 @@ namespace clt::connection
                 {
                     scene_bytes.clear();
                     scene_received.clear();
+                    stream_started = {};
+                    transferred_bytes = 0;
                     {
                         std::lock_guard<std::mutex> lock(data.player_mutex);
                         data.server_parameters.reset();
@@ -311,7 +315,7 @@ namespace clt::connection
                 {
                     const auto now = clock::now();
 
-                    for (int budget = 0; budget < 64; ++budget)
+                    for (int budget = 0; budget < 512; ++budget)
                     {
                         net::endpoint::resource peer;
                         const auto size = net::socket::receive(data.socket, peer, buffer.data(), buffer.size());
@@ -416,6 +420,8 @@ namespace clt::connection
 
                             if (scene_bytes.empty())
                             {
+                                if (stream_started == clock::time_point{})
+                                    stream_started = clock::now();
                                 scene_bytes.resize(fragment.total);
                                 scene_received.assign(
                                     (fragment.total + net::scene_stream::fragment_size - 1) /
@@ -447,6 +453,7 @@ namespace clt::connection
                                     fragment.data, fragment.size
                                 );
                                 scene_received[index] = 1;
+                                transferred_bytes += fragment.size;
 
                                 while (scene_fragment < scene_received.size() &&
                                        scene_received[scene_fragment])
@@ -488,6 +495,15 @@ namespace clt::connection
                                     }
 
                                     scene_ready = scene_last;
+                                    if (scene_ready && stream_started != clock::time_point{})
+                                    {
+                                        const auto elapsed =
+                                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                clock::now() - stream_started).count();
+                                        std::cout << "clt: scene transferred in " << elapsed
+                                                  << " ms (" << transferred_bytes / 1024
+                                                  << " KiB)\n";
+                                    }
                                     data.scene_complete.store(scene_ready, std::memory_order_relaxed);
                                     ++scene_batch;
                                     scene_fragment = 0;

@@ -113,6 +113,7 @@ namespace srv::application
 
                 for (const auto& request : requests)
                 {
+                    const auto import_started = clock::now();
                     auto imported = assets::load(request.path, mesh_id, instance_id,
                                                  texture_id, skin_id);
                     if (imported.meshes.empty())
@@ -140,7 +141,10 @@ namespace srv::application
                               << imported.meshes.size() << " meshes, "
                               << imported.instances.size() << " instances, "
                               << imported.textures.size() << " textures, "
-                              << imported.skins.size() << " skins)\n";
+                              << imported.skins.size() << " skins, "
+                              << std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     clock::now() - import_started).count()
+                              << " ms)\n";
                     mesh_id += std::uint32_t(imported.meshes.size());
                     instance_id += std::uint32_t(imported.instances.size());
                     texture_id += std::uint32_t(imported.textures.size());
@@ -311,25 +315,61 @@ namespace srv::application
             send_animation_states();
             send_attachment_events();
 
-            // Stream imported textures, rigs, geometry and instances in separate
-            // network batches. Previously all meshes were packed into one batch,
-            // and batches over 32 MiB were silently impossible to transmit.
+            // Group small assets together instead of adding only one asset
+            // every 60 Hz tick. Bound serialization work to a few MiB per batch.
             if (get()->importing)
             {
                 auto& imported = *get()->importing;
                 ::scene::state patch;
-                if (get()->next_texture < imported.textures.size())
-                    patch.textures.push_back(std::move(imported.textures[get()->next_texture++]));
-                else if (get()->next_skin < imported.skins.size())
-                    patch.skins.push_back(std::move(imported.skins[get()->next_skin++]));
-                else if (get()->next_mesh < imported.meshes.size())
-                    patch.meshes.push_back(std::move(imported.meshes[get()->next_mesh++]));
-                else if (get()->next_instance < imported.instances.size())
+                constexpr std::size_t target_bytes = 4 * 1024 * 1024;
+                std::size_t used = 20;
+                auto fits = [&](std::size_t size)
                 {
-                    // Instance metadata is small; pack multiple references together.
-                    const auto end = std::min(imported.instances.size(), get()->next_instance + 256);
-                    for (; get()->next_instance < end; ++get()->next_instance)
-                        patch.instances.push_back(std::move(imported.instances[get()->next_instance]));
+                    return used == 20 || size <= target_bytes - used;
+                };
+
+                while (true)
+                {
+                    std::size_t size = 0;
+                    if (get()->next_texture < imported.textures.size())
+                    {
+                        auto& texture = imported.textures[get()->next_texture];
+                        size = 20 + (texture.encoded.empty()
+                            ? texture.pixels.size() : texture.encoded.size());
+                        if (!fits(size)) break;
+                        patch.textures.push_back(std::move(texture));
+                        ++get()->next_texture;
+                    }
+                    else if (get()->next_skin < imported.skins.size())
+                    {
+                        auto& skin = imported.skins[get()->next_skin];
+                        size = 16 + skin.skeleton.size() + skin.inverse_bind.size() * 64;
+                        for (const auto& clip : skin.clips)
+                            size += 8 + clip.name.size() + clip.bytes.size();
+                        if (!fits(size)) break;
+                        patch.skins.push_back(std::move(skin));
+                        ++get()->next_skin;
+                    }
+                    else if (get()->next_mesh < imported.meshes.size())
+                    {
+                        auto& mesh = imported.meshes[get()->next_mesh];
+                        size = 96 + mesh.vertices.size() * (mesh.skin_id ? 64 : 32) +
+                            mesh.indices.size() * 4;
+                        if (!fits(size)) break;
+                        patch.meshes.push_back(std::move(mesh));
+                        ++get()->next_mesh;
+                    }
+                    else if (get()->next_instance < imported.instances.size())
+                    {
+                        size = 80;
+                        if (!fits(size)) break;
+                        patch.instances.push_back(
+                            std::move(imported.instances[get()->next_instance++]));
+                    }
+                    else break;
+
+                    used += size;
+                    if (used >= target_bytes) break;
                 }
 
                 const bool final =
@@ -337,11 +377,18 @@ namespace srv::application
                     get()->next_skin == imported.skins.size() &&
                     get()->next_mesh == imported.meshes.size() &&
                     get()->next_instance == imported.instances.size();
-                append_scene(std::move(patch), final);
+
+                if (!patch.textures.empty() || !patch.skins.empty() ||
+                    !patch.meshes.empty() || !patch.instances.empty())
+                    append_scene(std::move(patch), final);
+
                 if (final)
                 {
-                    std::cout << "srv: model import published in "
-                              << get()->scene_batches.size() << " scene batches\n";
+                    std::size_t bytes = 0;
+                    for (const auto& batch : get()->scene_batches)
+                        bytes += batch.bytes.size();
+                    std::cout << "srv: model stream ready: " << get()->scene_batches.size()
+                              << " batches, " << bytes / 1024 << " KiB on the wire\n";
                     get()->importing.reset();
                 }
             }

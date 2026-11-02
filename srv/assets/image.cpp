@@ -64,7 +64,8 @@ namespace srv::assets
             texture.id = first_texture + std::uint32_t(i);
             texture.width = std::uint32_t(w);
             texture.height = std::uint32_t(h);
-            texture.pixels.assign(pixels, pixels + std::size_t(w) * h * 4);
+            texture.encoded.assign(reinterpret_cast<const std::uint8_t*>(source.data()),
+                                   reinterpret_cast<const std::uint8_t*>(source.data()) + source.size());
             stbi_image_free(pixels);
             result.push_back(std::move(texture));
         }

@@ -1,4 +1,6 @@
 #include "scene_stream.hpp"
+#include <stb_image.h>
+#include <climits>
 
 #include <algorithm>
 #include <cmath>
@@ -105,7 +107,7 @@ namespace net::scene_stream
             throw std::runtime_error("Scene snapshot exceeds maximum batch size");
         }
 
-        std::vector<std::uint8_t> bytes{'S', 'C', 'N', '4'};
+        std::vector<std::uint8_t> bytes{'S', 'C', 'N', '5'};
 
         add(bytes, std::uint32_t(scene.meshes.size()));
         add(bytes, std::uint32_t(scene.instances.size()));
@@ -114,17 +116,21 @@ namespace net::scene_stream
 
         for (const auto& texture : scene.textures)
         {
-            const auto total = std::uint64_t(texture.width) * texture.height * 4;
+            const auto raw_size = std::uint64_t(texture.width) * texture.height * 4;
+            const bool compressed = !texture.encoded.empty();
+            const auto& payload = compressed ? texture.encoded : texture.pixels;
             if (texture.id == 0 || !texture.width || !texture.height ||
-                total != texture.pixels.size() ||
-                total > max_scene_bytes - 16 ||
-                bytes.size() + 16 + total > max_scene_bytes)
+                raw_size > max_scene_bytes - 20 ||
+                (!compressed && raw_size != texture.pixels.size()) ||
+                payload.empty() || payload.size() > max_scene_bytes - 20 ||
+                bytes.size() + 20 + payload.size() > max_scene_bytes)
                 throw std::runtime_error("Invalid texture or scene batch too large");
             add(bytes, texture.id);
             add(bytes, texture.width);
             add(bytes, texture.height);
-            add(bytes, std::uint32_t(total));
-            bytes.insert(bytes.end(), texture.pixels.begin(), texture.pixels.end());
+            add(bytes, compressed ? 1u : 0u);
+            add(bytes, std::uint32_t(payload.size()));
+            bytes.insert(bytes.end(), payload.begin(), payload.end());
         }
 
         for (const auto& skin : scene.skins)
@@ -188,8 +194,11 @@ namespace net::scene_stream
                 add_vec3(bytes, vertex.normal);
                 add_float(bytes, vertex.u);
                 add_float(bytes, vertex.v);
-                for (const auto joint : vertex.joints) add(bytes, joint);
-                for (const auto weight : vertex.weights) add_float(bytes, weight);
+                if (mesh.skin_id)
+                {
+                    for (const auto joint : vertex.joints) add(bytes, joint);
+                    for (const auto weight : vertex.weights) add_float(bytes, weight);
+                }
             }
 
             for (auto index : mesh.indices)
@@ -244,7 +253,7 @@ namespace net::scene_stream
             bytes[0] != 'S' ||
             bytes[1] != 'C' ||
             bytes[2] != 'N' ||
-            bytes[3] != '4')
+            bytes[3] != '5')
         {
             return false;
         }
@@ -260,7 +269,7 @@ namespace net::scene_stream
             !input.take(instance_count) ||
             !input.take(texture_count) ||
             !input.take(skin_count) ||
-            texture_count > input.remaining() / 16 ||
+            texture_count > input.remaining() / 20 ||
             skin_count > input.remaining() / 16 ||
             mesh_count > input.remaining() / 12 ||
             instance_count > input.remaining() / 48)
@@ -277,14 +286,40 @@ namespace net::scene_stream
         for (std::uint32_t i = 0; i < texture_count; ++i)
         {
             ::scene::texture texture;
-            std::uint32_t bytes_count = 0;
+            std::uint32_t encoding = 0, bytes_count = 0;
             if (!input.take(texture.id) || !input.take(texture.width) ||
-                !input.take(texture.height) || !input.take(bytes_count) ||
+                !input.take(texture.height) || !input.take(encoding) ||
+                !input.take(bytes_count) ||
                 !texture.id || !texture.width || !texture.height ||
-                std::uint64_t(texture.width) * texture.height * 4 != bytes_count ||
-                bytes_count > input.remaining()) return false;
-            texture.pixels.assign(bytes.begin() + input.offset,
-                                  bytes.begin() + input.offset + bytes_count);
+                encoding > 1 || bytes_count > input.remaining() ||
+                std::uint64_t(texture.width) * texture.height * 4 > max_scene_bytes - 20)
+                return false;
+
+            if (encoding == 0)
+            {
+                if (std::uint64_t(texture.width) * texture.height * 4 != bytes_count)
+                    return false;
+                texture.pixels.assign(bytes.begin() + input.offset,
+                                      bytes.begin() + input.offset + bytes_count);
+            }
+            else
+            {
+                if (bytes_count > INT_MAX || texture.width > INT_MAX ||
+                    texture.height > INT_MAX)
+                    return false;
+                int width = 0, height = 0, channels = 0;
+                auto* pixels = stbi_load_from_memory(
+                    bytes.data() + input.offset, int(bytes_count),
+                    &width, &height, &channels, 4);
+                if (!pixels || width != int(texture.width) || height != int(texture.height))
+                {
+                    stbi_image_free(pixels);
+                    return false;
+                }
+                const auto size = std::size_t(width) * height * 4;
+                texture.pixels.assign(pixels, pixels + size);
+                stbi_image_free(pixels);
+            }
             input.offset += bytes_count;
             result.textures.push_back(std::move(texture));
         }
@@ -336,10 +371,9 @@ namespace net::scene_stream
                 !input.take(vertices) ||
                 !input.take(indices) ||
                 vertices == 0 || indices == 0 || indices % 3 ||
-                vertices > input.remaining() / 64 ||
                 input.remaining() < 72 ||
-                std::uint64_t(vertices) * 64 + std::uint64_t(indices) * 4 >
-                    input.remaining() - 72)
+                std::uint64_t(vertices) * (mesh.skin_id ? 64 : 32) +
+                    std::uint64_t(indices) * 4 > input.remaining() - 72)
             {
                 return false;
             }
@@ -376,10 +410,13 @@ namespace net::scene_stream
                 {
                     return false;
                 }
-                for (auto& joint : vertex.joints)
-                    if (!input.take(joint)) return false;
-                for (auto& weight : vertex.weights)
-                    if (!input.take_float(weight) || weight < 0 || weight > 1) return false;
+                if (mesh.skin_id)
+                {
+                    for (auto& joint : vertex.joints)
+                        if (!input.take(joint)) return false;
+                    for (auto& weight : vertex.weights)
+                        if (!input.take_float(weight) || weight < 0 || weight > 1) return false;
+                }
             }
 
             for (auto& index : mesh.indices)
@@ -461,7 +498,7 @@ namespace net::scene_stream
         output[1] = 'S';
         output[2] = 'C';
         output[3] = 'N';
-        output[4] = 3;
+        output[4] = 4;
         output[5] = final ? 1 : 0;
 
         write(output.data() + 8, token);
@@ -479,7 +516,7 @@ namespace net::scene_stream
         if (size <= header_size || size > packet_size ||
             bytes[0] != 'V' || bytes[1] != 'S' ||
             bytes[2] != 'C' || bytes[3] != 'N' ||
-            bytes[4] != 3 || bytes[5] > 1 ||
+            bytes[4] != 4 || bytes[5] > 1 ||
             bytes[6] || bytes[7])
         {
             return false;
