@@ -87,8 +87,6 @@ namespace clt::application
         camera::init();
         prediction::init();
 
-        postprocess::set(postprocess::effect::lighting, get()->options.graphics.lighting);
-        postprocess::set(postprocess::effect::tonemapping, get()->options.graphics.tonemapping);
         postprocess::set_exposure(get()->options.graphics.exposure);
         renderer::init(get()->options.graphics.vertex_shader.c_str(),
                        get()->options.graphics.fragment_shader.c_str());
@@ -128,10 +126,6 @@ namespace clt::application
                 window::poll_events();
 
                 const auto frame = input::poll();
-                if (frame.toggle_lighting)
-                    postprocess::toggle(postprocess::effect::lighting);
-                if (frame.toggle_tonemapping)
-                    postprocess::toggle(postprocess::effect::tonemapping);
                 camera::look(frame.mouse_x, frame.mouse_y);
                 prediction::controls(frame.buttons, camera::snapshot().yaw);
 

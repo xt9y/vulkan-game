@@ -24,6 +24,14 @@ namespace player
         float yaw = 0;
     };
 
+    struct parameters_t {
+        vk::util::math::vec3 spawn;
+        float walk_speed, sprint_speed, gravity, radius, height;
+    };
+
+    void configure(parameters_t values);
+    const parameters_t& parameters();
+
     struct state {
         vk::util::math::vec3 position{};
         vk::util::math::vec3 velocity{};

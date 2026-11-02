@@ -91,9 +91,8 @@ namespace clt::window
 
     void set_connected(bool connected)
     {
-        get()->title = connected
-            ? game::options::get()->graphics.connected_title
-            : game::options::get()->graphics.connecting_title;
+        get()->title = game::options::get()->graphics.title +
+            (connected ? " | connected" : " | connecting");
         glfwSetWindowTitle(get()->handle, get()->title.c_str());
     }
 

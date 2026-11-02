@@ -15,8 +15,6 @@ namespace clt::camera
     void init();
     void look(float dx, float dy);
     state snapshot();
-    void set_fov(float value);
-    void set_sensitivity(float value);
     vk::util::math::mat4 view_projection(float aspect);
 
     vk::util::math::mat4 view();

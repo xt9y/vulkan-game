@@ -51,6 +51,7 @@ namespace clt::connection
 
         std::deque<::player::input> outgoing;
         std::optional<net::movement::snapshot> authority;
+        std::optional<::player::parameters_t> server_parameters;
 
         std::thread worker;
         bool initialized = false;
@@ -63,6 +64,7 @@ namespace clt::connection
     void check_error();
     void send_input(const ::player::input& input);
     std::optional<net::movement::snapshot> take_authority();
+    std::optional<::player::parameters_t> movement_parameters();
     void init();
     void shutdown() noexcept;
 } // namespace clt::connection

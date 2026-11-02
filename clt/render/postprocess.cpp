@@ -54,8 +54,8 @@ namespace clt::postprocess
             return data;
         }
 
-        std::atomic<bool> use_lighting{};
-        std::atomic<bool> use_tonemapping{};
+        std::atomic<bool> use_lighting{true};
+        std::atomic<bool> use_tonemapping{true};
         std::atomic<float> exposure_value{};
 
         struct push {
@@ -272,8 +272,8 @@ namespace clt::postprocess
                  std::cos(view.yaw) * std::cos(view.pitch), 0},
                 {lighting.sun_direction.x, lighting.sun_direction.y,
                  lighting.sun_direction.z, lighting.sun_intensity},
-                {lighting.ambient_intensity, lighting.ambient_specular, 0, 0},
-                {lighting.sky_color.x, lighting.sky_color.y, lighting.sky_color.z, 1}
+                {0.08f, 0.02f, 0, 0},
+                {0.035f, 0.045f, 0.065f, 1}
             };
             command.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline);
             command.bindDescriptorSets(vk::PipelineBindPoint::eCompute, layout, 0, {set}, {});

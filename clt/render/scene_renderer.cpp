@@ -1,5 +1,6 @@
 #include "scene_renderer.hpp"
 #include "srv/game/options.hpp"
+#include "srv/shared/net/limits.hpp"
 
 #include "clt/network/connection.hpp"
 #include "clt/render/upload.hpp"
@@ -9,7 +10,6 @@
 #include "srv/shared/scene/scene.hpp"
 
 #include <algorithm>
-#include <numeric>
 #include <array>
 #include <cstddef>
 #include <cstdlib>
@@ -244,8 +244,7 @@ namespace clt::scene_renderer
 
                 vk::PipelineRasterizationStateCreateInfo rasterization{};
                 rasterization.polygonMode = vk::PolygonMode::eFill;
-                rasterization.cullMode = game::options::get()->graphics.backface_culling
-                    ? vk::CullModeFlagBits::eBack : vk::CullModeFlagBits::eNone;
+                rasterization.cullMode = vk::CullModeFlagBits::eNone;
                 rasterization.frontFace = vk::FrontFace::eCounterClockwise;
                 rasterization.lineWidth = 1.0f;
 
@@ -721,77 +720,31 @@ namespace clt::scene_renderer
         const auto visible_bytes = mesh.bounds.size() * sizeof(std::uint32_t);
         const auto count = vk::swapchain::get()->images.size();
         mesh.frames.resize(count);
-        if (!game::options::get()->graphics.gpu_culling)
+        for (auto& frame : mesh.frames)
         {
-            std::vector<std::uint32_t> visible(mesh.transforms.size());
-            std::iota(visible.begin(), visible.end(), 0u);
-
-            vk::DrawIndexedIndirectCommand draw{};
-            draw.indexCount = mesh.index_count;
-            draw.instanceCount = static_cast<std::uint32_t>(mesh.transforms.size());
-
-            for (auto& frame : mesh.frames)
+            if (!frame.visible.handle || frame.visible.size < visible_bytes)
             {
-                if (!frame.visible.handle || frame.visible.size < visible_bytes)
-                {
-                    const auto capacity = std::max<vk::DeviceSize>(
-                        visible_bytes, frame.visible.size * 2);
-                    auto replacement = transfers.add(
-                        visible.data(), visible_bytes,
-                        vk::BufferUsageFlagBits::eVertexBuffer |
-                        vk::BufferUsageFlagBits::eStorageBuffer,
-                        capacity
-                    );
-                    if (frame.visible.handle) vk::buffer::destroy(frame.visible);
-                    frame.visible = replacement;
-                }
-                else
-                {
-                    transfers.write(frame.visible, visible.data(), visible_bytes);
-                }
-
-                if (!frame.indirect.handle)
-                {
-                    frame.indirect = transfers.add(
-                        &draw, sizeof(draw),
-                        vk::BufferUsageFlagBits::eStorageBuffer |
-                        vk::BufferUsageFlagBits::eIndirectBuffer
-                    );
-                }
-                else
-                {
-                    transfers.write(frame.indirect, &draw, sizeof(draw));
-                }
+                auto replacement = vk::buffer::create(
+                    std::max<vk::DeviceSize>(visible_bytes, frame.visible.size * 2),
+                    vk::BufferUsageFlagBits::eVertexBuffer |
+                    vk::BufferUsageFlagBits::eStorageBuffer |
+                    vk::BufferUsageFlagBits::eTransferSrc,
+                    vk::MemoryPropertyFlagBits::eDeviceLocal
+                );
+                if (frame.visible.handle) vk::buffer::destroy(frame.visible);
+                frame.visible = replacement;
             }
-        }
-        else
-        {
-            for (auto& frame : mesh.frames)
-            {
-                if (!frame.visible.handle || frame.visible.size < visible_bytes)
-                {
-                    auto replacement = vk::buffer::create(
-                        std::max<vk::DeviceSize>(visible_bytes, frame.visible.size * 2),
-                        vk::BufferUsageFlagBits::eVertexBuffer |
-                        vk::BufferUsageFlagBits::eStorageBuffer |
-                        vk::BufferUsageFlagBits::eTransferSrc,
-                        vk::MemoryPropertyFlagBits::eDeviceLocal
-                    );
-                    if (frame.visible.handle) vk::buffer::destroy(frame.visible);
-                    frame.visible = replacement;
-                }
 
-                if (!frame.indirect.handle)
-                {
-                    frame.indirect = vk::buffer::create(
-                        sizeof(vk::DrawIndexedIndirectCommand),
-                        vk::BufferUsageFlagBits::eStorageBuffer |
-                        vk::BufferUsageFlagBits::eIndirectBuffer |
-                        vk::BufferUsageFlagBits::eTransferDst |
-                        vk::BufferUsageFlagBits::eTransferSrc,
-                        vk::MemoryPropertyFlagBits::eDeviceLocal
-                    );
-                }
+            if (!frame.indirect.handle)
+            {
+                frame.indirect = vk::buffer::create(
+                    sizeof(vk::DrawIndexedIndirectCommand),
+                    vk::BufferUsageFlagBits::eStorageBuffer |
+                    vk::BufferUsageFlagBits::eIndirectBuffer |
+                    vk::BufferUsageFlagBits::eTransferDst |
+                    vk::BufferUsageFlagBits::eTransferSrc,
+                    vk::MemoryPropertyFlagBits::eDeviceLocal
+                );
             }
         }
 
@@ -1120,88 +1073,80 @@ namespace clt::scene_renderer
         begin.clearValueCount = clear.size();
         begin.pClearValues = clear.data();
 
-        if (game::options::get()->graphics.gpu_culling)
+        // Compute visibility and compact instance IDs for indirect graphics draws.
+        if (data.snapshot)
         {
-            // Compute visibility and compact instance IDs for indirect graphics draws.
-            if (data.snapshot)
+            const auto camera_planes = frustum(view_projection);
+            cull_parameters params;
+            for (std::size_t i = 0; i < params.planes.size(); ++i)
             {
-                const auto camera_planes = frustum(view_projection);
-                cull_parameters params;
-                for (std::size_t i = 0; i < params.planes.size(); ++i)
-                {
-                    const auto& plane = camera_planes[i];
-                    const float inverse = 1.0f / std::max(plane.magnitude, 1e-6f);
-                    params.planes[i] = {
-                        plane.normal.x * inverse,
-                        plane.normal.y * inverse,
-                        plane.normal.z * inverse,
-                        plane.offset * inverse
-                    };
-                }
-
-                data.last_gpu_planes = params.planes;
-                data.gpu_planes_valid = true;
-
-                for (const auto& mesh : data.meshes)
-                {
-                    if (!mesh.transforms.empty())
-                    {
-                        command.fillBuffer(
-                            mesh.frames.at(image).indirect.handle,
-                            offsetof(vk::DrawIndexedIndirectCommand, instanceCount),
-                            sizeof(std::uint32_t), 0
-                        );
-                    }
-                }
-
-                vk::MemoryBarrier transfer{};
-                transfer.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-                transfer.dstAccessMask = vk::AccessFlagBits::eShaderRead |
-                    vk::AccessFlagBits::eShaderWrite;
-                command.pipelineBarrier(
-                    vk::PipelineStageFlagBits::eTransfer,
-                    vk::PipelineStageFlagBits::eComputeShader,
-                    {}, {transfer}, {}, {}
-                );
-
-                command.bindPipeline(vk::PipelineBindPoint::eCompute, data.cull_pipeline);
-                for (const auto& mesh : data.meshes)
-                {
-                    if (mesh.transforms.empty())
-                    {
-                        continue;
-                    }
-
-                    params.count = static_cast<std::uint32_t>(mesh.transforms.size());
-                    params.index_count = mesh.index_count;
-                    command.bindDescriptorSets(
-                        vk::PipelineBindPoint::eCompute,
-                        data.cull_layout, 0, {mesh.frames.at(image).set}, {}
-                    );
-                    command.pushConstants(
-                        data.cull_layout, vk::ShaderStageFlagBits::eCompute,
-                        0, sizeof(params), &params
-                    );
-                    command.dispatch((params.count + 127u) / 128u, 1, 1);
-                }
-
-                vk::MemoryBarrier finished{};
-                finished.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
-                finished.dstAccessMask = vk::AccessFlagBits::eVertexAttributeRead |
-                    vk::AccessFlagBits::eIndirectCommandRead;
-                command.pipelineBarrier(
-                    vk::PipelineStageFlagBits::eComputeShader,
-                    vk::PipelineStageFlagBits::eVertexInput |
-                    vk::PipelineStageFlagBits::eDrawIndirect,
-                    {}, {finished}, {}, {}
-                );
-
+                const auto& plane = camera_planes[i];
+                const float inverse = 1.0f / std::max(plane.magnitude, 1e-6f);
+                params.planes[i] = {
+                    plane.normal.x * inverse,
+                    plane.normal.y * inverse,
+                    plane.normal.z * inverse,
+                    plane.offset * inverse
+                };
             }
 
-        }
-        else
-        {
-            data.gpu_planes_valid = false;
+            data.last_gpu_planes = params.planes;
+            data.gpu_planes_valid = true;
+
+            for (const auto& mesh : data.meshes)
+            {
+                if (!mesh.transforms.empty())
+                {
+                    command.fillBuffer(
+                        mesh.frames.at(image).indirect.handle,
+                        offsetof(vk::DrawIndexedIndirectCommand, instanceCount),
+                        sizeof(std::uint32_t), 0
+                    );
+                }
+            }
+
+            vk::MemoryBarrier transfer{};
+            transfer.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+            transfer.dstAccessMask = vk::AccessFlagBits::eShaderRead |
+                vk::AccessFlagBits::eShaderWrite;
+            command.pipelineBarrier(
+                vk::PipelineStageFlagBits::eTransfer,
+                vk::PipelineStageFlagBits::eComputeShader,
+                {}, {transfer}, {}, {}
+            );
+
+            command.bindPipeline(vk::PipelineBindPoint::eCompute, data.cull_pipeline);
+            for (const auto& mesh : data.meshes)
+            {
+                if (mesh.transforms.empty())
+                {
+                    continue;
+                }
+
+                params.count = static_cast<std::uint32_t>(mesh.transforms.size());
+                params.index_count = mesh.index_count;
+                command.bindDescriptorSets(
+                    vk::PipelineBindPoint::eCompute,
+                    data.cull_layout, 0, {mesh.frames.at(image).set}, {}
+                );
+                command.pushConstants(
+                    data.cull_layout, vk::ShaderStageFlagBits::eCompute,
+                    0, sizeof(params), &params
+                );
+                command.dispatch((params.count + 127u) / 128u, 1, 1);
+            }
+
+            vk::MemoryBarrier finished{};
+            finished.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
+            finished.dstAccessMask = vk::AccessFlagBits::eVertexAttributeRead |
+                vk::AccessFlagBits::eIndirectCommandRead;
+            command.pipelineBarrier(
+                vk::PipelineStageFlagBits::eComputeShader,
+                vk::PipelineStageFlagBits::eVertexInput |
+                vk::PipelineStageFlagBits::eDrawIndirect,
+                {}, {finished}, {}, {}
+            );
+
         }
 
         // Write per-swapchain-image palettes only after its frame fence completes.
@@ -1217,7 +1162,7 @@ namespace clt::scene_renderer
             }
             const auto elapsed = std::chrono::duration<float>(
                 now - data.animation_received).count();
-            const float smooth_tick = float(server_tick) + std::clamp(elapsed, 0.f, 0.2f) * float(game::options::get()->simulation.tick_hz);
+            const float smooth_tick = float(server_tick) + std::clamp(elapsed, 0.f, 0.2f) * float(net::limits::tick_hz);
             for (auto& mesh : data.meshes)
             {
                 if (!mesh.joint_count || mesh.transforms.empty()) continue;
@@ -1232,7 +1177,7 @@ namespace clt::scene_renderer
                     const auto overlay = update ? update->overlay : instance.overlay_animation;
                     const auto weight = update ? update->blend : instance.overlay_weight;
                     const auto root = update ? update->mask_root : instance.overlay_root;
-                    const float time = (smooth_tick - float(start)) / float(game::options::get()->simulation.tick_hz);
+                    const float time = (smooth_tick - float(start)) / float(net::limits::tick_hz);
                     if (!animation::sample(mesh.skin_id, clip, std::max(0.f, time), bones,
                         overlay, weight, root) ||
                         bones.size() != mesh.joint_count)

@@ -13,6 +13,13 @@ namespace net::movement
 {
     using input_packet = std::array<std::uint8_t, 24>;
     using state_packet = std::array<std::uint8_t, 48>;
+    using parameters_packet = std::array<std::uint8_t, 44>;
+
+    struct player_parameters
+    {
+        std::uint32_t token;
+        ::player::parameters_t values;
+    };
 
     struct command {
         std::uint32_t token = 0;
@@ -102,6 +109,48 @@ namespace net::movement
             return std::nullopt;
         }
 
+        return value;
+    }
+
+    inline parameters_packet encode_parameters(std::uint32_t token,
+                                               const ::player::parameters_t& settings)
+    {
+        parameters_packet bytes{'V', 'M', 'O', 'V', 1, 3, 0, 0};
+        detail::put(bytes.data() + 8, token);
+        detail::put_float(bytes.data() + 12, settings.spawn.x);
+        detail::put_float(bytes.data() + 16, settings.spawn.y);
+        detail::put_float(bytes.data() + 20, settings.spawn.z);
+        detail::put_float(bytes.data() + 24, settings.walk_speed);
+        detail::put_float(bytes.data() + 28, settings.sprint_speed);
+        detail::put_float(bytes.data() + 32, settings.gravity);
+        detail::put_float(bytes.data() + 36, settings.radius);
+        detail::put_float(bytes.data() + 40, settings.height);
+        return bytes;
+    }
+
+    inline std::optional<player_parameters> decode_parameters(const std::uint8_t* p,
+                                                               std::size_t size)
+    {
+        if (size != parameters_packet{}.size() || !detail::header(p, size, 3))
+            return std::nullopt;
+        player_parameters value{};
+        value.token = detail::get(p + 8);
+        auto& v = value.values;
+        v.spawn.x = detail::get_float(p + 12);
+        v.spawn.y = detail::get_float(p + 16);
+        v.spawn.z = detail::get_float(p + 20);
+        v.walk_speed = detail::get_float(p + 24);
+        v.sprint_speed = detail::get_float(p + 28);
+        v.gravity = detail::get_float(p + 32);
+        v.radius = detail::get_float(p + 36);
+        v.height = detail::get_float(p + 40);
+        if (!value.token || !std::isfinite(v.spawn.x) || !std::isfinite(v.spawn.y) ||
+            !std::isfinite(v.spawn.z) || !std::isfinite(v.walk_speed) ||
+            !std::isfinite(v.sprint_speed) || !std::isfinite(v.gravity) ||
+            !std::isfinite(v.radius) || !std::isfinite(v.height) ||
+            v.walk_speed <= 0 || v.sprint_speed <= 0 || v.gravity <= 0 ||
+            v.radius <= 0 || v.height <= 0)
+            return std::nullopt;
         return value;
     }
 

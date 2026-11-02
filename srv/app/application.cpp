@@ -11,7 +11,8 @@
 #include "srv/shared/net/movement.hpp"
 #include "srv/shared/net/socket.hpp"
 #include "srv/shared/player/movement.hpp"
-#include "srv/world/worker.hpp"
+#include "srv/jobs/worker.hpp"
+#include "srv/shared/net/limits.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -288,7 +289,7 @@ namespace srv::application
 
         const auto started = clock::now();
         auto next = started;
-        const auto interval = std::chrono::nanoseconds(1'000'000'000 / get()->options.simulation.tick_hz);
+        const auto interval = std::chrono::nanoseconds(1'000'000'000 / net::limits::tick_hz);
 
         while (!game::application::get()->stop.load(std::memory_order_relaxed))
         {
@@ -350,9 +351,9 @@ namespace srv::application
             // Streaming generation may be expensive; commit only when there is
             // room before the next tick, without blocking player simulation.
             if (clock::now() +
-                std::chrono::milliseconds(get()->options.simulation.generation_slack_ms) <
+                std::chrono::milliseconds(net::limits::generation_slack_ms) <
                 next + interval ||
-                get()->tick % get()->options.simulation.generation_commit_ticks == 0)
+                get()->tick % net::limits::generation_commit_ticks == 0)
             {
                 generation::commit();
             }
@@ -395,7 +396,6 @@ namespace srv::application
         get()->animation_cursor = 0;
         get()->attachment_events.clear();
         get()->next_event = 0;
-        get()->terrain = {};
         get()->tick = 0;
         get()->initialized = false;
     }
@@ -409,9 +409,9 @@ namespace srv::application
             std::array<std::uint8_t, 25> buffer{};
 
             const auto deadline = clock::now() +
-                std::chrono::milliseconds(get()->options.simulation.receive_ms);
+                std::chrono::milliseconds(net::limits::receive_ms);
             for (std::uint32_t budget = 0;
-                 budget < get()->options.simulation.receive_packets && clock::now() < deadline;
+                 budget < net::limits::receive_packets && clock::now() < deadline;
                  ++budget)
             {
                 net::endpoint::resource peer;
@@ -509,7 +509,7 @@ namespace srv::application
                     client->endpoint = peer;
                     client->token = message.token;
                     client->active = true;
-                    client->avatar.position = game::options::get()->player.spawn;
+                    client->avatar.position = player::parameters().spawn;
                 }
 
                 client->last_seen = clock::now();
@@ -573,9 +573,9 @@ namespace srv::application
 
         void send_animation_states()
         {
-            if (get()->tick % get()->options.simulation.animation_period != 0 || get()->scene.instances.empty()) return;
+            if (get()->tick % net::limits::animation_period != 0 || get()->scene.instances.empty()) return;
             const auto& instances = get()->scene.instances;
-            const std::size_t count = std::min<std::size_t>(get()->options.simulation.animations_per_tick, instances.size());
+            const std::size_t count = std::min<std::size_t>(net::limits::animations_per_tick, instances.size());
             const std::size_t start = get()->animation_cursor % instances.size();
             for (auto& client : session::get()->clients)
             {
@@ -603,8 +603,8 @@ namespace srv::application
         void send_scene_fragments()
         {
             const auto deadline = clock::now() +
-                std::chrono::milliseconds(get()->options.simulation.fragments_ms);
-            std::uint32_t remaining = get()->options.simulation.fragments_per_tick;
+                std::chrono::milliseconds(net::limits::fragments_ms);
+            std::uint32_t remaining = net::limits::fragments_per_tick;
 
             for (auto& client : session::get()->clients)
             {
@@ -628,7 +628,7 @@ namespace srv::application
                     net::scene_stream::fragment_size;
 
                 for (std::size_t i = fragment_id;
-                     i < std::min<std::size_t>(count, fragment_id + get()->options.simulation.fragments_per_tick) &&
+                     i < std::min<std::size_t>(count, fragment_id + net::limits::fragments_per_tick) &&
                      remaining && clock::now() < deadline; ++i)
                 {
                     net::scene_stream::packet packet;
@@ -663,6 +663,9 @@ namespace srv::application
             const auto data =
                 net::message::encode({type, request.sequence, request.token, get()->tick});
             net::socket::send(get()->socket, peer, data.data(), data.size());
+            const auto settings = net::movement::encode_parameters(
+                request.token, player::parameters());
+            net::socket::send(get()->socket, peer, settings.data(), settings.size());
         }
 
         void tick_players()
@@ -675,7 +678,7 @@ namespace srv::application
                 }
 
                 // Apply contiguous inputs only. Never simulate a phantom input tick.
-                for (std::uint32_t budget = 0; budget < get()->options.simulation.inputs_per_tick && !client.inputs.empty(); ++budget)
+                for (std::uint32_t budget = 0; budget < net::limits::inputs_per_tick && !client.inputs.empty(); ++budget)
                 {
                     if (client.inputs.front().sequence != client.processed_input + 1)
                     {

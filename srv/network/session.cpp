@@ -1,5 +1,5 @@
 #include "session.hpp"
-#include "srv/game/options.hpp"
+#include "srv/shared/net/limits.hpp"
 
 namespace srv::session
 {
@@ -12,14 +12,14 @@ namespace srv::session
     void init()
     {
         *get() = {};
-        get()->clients.resize(game::options::get()->simulation.max_clients);
+        get()->clients.resize(net::limits::max_clients);
     }
 
     void expire(std::chrono::steady_clock::time_point now)
     {
         for (auto& client : get()->clients)
         {
-            if (client.active && now - client.last_seen > std::chrono::seconds(game::options::get()->simulation.timeout_seconds))
+            if (client.active && now - client.last_seen > std::chrono::seconds(net::limits::timeout_seconds))
             {
                 client.active = false;
             }

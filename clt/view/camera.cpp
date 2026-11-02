@@ -1,5 +1,4 @@
 #include "camera.hpp"
-#include "srv/game/options.hpp"
 
 #include "clt/player/prediction.hpp"
 
@@ -25,8 +24,8 @@ namespace clt::camera
     {
         std::lock_guard<std::mutex> lock(camera_mutex);
         *get() = {};
-        get()->fov = game::options::get()->view.fov;
-        get()->sensitivity = game::options::get()->view.sensitivity;
+        get()->fov = 1.04719755f;
+        get()->sensitivity = 0.0025f;
     }
 
     void look(float dx, float dy)
@@ -41,8 +40,8 @@ namespace clt::camera
 
         camera.pitch = std::clamp(
             camera.pitch - dy * camera.sensitivity,
-            -game::options::get()->view.pitch_limit,
-            game::options::get()->view.pitch_limit
+            -1.55f,
+            1.55f
         );
     }
 
@@ -52,24 +51,10 @@ namespace clt::camera
         return *get();
     }
 
-    void set_fov(float value)
-    {
-        std::lock_guard<std::mutex> lock(camera_mutex);
-        get()->fov = value;
-        game::options::get()->view.fov = value;
-    }
-
-    void set_sensitivity(float value)
-    {
-        std::lock_guard<std::mutex> lock(camera_mutex);
-        get()->sensitivity = value;
-        game::options::get()->view.sensitivity = value;
-    }
-
     mat4 view()
     {
         const auto camera = snapshot();
-        const vec3 eye = prediction::position() + vec3{0, game::options::get()->view.eye_height, 0};
+        const vec3 eye = prediction::position() + vec3{0, 1.65f, 0};
         const vec3 direction{
             std::sin(camera.yaw) * std::cos(camera.pitch),
             std::sin(camera.pitch),
@@ -80,19 +65,19 @@ namespace clt::camera
 
     mat4 projection(float aspect)
     {
-        return perspective(snapshot().fov, aspect, game::options::get()->view.near_plane, game::options::get()->view.far_plane);
+        return perspective(snapshot().fov, aspect, 0.1f, 1000.0f);
     }
 
     mat4 view_projection(float aspect)
     {
         const auto camera = snapshot();
-        const vec3 eye = prediction::position() + vec3{0, game::options::get()->view.eye_height, 0};
+        const vec3 eye = prediction::position() + vec3{0, 1.65f, 0};
         const vec3 direction{
             std::sin(camera.yaw) * std::cos(camera.pitch),
             std::sin(camera.pitch),
             -std::cos(camera.yaw) * std::cos(camera.pitch)
         };
-        return perspective(camera.fov, aspect, game::options::get()->view.near_plane, game::options::get()->view.far_plane) *
+        return perspective(camera.fov, aspect, 0.1f, 1000.0f) *
             look_at(eye, eye + direction);
     }
 } // namespace clt::camera

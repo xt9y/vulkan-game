@@ -1,5 +1,5 @@
 #include "prediction.hpp"
-#include "srv/game/options.hpp"
+#include "srv/shared/net/limits.hpp"
 
 #include "clt/network/connection.hpp"
 #include "srv/shared/net/message.hpp"
@@ -55,29 +55,40 @@ namespace clt::prediction
             std::uint32_t last_server_tick = 0;
 
             bool ready = false;
+            bool configured = false;
 
             auto next = clock::now();
-            const auto tick = std::chrono::nanoseconds(1'000'000'000 / game::options::get()->simulation.tick_hz);
+            const auto tick = std::chrono::nanoseconds(1'000'000'000 / net::limits::tick_hz);
 
             while (!data.stop.load(std::memory_order_relaxed))
             {
                 const auto source = connection::snapshot();
                 const bool connected = connection::get()->connected.load(std::memory_order_relaxed);
+                const auto parameters = connection::movement_parameters();
 
-                if (!connected || !source)
+                if (!connected || !source || !parameters)
                 {
                     cached_scene.reset();
                     colliders.clear();
                     collision_index = {};
                     avatar = {};
-                    avatar.position = game::options::get()->player.spawn;
+                    configured = false;
                     visual_offset = {};
                     pending.clear();
                     sequence = 0;
                     last_server_tick = 0;
                     ready = false;
                 }
-                else if (source != cached_scene)
+                else
+                {
+                    if (!configured)
+                    {
+                        ::player::configure(*parameters);
+                        avatar.position = parameters->spawn;
+                        configured = true;
+                    }
+                }
+                if (connected && source && parameters && source != cached_scene)
                 {
                     // New batches add collision geometry without resetting
                     // the player's input sequence or rebuilding old BVH nodes.
@@ -134,7 +145,7 @@ namespace clt::prediction
                     cached_scene = source;
                 }
 
-                if (connected && source)
+                if (connected && source && parameters)
                 {
                     if (const auto update = connection::take_authority())
                     {
@@ -161,7 +172,7 @@ namespace clt::prediction
                                 const auto delta = previous - avatar.position;
                                 const auto distance = vk::util::math::length(delta);
                                 data.error.store(distance, std::memory_order_relaxed);
-                                if (distance < game::options::get()->graphics.correction_limit)
+                                if (distance < 2.0f)
                                 {
                                     visual_offset = visual_offset + delta;
                                 }
@@ -204,7 +215,7 @@ namespace clt::prediction
                     }
                 }
 
-                visual_offset = visual_offset * game::options::get()->graphics.correction_decay;
+                visual_offset = visual_offset * 0.8f;
                 {
                     std::lock_guard<std::mutex> lock(data.pose_mutex);
                     data.pose = avatar.position + visual_offset;
@@ -234,7 +245,7 @@ namespace clt::prediction
 
         {
             std::lock_guard<std::mutex> lock(data.pose_mutex);
-            data.pose = game::options::get()->player.spawn;
+            data.pose = {};
         }
         data.worker = std::thread(run);
     }

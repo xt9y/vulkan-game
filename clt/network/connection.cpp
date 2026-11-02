@@ -1,5 +1,5 @@
 #include "connection.hpp"
-#include "srv/game/options.hpp"
+#include "srv/shared/net/limits.hpp"
 #include <iostream>
 
 #include "srv/shared/net/endpoint.hpp"
@@ -159,6 +159,13 @@ namespace clt::connection
         return result;
     }
 
+    std::optional<::player::parameters_t> movement_parameters()
+    {
+        auto& data = *get();
+        std::lock_guard<std::mutex> lock(data.player_mutex);
+        return data.server_parameters;
+    }
+
     void init()
     {
         if (get()->initialized || get()->worker.joinable())
@@ -170,6 +177,7 @@ namespace clt::connection
             std::lock_guard<std::mutex> lock(get()->player_mutex);
             get()->outgoing.clear();
             get()->authority.reset();
+            get()->server_parameters.reset();
         }
 
         {
@@ -260,13 +268,17 @@ namespace clt::connection
                 auto next_scene_send = next_send;
                 auto next_move_send = next_send;
                 auto last_received = next_send;
-                auto retry = std::chrono::milliseconds(game::options::get()->graphics.retry_ms);
+                auto retry = std::chrono::milliseconds(net::limits::retry_ms);
                 std::array<std::uint8_t, net::scene_stream::packet_size + 1> buffer{};
                 
                 auto clear_scene = [&]
                 {
                     scene_bytes.clear();
                     scene_received.clear();
+                    {
+                        std::lock_guard<std::mutex> lock(data.player_mutex);
+                        data.server_parameters.reset();
+                    }
                     scene_fragment = 0;
                     reported_percent = 0;
                     scene_batch = 0;
@@ -339,6 +351,19 @@ namespace clt::connection
                                 if (old == data.animations.end() ||
                                     net::message::newer(state->server_tick, old->second.server_tick))
                                     data.animations[state->instance_id] = *state;
+                                last_received = now;
+                            }
+                            continue;
+                        }
+
+                        if (const auto settings = net::movement::decode_parameters(
+                                buffer.data(), *size))
+                        {
+                            if (net::endpoint::equal(peer, server) && settings->token == token &&
+                                data.connected.load(std::memory_order_relaxed))
+                            {
+                                std::lock_guard<std::mutex> lock(data.player_mutex);
+                                data.server_parameters = settings->values;
                                 last_received = now;
                             }
                             continue;
@@ -505,12 +530,12 @@ namespace clt::connection
                         data.connected.store(true, std::memory_order_relaxed);
 
                         last_received = now;
-                        next_send = now + std::chrono::milliseconds(game::options::get()->graphics.heartbeat_ms);
+                        next_send = now + std::chrono::milliseconds(net::limits::heartbeat_ms);
                         waiting = false;
-                        retry = std::chrono::milliseconds(game::options::get()->graphics.retry_ms);
+                        retry = std::chrono::milliseconds(net::limits::retry_ms);
                     }
 
-                    if (data.connected.load(std::memory_order_relaxed) && now - last_received > std::chrono::milliseconds(game::options::get()->graphics.timeout_ms))
+                    if (data.connected.load(std::memory_order_relaxed) && now - last_received > std::chrono::milliseconds(net::limits::connection_timeout_ms))
                     {
                         data.connected.store(false, std::memory_order_relaxed);
                         clear_scene();
@@ -539,7 +564,7 @@ namespace clt::connection
 
                         waiting = false;
                         next_send = now;
-                        retry = std::chrono::milliseconds(game::options::get()->graphics.retry_ms);
+                        retry = std::chrono::milliseconds(net::limits::retry_ms);
                     }
 
                     if (now >= next_send)
@@ -553,7 +578,7 @@ namespace clt::connection
                         // second.
                         if (waiting)
                         {
-                            retry = std::min(retry * 2, std::chrono::milliseconds(game::options::get()->graphics.retry_max_ms));
+                            retry = std::min(retry * 2, std::chrono::milliseconds(net::limits::retry_max_ms));
                         }
 
                         waiting = true;
@@ -576,8 +601,8 @@ namespace clt::connection
                             packet.size()
                         );
 
-                        requested_until = scene_fragment + game::options::get()->simulation.fragments_per_tick;
-                        next_scene_send = now + std::chrono::milliseconds(game::options::get()->graphics.scene_request_ms);
+                        requested_until = scene_fragment + net::limits::fragments_per_tick;
+                        next_scene_send = now + std::chrono::milliseconds(net::limits::scene_request_ms);
                     }
 
                     std::deque<::player::input> inputs;
@@ -618,7 +643,7 @@ namespace clt::connection
                                 transmit(unacknowledged.back());
                             }
 
-                            next_move_send = now + std::chrono::milliseconds(game::options::get()->graphics.movement_ms);
+                            next_move_send = now + std::chrono::milliseconds(net::limits::movement_ms);
                         }
                     }
                     else

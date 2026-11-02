@@ -1,5 +1,7 @@
 #include "movement.hpp"
-#include "srv/game/options.hpp"
+#include "srv/shared/net/limits.hpp"
+#include <optional>
+#include <stdexcept>
 
 #include <algorithm>
 #include <cmath>
@@ -12,20 +14,40 @@ namespace player
     namespace
     {
         using namespace vk::util::math;
+        std::optional<parameters_t> configured;
 
         bool overlaps_xz(vec3 p, const box& b)
         {
-            const float radius = game::options::get()->player.radius;
+            const float radius = parameters().radius;
             return p.x + radius > b.min.x && p.x - radius < b.max.x &&
                    p.z + radius > b.min.z && p.z - radius < b.max.z;
         }
 
         bool overlaps_y(float y, const box& b)
         {
-            const float body_height = game::options::get()->player.height;
+            const float body_height = parameters().height;
             return y < b.max.y && y + body_height > b.min.y;
         }
     } // namespace
+
+    void configure(parameters_t values)
+    {
+        if (!std::isfinite(values.spawn.x) || !std::isfinite(values.spawn.y) ||
+            !std::isfinite(values.spawn.z) || !std::isfinite(values.walk_speed) ||
+            !std::isfinite(values.sprint_speed) || !std::isfinite(values.gravity) ||
+            !std::isfinite(values.radius) || !std::isfinite(values.height) ||
+            values.walk_speed <= 0 || values.sprint_speed <= 0 ||
+            values.gravity <= 0 || values.radius <= 0 || values.height <= 0)
+            throw std::invalid_argument("Player parameters must be specified by the server");
+        configured = values;
+    }
+
+    const parameters_t& parameters()
+    {
+        if (!configured)
+            throw std::logic_error("Player parameters not yet received from server");
+        return *configured;
+    }
 
     collision_world build_colliders(const ::scene::state& scene)
     {
@@ -106,10 +128,10 @@ namespace player
     void step(state& p, const input& input, const collision_world& world, const spatial::index* broadphase) 
     {
         using namespace vk::util::math;
-        const auto& settings = game::options::get()->player;
+        const auto& settings = parameters();
         const float radius = settings.radius;
         const float body_height = settings.height;
-        const float dt = 1.0f / float(game::options::get()->simulation.tick_hz);
+        const float dt = 1.0f / float(net::limits::tick_hz);
 
         const vec3 front{
             std::sin(input.yaw), 0, -std::cos(input.yaw)

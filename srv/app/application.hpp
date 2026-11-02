@@ -15,7 +15,6 @@
 #include "srv/shared/scene/scene.hpp"
 #include "srv/shared/player/movement.hpp"
 
-#include "srv/world/world.hpp"
 
 namespace srv::application
 {
@@ -30,7 +29,6 @@ namespace srv::application
     {
         game::options::state options;
         net::socket::resource socket;
-        world::state terrain;
         scene::state scene;
         std::vector<model_request> models;
         bool scene_configured = false;
