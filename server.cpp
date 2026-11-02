@@ -86,34 +86,34 @@ int main(int argc, char** argv)
 
         player::configure({
             {0, 0, 4}, // spawn
-            5.0f,      // walking speed
-            8.0f,      // sprint speed
+            9.0f,      // walking speed
+            20.0f,      // sprint speed
             20.0f,     // gravity
-            0.3f,      // player radius (collision width)
-            1.8f       // player height (collision and camera)
+            1.0f,      // player radius (collision width)
+            4.2f       // player height (collision and camera)
         });
 
         net::socket::init();
         std::signal(SIGINT, stop);
         std::signal(SIGTERM, stop);
         ::scene::state initial_scene;
-        auto floor = make_floor(1, 10.0f);
-        auto cube = make_cube(2, 0.5f);
-        initial_scene.meshes.push_back(std::move(floor));
-        initial_scene.meshes.push_back(std::move(cube));
-
-        auto add = [&](std::uint32_t id, std::uint32_t mesh, vk::util::math::vec3 position)
-        {
-            ::scene::instance object{};
-            object.id = id;
-            object.mesh_id = mesh;
-            object.pose.position = position;
-            initial_scene.instances.push_back(object);
-        };
-        add(1, 1, {0, 0, 0});
-        add(2, 2, {-2, 0.5f, 0});
-        add(3, 2, {0, 0.5f, 0});
-        add(4, 2, {2, 0.5f, 0});
+        // auto floor = make_floor(1, 10.0f);
+        // auto cube = make_cube(2, 0.5f);
+        // initial_scene.meshes.push_back(std::move(floor));
+        // initial_scene.meshes.push_back(std::move(cube));
+        //
+        // auto add = [&](std::uint32_t id, std::uint32_t mesh, vk::util::math::vec3 position)
+        // {
+        //     ::scene::instance object{};
+        //     object.id = id;
+        //     object.mesh_id = mesh;
+        //     object.pose.position = position;
+        //     initial_scene.instances.push_back(object);
+        // };
+        // add(1, 1, {0, 0, 0});
+        // add(2, 2, {-2, 0.5f, 0});
+        // add(3, 2, {0, 0.5f, 0});
+        // add(4, 2, {2, 0.5f, 0});
         srv::application::set_scene(std::move(initial_scene));
 
         // Game-owned asset declarations; imported meshes and animations stream to clients.
