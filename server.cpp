@@ -180,7 +180,7 @@ int main(int argc, char** argv)
                            );
         // The source conversion faces +Z, toward the player spawn.
         mermaid.scale = {1.5, 1.5, 1.5};
-        srv::application::load_model("assets/mermaid/mermaid.glb", mermaid, 0);
+        srv::application::load_model("assets/mermaid/mermaid.glb", mermaid, 0, true);
         srv::application::set_scene(std::move(initial_scene));
 
         // Game-owned asset declarations; imported meshes and animations stream to clients.
