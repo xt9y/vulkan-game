@@ -22,7 +22,6 @@ namespace scene
     struct mesh {
         std::uint32_t id = 0;
         std::uint32_t skin_id = 0;
-        bool bleeds = false;
         std::vector<vertex> vertices;
         std::vector<std::uint32_t> indices;
         material surface;
@@ -30,7 +29,7 @@ namespace scene
 
     inline bool same_mesh(const mesh& a, const mesh& b)
     {
-        if (a.id != b.id || a.skin_id != b.skin_id || a.bleeds != b.bleeds ||
+        if (a.id != b.id || a.skin_id != b.skin_id ||
             a.vertices.size() != b.vertices.size() ||
             a.indices != b.indices || !same_material(a.surface, b.surface))
         {
