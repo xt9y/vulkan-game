@@ -775,7 +775,10 @@ namespace srv::application
                             get()->impact_capsules
                         };
                         const auto impact = get()->on_weapon_command(context);
+                        // Only flesh triggers replicated effects. Hard surfaces
+                        // retain the existing bullet-hole feedback, not particles.
                         if (impact.impacted &&
+                            impact.type == ::weapon::impact_type::flesh &&
                             owned->state.last_result == ::weapon::result::fired)
                         {
                             net::impact::event effect{};
