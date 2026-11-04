@@ -9,6 +9,7 @@
 #include "srv/game/options.hpp"
 #include "srv/shared/net/limits.hpp"
 #include "srv/shared/scene/scene.hpp"
+#include <bld/bld.hpp>
 
 #include <algorithm>
 #include <array>
@@ -39,6 +40,7 @@ namespace clt::scene_renderer
             std::array<float, 4> surface;
             std::array<float, 4> emissive;
             std::uint32_t joint_count = 0;
+            std::uint32_t blood_enabled = 0;
         };
         static_assert(sizeof(draw_parameters) <= 128);
 
@@ -47,6 +49,7 @@ namespace clt::scene_renderer
             ::scene::material surface;
             std::uint32_t skin_id = 0;
             std::uint32_t joint_count = 0;
+            bool has_blood = false;
             vk::buffer::resource vertices;
             vk::buffer::resource indices;
             vk::buffer::resource instance_buffer;
@@ -108,6 +111,7 @@ namespace clt::scene_renderer
             std::vector<target> targets;
 
             std::array<std::string, 2> shaders;
+            mat4 current_world_view_projection = mat4::identity();
         };
 
         state& get()
@@ -494,11 +498,11 @@ namespace clt::scene_renderer
         auto& data = get();
         data.shaders = {vertex_path, fragment_path};
 
-        std::array<vk::DescriptorSetLayoutBinding, 10> bindings{};
+        std::array<vk::DescriptorSetLayoutBinding, 11> bindings{};
         for (std::uint32_t i = 0; i < bindings.size(); ++i)
         {
-            bindings[i].binding = i;
-            bindings[i].descriptorType = (i < 4 || i == 9) ?
+            bindings[i].binding = i == 10 ? 14u : i;
+            bindings[i].descriptorType = (i < 4 || i == 9 || i == 10) ?
                 vk::DescriptorType::eStorageBuffer :
                 vk::DescriptorType::eCombinedImageSampler;
             bindings[i].descriptorCount = 1;
@@ -574,6 +578,11 @@ namespace clt::scene_renderer
     }
 
 
+    vk::util::math::mat4 world_view_projection()
+    {
+        return get().current_world_view_projection;
+    }
+
     gbuffer outputs(std::uint32_t image)
     {
         const auto& target = get().targets.at(image);
@@ -647,7 +656,7 @@ namespace clt::scene_renderer
         const auto count =
             std::uint32_t(data.local_meshes.size() * vk::swapchain::get()->images.size());
         const std::array<vk::DescriptorPoolSize, 2> sizes{
-            {{vk::DescriptorType::eStorageBuffer, count * 5},
+            {{vk::DescriptorType::eStorageBuffer, count * 6},
              {vk::DescriptorType::eCombinedImageSampler, count * 5}}
         };
         vk::DescriptorPoolCreateInfo pool{};
@@ -702,6 +711,15 @@ namespace clt::scene_renderer
                     writes[i].pBufferInfo = &infos[i];
                 }
                 device.updateDescriptorSets(writes, {});
+                auto blood_info = bld::render::wounds::descriptor_batch(
+                    mesh.id, {}, 0);
+                vk::WriteDescriptorSet stain_write{};
+                stain_write.dstSet = frame.set;
+                stain_write.dstBinding = 14;
+                stain_write.descriptorCount = 1;
+                stain_write.descriptorType = vk::DescriptorType::eStorageBuffer;
+                stain_write.pBufferInfo = &blood_info;
+                device.updateDescriptorSets({stain_write}, {});
                 texture::bind(frame.set, mesh.surface);
             }
         }
@@ -730,12 +748,15 @@ namespace clt::scene_renderer
         data.targets.clear();
         vk::render_pass::destroy(data.render_pass);
         data.render_pass = nullptr;
+        bld::render::wounds::shutdown();
     }
 
     void create_frame_resources()
     {
         try
         {
+            bld::render::wounds::init(
+                std::uint32_t(vk::swapchain::get()->images.size()));
             create_render_pass();
             for (std::size_t i = 0; i < vk::swapchain::get()->images.size(); ++i)
             {
@@ -822,6 +843,15 @@ namespace clt::scene_renderer
             palette_write.descriptorType = vk::DescriptorType::eStorageBuffer;
             palette_write.pBufferInfo = &palette_info;
             vk::device::get()->handle.updateDescriptorSets({palette_write}, {});
+            auto blood_info = bld::render::wounds::descriptor_batch(
+                mesh.id, {}, 0);
+            vk::WriteDescriptorSet stain_write{};
+            stain_write.dstSet = frame.set;
+            stain_write.dstBinding = 14;
+            stain_write.descriptorCount = 1;
+            stain_write.descriptorType = vk::DescriptorType::eStorageBuffer;
+            stain_write.pBufferInfo = &blood_info;
+            vk::device::get()->handle.updateDescriptorSets({stain_write}, {});
             texture::bind(frame.set, mesh.surface);
         }
     }
@@ -1133,7 +1163,7 @@ namespace clt::scene_renderer
                 const auto count = std::max<std::size_t>(1, meshes.size()) *
                     std::max<std::size_t>(1, vk::swapchain::get()->images.size());
                 std::array<vk::DescriptorPoolSize, 2> pool_sizes{{
-                    {vk::DescriptorType::eStorageBuffer, std::uint32_t(count * 5)},
+                    {vk::DescriptorType::eStorageBuffer, std::uint32_t(count * 6)},
                     {vk::DescriptorType::eCombinedImageSampler, std::uint32_t(count * 5)}
                 }};
 
@@ -1178,6 +1208,7 @@ namespace clt::scene_renderer
             throw;
         }
 
+        bld::render::wounds::clear_batches();
         destroy_meshes(data.meshes);
         if (data.instance_pool)
         {
@@ -1205,6 +1236,7 @@ namespace clt::scene_renderer
         const float aspect = float(extent.width) / float(extent.height);
         const auto view_projection =
             perspective(camera.pose.fov, aspect, 0.1f, 1000.0f) * camera.view;
+        data.current_world_view_projection = view_projection;
         const auto weapon_view_projection = weapon::view_projection(aspect, camera.view);
 
         std::array<vk::ClearValue, 4> clear{};
@@ -1339,6 +1371,31 @@ namespace clt::scene_renderer
             }
         }
 
+        // Match mesh UV atlases to each GPU instance and bone palette entry.
+        // The first-person viewmodel is deliberately excluded.
+        for (auto& mesh : data.meshes)
+        {
+            mesh.has_blood = false;
+            if (mesh.instances.empty()) continue;
+            std::vector<bld::instance_id> actors;
+            actors.reserve(mesh.instances.size());
+            for (const auto& instance : mesh.instances)
+            {
+                actors.push_back(instance.id);
+                mesh.has_blood |= bld::render::wounds::visible(instance.id);
+            }
+            if (!mesh.has_blood) continue;
+            auto stain_info = bld::render::wounds::descriptor_batch(
+                mesh.id, actors, image);
+            vk::WriteDescriptorSet write{};
+            write.dstSet = mesh.frames.at(image).set;
+            write.dstBinding = 14;
+            write.descriptorCount = 1;
+            write.descriptorType = vk::DescriptorType::eStorageBuffer;
+            write.pBufferInfo = &stain_info;
+            vk::device::get()->handle.updateDescriptorSets({write}, {});
+        }
+
         for (const auto& item : weapon_draws)
         {
             auto found = std::find_if(
@@ -1404,7 +1461,8 @@ namespace clt::scene_renderer
                     {m.metallic, m.roughness, m.occlusion, m.alpha_cutoff},
                     {m.emissive[0], m.emissive[1],
                      m.emissive[2], float(flags)},
-                    mesh.joint_count
+                    mesh.joint_count,
+                    mesh.has_blood ? 1u : 0u
                 };
                 command.pushConstants(
                     data.layout, vk::ShaderStageFlagBits::eVertex |
@@ -1475,7 +1533,8 @@ namespace clt::scene_renderer
                     m.base_color,
                     {m.metallic, m.roughness, m.occlusion, m.alpha_cutoff},
                     {m.emissive[0], m.emissive[1], m.emissive[2], float(flags)},
-                    mesh.joint_count
+                    mesh.joint_count,
+                    0u
                 };
                 command.pushConstants(
                     data.layout,

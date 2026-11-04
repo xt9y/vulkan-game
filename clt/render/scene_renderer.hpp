@@ -31,6 +31,7 @@ namespace clt::scene_renderer
     };
 
     gbuffer outputs(std::uint32_t image);
+    vk::util::math::mat4 world_view_projection();
 
     bool needs_sync();
     void reset_scene();

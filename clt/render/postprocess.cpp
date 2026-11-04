@@ -1,6 +1,7 @@
 #include "postprocess.hpp"
 #include "srv/game/options.hpp"
 #include "scene_renderer.hpp"
+#include "blood.hpp"
 #include "clt/view/camera.hpp"
 
 #include <algorithm>
@@ -29,6 +30,7 @@ namespace clt::postprocess
             vk::Framebuffer framebuffer{};
             vk::DescriptorSet lighting{};
             vk::DescriptorSet tone{};
+            bool tone_uses_blood=false;
             vk::DescriptorSet presentation{};
         };
 
@@ -483,6 +485,16 @@ namespace clt::postprocess
         return {frame.hdr.image.handle, frame.ldr.image.handle};
     }
 
+    vk::ImageView hdr_view(std::uint32_t image)
+    {
+        return get().frames.at(image).hdr.view;
+    }
+
+    vk::Sampler sampler()
+    {
+        return get().sampler;
+    }
+
     void lighting(vk::CommandBuffer command, std::uint32_t image)
     {
         const auto& current = get().frames.at(image);
@@ -492,9 +504,25 @@ namespace clt::postprocess
 
     void tonemap(vk::CommandBuffer command, std::uint32_t image)
     {
-        const auto& current = get().frames.at(image);
-        compute(command, get().tone_pipeline, get().tone_layout,
-                current.tone, enabled(effect::tonemapping));
+        auto& current = get().frames.at(image);
+        const bool liquid = blood::active();
+        if(current.tone_uses_blood != liquid)
+        {
+            vk::DescriptorImageInfo input{};
+            input.sampler=get().sampler;
+            input.imageView=liquid?blood::output(image):current.hdr.view;
+            input.imageLayout=vk::ImageLayout::eGeneral;
+            vk::WriteDescriptorSet write{};
+            write.dstSet=current.tone;
+            write.dstBinding=0;
+            write.descriptorCount=1;
+            write.descriptorType=vk::DescriptorType::eCombinedImageSampler;
+            write.pImageInfo=&input;
+            vk::device::get()->handle.updateDescriptorSets({write},{});
+            current.tone_uses_blood=liquid;
+        }
+        compute(command,get().tone_pipeline,get().tone_layout,
+                current.tone,enabled(effect::tonemapping));
     }
 
     void present(vk::CommandBuffer command, std::uint32_t image)

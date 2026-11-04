@@ -16,6 +16,8 @@ namespace clt::postprocess
     };
 
     targets images(std::uint32_t image);
+    vk::ImageView hdr_view(std::uint32_t image);
+    vk::Sampler sampler();
     void create();
     void release();
     void lighting(vk::CommandBuffer command, std::uint32_t image);
