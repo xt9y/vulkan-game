@@ -83,7 +83,7 @@ namespace clt::impact
         {
             if (s.stains.size() >= 768) s.stains.pop_front();
             stain item;
-            item.variant = random(seed) % std::uint32_t(decal_names.size());
+            item.variant = 1u + random(seed) % 4u;
             item.wetness = .82f + unit(seed) * .18f;
             item.lifetime = 280;
             item.transform = decal_transform(position, normal, size, unit(seed) * 2.f * pi);
@@ -356,7 +356,7 @@ namespace clt::impact
                             p.radius = .07f;
                             p.final_radius = .25f + unit(seed) * .23f;
                             p.angle = unit(seed) * pi * 2.f;
-                            p.variant = random(seed) % 5u;
+                            p.variant = 1u + random(seed) % 4u;
                             p.anchor = hit.instance;
                             if (owns_instance(scene.get(), p.anchor))
                                 p.local = inverse_affine(instance_matrix(scene.get(), p.anchor)) *

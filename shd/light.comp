@@ -64,7 +64,10 @@ void main()
     }
     vec3 N = normalize(texelFetch(g_normal, p, 0).rgb * 2.0 - 1.0);
     vec4 surface = texelFetch(g_material, p, 0);
-    float roughness = mix(clamp(surface.r, 0.045, 1.0), .14, blood.a);
+    // Fresh blood is wet/glossy; older stains turn dark and matte.
+    float bloodWetness = clamp((blood.r - .045) / .12, 0.0, 1.0);
+    float roughness = mix(clamp(surface.r, 0.045, 1.0),
+                          mix(.79, .14, bloodWetness), blood.a);
     float metallic = mix(clamp(surface.g, 0.0, 1.0), 0.0, blood.a);
     float ao = surface.b;
     vec3 V = normalize(pc.view_direction.xyz);

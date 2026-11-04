@@ -117,7 +117,7 @@ namespace clt::impact_decal
             const vec3 direction{m(0, 2), m(1, 2), m(2, 2)};
             const vec3 normal = normalize(direction);
             decal.normal = {normal.x, normal.y, normal.z, float(source.variant)};
-            decal.tint = {.68f, .17f, .22f, .96f};
+            decal.tint = {1.f, 1.f, 1.f, source.wetness};
             return decal;
         }
 

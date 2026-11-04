@@ -100,12 +100,21 @@ void main()
             continue;
 
         vec2 decal_uv = local.xy + .5;
+        // Hell2025's decal RGB stores the splatter shape, not its material color.
+        // Use channel maximum so blue/grayscale mask variants render consistently.
         vec4 shape = sample_decal(uint(decal.normal.w + .5), decal_uv);
-        float alpha = clamp(shape.a * decal.tint.a, 0.0, 1.0);
-        if (alpha < .002) continue;
+        float ink = max(shape.r, max(shape.g, shape.b));
+        float mask = smoothstep(.025, .40, pow(clamp(ink, 0.0, 1.0), .78));
+        float grain = fract(sin(dot(world.xy + world.zy,
+                          vec2(12.9898, 78.233))) * 43758.5453);
+        float alpha = clamp(mask * (.87 + .13 * grain) * .96, 0.0, 1.0);
+        if (alpha < .005) continue;
 
-        vec3 pigment = pow(max(shape.rgb, vec3(0)), vec3(2.2)) *
-                       decal.tint.rgb;
+        float wetness = clamp(decal.tint.w, 0.0, 1.0);
+        vec3 dried = vec3(.049, .009, .006);
+        vec3 fresh = vec3(.18, .006, .012);
+        vec3 pigment = mix(dried, fresh, wetness) *
+                       (.79 + .21 * clamp(ink, 0.0, 1.0));
         float total = alpha + result.a * (1.0 - alpha);
         result.rgb = total > 1e-5
             ? (pigment * alpha + result.rgb * result.a * (1.0 - alpha)) / total
