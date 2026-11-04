@@ -54,6 +54,7 @@ namespace clt::scene_renderer
             ::scene::material surface;
             std::uint32_t skin_id = 0;
             std::uint32_t joint_count = 0;
+            bool has_wounds = false;
             vk::buffer::resource vertices;
             vk::buffer::resource indices;
             vk::buffer::resource instance_buffer;
@@ -1447,13 +1448,18 @@ namespace clt::scene_renderer
             auto& frame = mesh.frames.at(image);
             if (!frame.wounds.handle) continue;
 
-            std::vector<std::uint32_t> atlas(
-                mesh.instances.size() * wound_atlas_words, 0u);
             std::unordered_map<std::uint32_t, std::size_t> owners;
             owners.reserve(mesh.instances.size());
             for (std::size_t i = 0; i < mesh.instances.size(); ++i)
                 owners.emplace(mesh.instances[i].id, i);
 
+            mesh.has_wounds = std::any_of(
+                active_wounds.begin(), active_wounds.end(),
+                [&](const impact::wound& item) { return owners.contains(item.target); });
+            if (!mesh.has_wounds) continue;
+
+            std::vector<std::uint32_t> atlas(
+                mesh.instances.size() * wound_atlas_words, 0u);
             for (const auto& wound : active_wounds)
             {
                 const auto owner = owners.find(wound.target);
@@ -1590,7 +1596,7 @@ namespace clt::scene_renderer
                     {m.emissive[0], m.emissive[1],
                      m.emissive[2], float(flags)},
                     mesh.joint_count,
-                    mesh.joint_count ? 1u : 0u
+                    mesh.has_wounds ? 1u : 0u
                 };
                 command.pushConstants(
                     data.layout, vk::ShaderStageFlagBits::eVertex |
