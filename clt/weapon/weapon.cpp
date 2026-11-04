@@ -1,7 +1,7 @@
 #include "weapon.hpp"
 
 #include "clt/network/connection.hpp"
-#include "clt/weapon/impact.hpp"
+#include <bld/bld.hpp>
 #include "clt/player/prediction.hpp"
 #include "clt/view/camera.hpp"
 #include "srv/assets/model.hpp"
@@ -27,7 +27,6 @@ namespace clt::weapon
         constexpr std::uint32_t asset_id = 0x60000000;
         constexpr std::uint32_t hole_id = asset_id + 0x10000;
         constexpr std::uint32_t flash_id = hole_id + 1;
-        constexpr std::uint32_t impact_drop_id = flash_id + 1;
 
         struct intent
         {
@@ -82,12 +81,12 @@ namespace clt::weapon
             std::vector<draw> draws;
             std::vector<casing> casings;
             std::deque<hole> holes;
-            impact::system impact_effects;
             ::weapon::state predicted;
             std::deque<std::pair<net::weapon::command, double>> pending;
             std::unordered_set<std::uint32_t> confirmed;
             std::shared_ptr<const ::scene::state> collision_source;
             ::weapon::world collision;
+            std::unordered_set<std::uint32_t> skinned_instances;
             clock::time_point started{}, previous{};
             mat4 camera_correction = mat4::identity();
             std::uint32_t skin = 0, camera_joint = UINT32_MAX, muzzle = UINT32_MAX,
@@ -574,7 +573,6 @@ namespace clt::weapon
         animation::synchronize(d.asset);
         d.asset.meshes.push_back(disc(hole_id, false));
         d.asset.meshes.push_back(disc(flash_id, true));
-        impact::append_assets(d.asset, 0, impact_drop_id);
 
         d.predicted = current().predicted;
         select(0, seconds());
@@ -625,7 +623,7 @@ namespace clt::weapon
             d.last_fired_sequence = 0;
             d.casings.clear();
             d.holes.clear();
-            d.impact_effects = {};
+            bld::system::clear();
             d.connected = connected;
             select(0, now);
         }
@@ -747,10 +745,6 @@ namespace clt::weapon
                         add_impact(shot.impact, owner->settings);
                 }
             }
-        }
-        for (const auto& effect : connection::take_impact_events())
-        {
-            d.impact_effects.spawn(effect);
         }
         if (d.confirmed.size() > 1024)
         {
@@ -922,8 +916,46 @@ namespace clt::weapon
                 d.collision = {};
             }
             d.collision_source = source;
+            d.skinned_instances.clear();
+            if (source)
+            {
+                std::unordered_set<std::uint32_t> skinned_meshes;
+                for (const auto& mesh : source->meshes)
+                    if (mesh.skin_id) skinned_meshes.insert(mesh.id);
+                auto* anchors = bld::surfaces::get();
+                for (const auto& instance : source->instances)
+                {
+                    const bool skinned = skinned_meshes.contains(instance.mesh_id);
+                    if (skinned) d.skinned_instances.insert(instance.id);
+                    if (skinned || (anchors && anchors->transforms.contains(instance.id)))
+                        bld::surfaces::set_transform(instance.id,
+                            trs(instance.pose.position, instance.pose.rotation,
+                                instance.pose.scale));
+                }
+            }
         }
-        d.impact_effects.update(d.collision, dt);
+        bld::system::update(dt, [&](bld::vec3 from, bld::vec3 to) -> bld::collision
+        {
+            const auto delta = to - from;
+            const float distance = length(delta);
+            if (distance < 1e-6f) return {};
+            const auto hit = d.collision.trace(from, delta / distance, distance);
+            if (!hit.impacted) return {};
+
+            const auto* anchors = bld::surfaces::get();
+            if (source && anchors && !anchors->transforms.contains(hit.instance))
+            {
+                const auto found = std::find_if(source->instances.begin(),
+                    source->instances.end(), [&](const ::scene::instance& inst)
+                    { return inst.id == hit.instance; });
+                if (found != source->instances.end())
+                    bld::surfaces::set_transform(hit.instance,
+                        trs(found->pose.position, found->pose.rotation,
+                            found->pose.scale));
+            }
+            return {true, hit.instance, hit.position, hit.normal, hit.uv,
+                    hit.uv_valid, d.skinned_instances.contains(hit.instance)};
+        });
         for (auto& c : d.casings)
         {
             c.age += dt;
@@ -991,13 +1023,7 @@ namespace clt::weapon
         {
             draw item;
             item.mesh_id = mesh.id;
-            if (mesh.id == impact_drop_id)
-            {
-                for (const auto& drop : d.impact_effects.drops)
-                    item.instances.push_back(instance(impact::drop_transform(
-                        drop.position, drop.radius, drop.velocity)));
-            }
-            else if (mesh.id == hole_id)
+            if (mesh.id == hole_id)
             {
                 for (const auto& h : d.holes)
                 {
@@ -1072,27 +1098,9 @@ namespace clt::weapon
                view;
     }
 
-    std::size_t instance_capacity(std::uint32_t mesh_id)
+    std::size_t instance_capacity(std::uint32_t)
     {
-        if (mesh_id == impact_drop_id) return 128;
         return 192;
-    }
-
-    std::uint32_t vat_type(std::uint32_t)
-    {
-        return 0;
-    }
-
-    std::vector<impact::projector> impact_projectors()
-    {
-        const auto scene = connection::snapshot();
-        return get().impact_effects.projectors(scene.get());
-    }
-
-    std::vector<impact::wound> impact_wounds()
-    {
-        const auto& list = get().impact_effects.wounds;
-        return {list.begin(), list.end()};
     }
 
     status inspect()

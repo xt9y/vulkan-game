@@ -1,7 +1,5 @@
 #pragma once
 #include "clt/animation/animation.hpp"
-#include "clt/render/vat_gpu.hpp"
-#include "clt/weapon/impact.hpp"
 #include "srv/shared/weapon/weapon.hpp"
 
 #include <cstdint>
@@ -78,7 +76,6 @@ namespace clt::weapon
         bool viewmodel = false;
         std::vector<instance_data> instances;
         std::vector<animation::matrix> palette;
-        std::vector<vat_gpu::parameters_t> vat;
     };
 
     // Input-thread producer; edge commands are retained until consumed by the render thread.
@@ -101,9 +98,6 @@ namespace clt::weapon
 
     // Local world effects can exceed the regular 192-instance weapon budget.
     std::size_t instance_capacity(std::uint32_t mesh_id);
-    std::uint32_t vat_type(std::uint32_t mesh_id);
-    std::vector<impact::projector> impact_projectors();
-    std::vector<impact::wound> impact_wounds();
 
     // Render-thread view of the predicted HUD and presentation state.
     status inspect();
