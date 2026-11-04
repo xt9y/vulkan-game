@@ -4,7 +4,7 @@
 #include "clt/network/connection.hpp"
 #include "clt/render/texture.hpp"
 #include "clt/render/upload.hpp"
-#include "clt/render/vat_gpu.hpp"
+#include <bld/bld.hpp>
 #include "clt/view/camera.hpp"
 #include "clt/weapon/weapon.hpp"
 #include "srv/game/options.hpp"
@@ -45,10 +45,6 @@ namespace clt::scene_renderer
         };
         static_assert(sizeof(draw_parameters) <= 128);
 
-        constexpr std::size_t wound_atlas_resolution = 128;
-        constexpr std::size_t wound_atlas_words =
-            wound_atlas_resolution * wound_atlas_resolution / 4;
-
         struct gpu_mesh {
             std::uint32_t id = 0;
             ::scene::material surface;
@@ -65,8 +61,6 @@ namespace clt::scene_renderer
                 vk::buffer::resource indirect;
                 vk::buffer::resource skin_palette;
                 vk::buffer::resource local_instances;
-                vk::buffer::resource vat_data;
-                vk::buffer::resource wounds;
                 vk::DescriptorSet set{};
             };
             std::vector<per_image> frames;
@@ -93,8 +87,6 @@ namespace clt::scene_renderer
             std::vector<gpu_mesh> meshes;
             std::vector<gpu_mesh> local_meshes;
             vk::DescriptorPool local_pool{};
-            vk::buffer::resource vat_fallback;
-            vk::buffer::resource wound_fallback;
             vk::DescriptorSetLayout instance_layout{};
             vk::DescriptorPool instance_pool{};
             vk::PipelineLayout cull_layout{};
@@ -152,11 +144,6 @@ namespace clt::scene_renderer
                     {
                         vk::buffer::destroy(frame.local_instances);
                     }
-                    if (frame.vat_data.handle)
-                    {
-                        vk::buffer::destroy(frame.vat_data);
-                    }
-                    if (frame.wounds.handle) vk::buffer::destroy(frame.wounds);
                 }
             }
 
@@ -512,20 +499,20 @@ namespace clt::scene_renderer
         auto& data = get();
         data.shaders = {vertex_path, fragment_path};
 
-        std::array<vk::DescriptorSetLayoutBinding, 15> bindings{};
+        std::array<vk::DescriptorSetLayoutBinding, 11> bindings{};
         for (std::uint32_t i = 0; i < bindings.size(); ++i)
         {
-            bindings[i].binding = i;
-            bindings[i].descriptorType = (i < 4 || i == 9 || i == 13 || i == 14) ?
+            const auto slot = i == 10 ? 14u : i;
+            bindings[i].binding = slot;
+            bindings[i].descriptorType = (slot < 4 || slot == 9 || slot == 14) ?
                 vk::DescriptorType::eStorageBuffer :
                 vk::DescriptorType::eCombinedImageSampler;
             bindings[i].descriptorCount = 1;
-            bindings[i].stageFlags = i < 4 ?
+            bindings[i].stageFlags = slot < 4 ?
                 vk::ShaderStageFlags(vk::ShaderStageFlagBits::eCompute) :
-                i == 9 || (i >= 10 && i <= 13) ?
-                    vk::ShaderStageFlags(vk::ShaderStageFlagBits::eVertex) :
-                    vk::ShaderStageFlags(vk::ShaderStageFlagBits::eFragment);
-            if (i == 0)
+                slot == 9 ? vk::ShaderStageFlags(vk::ShaderStageFlagBits::eVertex) :
+                            vk::ShaderStageFlags(vk::ShaderStageFlagBits::eFragment);
+            if (slot == 0)
                 bindings[i].stageFlags |= vk::ShaderStageFlagBits::eVertex;
         }
 
@@ -536,22 +523,6 @@ namespace clt::scene_renderer
         data.instance_layout = device.createDescriptorSetLayout(info);
         texture::init();
         weapon::initialize();
-        data.vat_fallback = vk::buffer::create(
-            sizeof(vat_gpu::parameters_t), vk::BufferUsageFlagBits::eStorageBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible |
-            vk::MemoryPropertyFlagBits::eHostCoherent
-        );
-        const vat_gpu::parameters_t empty_vat{};
-        vk::buffer::write(data.vat_fallback, &empty_vat, sizeof(empty_vat));
-        data.wound_fallback = vk::buffer::create(
-            sizeof(std::uint32_t), vk::BufferUsageFlagBits::eStorageBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible |
-                vk::MemoryPropertyFlagBits::eHostCoherent
-        );
-        const std::uint32_t empty_wounds = 0;
-        vk::buffer::write(data.wound_fallback, &empty_wounds, sizeof(empty_wounds));
-        // Blood effects now use attached decals and UV wounds; no unused
-        // VAT textures are uploaded during normal renderer startup.
         texture::pin(weapon::assets());
         texture::synchronize(::scene::state{});
 
