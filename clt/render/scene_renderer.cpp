@@ -844,20 +844,8 @@ namespace clt::scene_renderer
             palette_write.descriptorType = vk::DescriptorType::eStorageBuffer;
             palette_write.pBufferInfo = &palette_info;
             vk::device::get()->handle.updateDescriptorSets({palette_write}, {});
-            vk::DescriptorBufferInfo vat_info{};
-            vat_info.buffer = get().vat_fallback.handle;
-            vat_info.range = VK_WHOLE_SIZE;
-            vk::WriteDescriptorSet vat_write{};
-            vat_write.dstSet = frame.set;
-            vat_write.dstBinding = 13;
-            vat_write.descriptorCount = 1;
-            vat_write.descriptorType = vk::DescriptorType::eStorageBuffer;
-            vat_write.pBufferInfo = &vat_info;
-            vk::device::get()->handle.updateDescriptorSets({vat_write}, {});
-            vk::DescriptorBufferInfo wound_info{};
-            wound_info.buffer = frame.wounds.handle
-                ? frame.wounds.handle : get().wound_fallback.handle;
-            wound_info.range = VK_WHOLE_SIZE;
+            auto wound_info = bld::render::wound::descriptor_batch(
+                mesh.id, {}, 0);
             vk::WriteDescriptorSet wound_write{};
             wound_write.dstSet = frame.set;
             wound_write.dstBinding = 14;
@@ -940,24 +928,6 @@ namespace clt::scene_renderer
                     palette_size, vk::BufferUsageFlagBits::eStorageBuffer,
                     vk::MemoryPropertyFlagBits::eHostVisible |
                     vk::MemoryPropertyFlagBits::eHostCoherent);
-            }
-        }
-        if (mesh.joint_count)
-        {
-            const auto wound_bytes = std::max<std::size_t>(
-                sizeof(std::uint32_t),
-                mesh.instances.size() * wound_atlas_words * sizeof(std::uint32_t));
-            for (auto& frame : mesh.frames)
-            {
-                if (!frame.wounds.handle || frame.wounds.size < wound_bytes)
-                {
-                    if (frame.wounds.handle) vk::buffer::destroy(frame.wounds);
-                    frame.wounds = vk::buffer::create(
-                        wound_bytes, vk::BufferUsageFlagBits::eStorageBuffer,
-                        vk::MemoryPropertyFlagBits::eHostVisible |
-                            vk::MemoryPropertyFlagBits::eHostCoherent
-                    );
-                }
             }
         }
         const auto size = mesh.bounds.size() * sizeof(mesh.bounds.front());
@@ -1252,7 +1222,6 @@ namespace clt::scene_renderer
             for (auto& frame : mesh.frames)
             {
                 texture::bind(frame.set, mesh.surface);
-                vat_gpu::bind(weapon::vat_type(mesh.id), frame.set);
             }
         }
     }
@@ -1402,92 +1371,27 @@ namespace clt::scene_renderer
             }
         }
 
-        // One packed R8 UV atlas per skinned actor (128x128, 16 KiB each).
-        // Each texel stores 4-bit coverage and 4-bit wetness. Atlas index is
-        // exactly the skinning instance index consumed by the vertex shader.
-        const auto active_wounds = weapon::impact_wounds();
-        if (active_wounds.empty())
-        {
-            for (auto& mesh : data.meshes) mesh.has_wounds = false;
-        }
-        else
-        {
         for (auto& mesh : data.meshes)
         {
+            mesh.has_wounds = false;
             if (!mesh.joint_count || mesh.instances.empty()) continue;
-            auto& frame = mesh.frames.at(image);
-            if (!frame.wounds.handle) continue;
 
-            std::unordered_map<std::uint32_t, std::size_t> owners;
-            owners.reserve(mesh.instances.size());
-            for (std::size_t i = 0; i < mesh.instances.size(); ++i)
-                owners.emplace(mesh.instances[i].id, i);
-
-            mesh.has_wounds = std::any_of(
-                active_wounds.begin(), active_wounds.end(),
-                [&](const impact::wound& item) { return owners.contains(item.target); });
+            std::vector<bld::instance_id> actors;
+            actors.reserve(mesh.instances.size());
+            for (const auto& instance : mesh.instances)
+                actors.push_back(instance.id);
+            mesh.has_wounds = bld::render::wound::has_wounds(actors);
             if (!mesh.has_wounds) continue;
 
-            std::vector<std::uint32_t> atlas(
-                mesh.instances.size() * wound_atlas_words, 0u);
-            for (const auto& wound : active_wounds)
-            {
-                const auto owner = owners.find(wound.target);
-                if (owner == owners.end()) continue;
-
-                const float radius = std::max(
-                    1.25f, wound.radius * float(wound_atlas_resolution));
-                const float cx = wound.uv.x * float(wound_atlas_resolution - 1);
-                const float cy = wound.uv.y * float(wound_atlas_resolution - 1);
-                const int padding = int(std::ceil(radius * 1.5f));
-                const int x0 = std::max(0, int(cx) - padding);
-                const int y0 = std::max(0, int(cy) - padding);
-                const int x1 = std::min(127, int(cx) + padding);
-                const int y1 = std::min(127, int(cy) + padding);
-                const float wetness = std::clamp(1.f - wound.age / 100.f, 0.f, 1.f);
-
-                for (int y = y0; y <= y1; ++y)
-                    for (int x = x0; x <= x1; ++x)
-                    {
-                        const float dx = (float(x) + .5f - cx) / radius;
-                        const float dy = (float(y) + .5f - cy) / radius;
-                        const float angle = std::atan2(dy, dx);
-                        const float direction =
-                            std::cos(angle - wound.angle) * .3f;
-                        const float distance = std::sqrt(
-                            dx * dx * (1.1f + direction) +
-                            dy * dy * (1.1f - direction));
-                        const float ragged = .84f +
-                            .1f * std::sin(angle * 7.f + wound.angle) +
-                            .06f * std::cos(angle * 13.f);
-                        const float shape = std::clamp(
-                            (ragged - distance) * 4.0f, 0.f, 1.f) *
-                            wound.strength;
-                        const auto coverage = std::uint32_t(std::clamp(
-                            int(std::lround(shape * 15.f)), 0, 15));
-                        if (!coverage) continue;
-
-                        const std::size_t pixel = std::size_t(y) * wound_atlas_resolution +
-                                                  std::size_t(x);
-                        const std::size_t index =
-                            owner->second * wound_atlas_words + pixel / 4;
-                        const auto bits = std::uint32_t((pixel & 3u) * 8u);
-                        const auto old = (atlas[index] >> bits) & 255u;
-                        const auto previous_coverage = old >> 4u;
-                        if (coverage < previous_coverage) continue;
-                        const auto moisture = std::uint32_t(std::clamp(
-                            int(std::lround(wetness * 15.f)), 0, 15));
-                        const auto stamp = (coverage << 4u) |
-                            std::max(moisture, coverage == previous_coverage ?
-                                (old & 15u) : 0u);
-                        atlas[index] = (atlas[index] & ~(255u << bits)) |
-                            (stamp << bits);
-                    }
-            }
-            vk::buffer::write(frame.wounds, atlas.data(),
-                              atlas.size() * sizeof(atlas.front()));
-        }
-
+            auto wound_info = bld::render::wound::descriptor_batch(
+                mesh.id, actors, image);
+            vk::WriteDescriptorSet write{};
+            write.dstSet = mesh.frames.at(image).set;
+            write.dstBinding = 14;
+            write.descriptorCount = 1;
+            write.descriptorType = vk::DescriptorType::eStorageBuffer;
+            write.pBufferInfo = &wound_info;
+            vk::device::get()->handle.updateDescriptorSets({write}, {});
         }
 
         for (const auto& item : weapon_draws)
@@ -1513,13 +1417,6 @@ namespace clt::scene_renderer
                     frame.local_instances,
                     item.instances.data(),
                     item.instances.size() * sizeof(weapon::instance_data)
-                );
-            }
-            if (!item.vat.empty())
-            {
-                vk::buffer::write(
-                    frame.vat_data, item.vat.data(),
-                    item.vat.size() * sizeof(vat_gpu::parameters_t)
                 );
             }
             if (!item.palette.empty())
@@ -1639,7 +1536,7 @@ namespace clt::scene_renderer
                     m.base_color,
                     {m.metallic, m.roughness, m.occlusion, m.alpha_cutoff},
                     {m.emissive[0], m.emissive[1], m.emissive[2], float(flags)},
-                    item.vat.empty() ? mesh.joint_count : UINT32_MAX,
+                    mesh.joint_count,
                     0u
                 };
                 command.pushConstants(
@@ -1691,17 +1588,6 @@ namespace clt::scene_renderer
         {
             vk::device::get()->handle.destroyPipelineLayout(data.cull_layout);
             data.cull_layout = nullptr;
-        }
-        vat_gpu::shutdown();
-        if (data.vat_fallback.handle)
-        {
-            vk::buffer::destroy(data.vat_fallback);
-            data.vat_fallback = {};
-        }
-        if (data.wound_fallback.handle)
-        {
-            vk::buffer::destroy(data.wound_fallback);
-            data.wound_fallback = {};
         }
         texture::shutdown();
         if (data.instance_layout)
