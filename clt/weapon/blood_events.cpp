@@ -173,6 +173,11 @@ namespace clt::blood_events
         event.target=hit.instance;
         event.position=hit.position;
         event.normal=hit.normal;
+        // A bullet wound ejects liquid outward along the surface normal;
+        // it does not inherit arbitrary world +Z as its direction.
+        event.direction=hit.normal;
+        event.amount_ml=6.f;
+        event.velocity=3.0f;
         event.uv=uv.uv;
         event.uv_valid=uv.valid;
         bld::system::hit(event);
