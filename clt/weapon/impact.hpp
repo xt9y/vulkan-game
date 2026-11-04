@@ -3,6 +3,7 @@
 #include "srv/shared/net/impact.hpp"
 #include "srv/shared/scene/scene.hpp"
 #include "srv/shared/weapon/weapon.hpp"
+
 #include <vk/util/math/matrix.hpp>
 
 #include <cstdint>
@@ -14,48 +15,46 @@ namespace clt::impact
     using vk::util::math::vec3;
     using vk::util::math::mat4;
 
+    // Only flesh effects exist here. Other impact types use ordinary bullet marks.
     struct drop
     {
         vec3 position{}, velocity{};
-        float radius = .01f, age = 0, lifetime = 2;
+        float radius = .012f, age = 0, lifetime = 1.5f;
         std::uint32_t seed = 1;
-        ::weapon::impact_type type = ::weapon::impact_type::flesh;
     };
 
     struct stain
     {
         mat4 transform = mat4::identity();
-        float age = 0, lifetime = 300;
+        mat4 local = mat4::identity();
+        std::uint32_t anchor = 0;
         std::uint32_t variant = 0;
+        float age = 0, lifetime = 240;
+        float wetness = 1;
     };
 
     struct pool
     {
         vec3 position{}, normal{};
-        float radius = .035f, final_radius = .2f, age = 0, angle = 0;
-        std::uint32_t variant = 0;
+        float radius = .08f, final_radius = .4f;
+        float age = 0, angle = 0, lifetime = 240;
+        std::uint32_t variant = 0, anchor = 0;
     };
 
     struct projector
     {
         mat4 transform = mat4::identity();
         std::uint32_t variant = 0;
+        float wetness = 1;
     };
 
     struct wound
     {
         std::uint32_t target = 0;
         vk::util::math::vec2 uv{};
-        float radius = .04f;
-        float strength = 1;
-    };
-
-    struct vat_animation
-    {
-        mat4 transform = mat4::identity();
-        std::uint32_t type = 19;
-        float age = 0, lifetime = 2.5f;
-        bool mirror = false;
+        float radius = .04f, strength = 1;
+        float age = 0;
+        float angle = 0;
     };
 
     struct system
@@ -63,18 +62,17 @@ namespace clt::impact
         std::vector<drop> drops;
         std::deque<stain> stains;
         std::deque<pool> pools;
-        std::deque<vat_animation> vat_animations;
         std::deque<wound> wounds;
 
         void spawn(const net::impact::event& effect);
         void update(const ::weapon::world& collision, float dt);
-        std::vector<projector> projectors() const;
+        std::vector<projector> projectors(const ::scene::state* scene) const;
     };
 
     mat4 decal_transform(vec3 position, vec3 normal, float size, float angle);
-    mat4 drop_transform(vec3 position, float radius);
+    mat4 drop_transform(vec3 position, float radius, vec3 velocity = {});
     inline constexpr std::uint32_t decal_texture_id = 0x600f0000u;
-    // Local effects use the existing instanced PBR scene renderer and texture cache.
+
     void append_assets(::scene::state& scene,
                        std::uint32_t first_decal,
                        std::uint32_t drop_mesh);
