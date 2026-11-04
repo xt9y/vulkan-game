@@ -4,6 +4,7 @@
 #include <fld/fld.hpp>
 #include <algorithm>
 #include <chrono>
+#include <iostream>
 #include <stdexcept>
 #include <vector>
 
@@ -19,7 +20,8 @@ namespace clt::fluid
             bool initialized=false;
         };
         std::vector<target> targets;
-        clock::time_point previous{};
+        clock::time_point previous{},report_started{};
+        std::uint32_t submitted=0;
 
         constexpr const char* particle_stages[9]={
             "CLEAR","PREDICT","BUILD","LAMBDA","DELTA","APPLY",
@@ -79,7 +81,8 @@ namespace clt::fluid
                 view.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1};
                 target.view=vk::image_view::create(view);
             }
-            previous=clock::now();
+            previous=report_started=clock::now();
+            submitted=0;
         }
         catch(...)
         {
@@ -134,6 +137,18 @@ namespace clt::fluid
         input.sampler=postprocess::sampler();
         input.color_layout=vk::ImageLayout::eGeneral;
         fld::render::record(command,image,input);
+#ifndef NDEBUG
+        ++submitted;
+        const float report_seconds=std::chrono::duration<float>(now-report_started).count();
+        if(report_seconds>=3.f)
+        {
+            std::clog << "fluid: submitted_fps=" << submitted/report_seconds
+                      << " particles=" << fld::system::particle_count()
+                      << " (GPU frame time not measured)" << '\\n';
+            submitted=0;
+            report_started=now;
+        }
+#endif
     }
 
     void release()
