@@ -181,6 +181,7 @@ namespace clt::blood_events
 
     void reset()
     {
+        if(bld::system::get())bld::system::clear();
         for(const auto id:data().registered)bld::surface::remove_target(id);
         data()={};
     }
