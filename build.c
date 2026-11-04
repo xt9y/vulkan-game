@@ -159,16 +159,21 @@ void build(C_Build* b)
     c_use(client, engine);
     c_use(client, blood);
     c_use(client, headers);
-    c_generate(client, "build/shaders/mesh.frag.spv", "shd/mesh.frag",
+    // Generated outputs must be compilable sources in c build; each stamp
+    // triggers shader compilation while remaining harmless to the linker.
+    c_generate(client, "build/shaders/mesh_stamp.cpp", "shd/mesh.frag",
                "glslangValidator -V -I@VulkanBlood@/bld/shaders "
-               "shd/mesh.frag -o build/shaders/mesh.frag.spv");
-    c_generate(client, "build/shaders/light.comp.spv", "shd/light.comp",
+               "shd/mesh.frag -o build/shaders/mesh.frag.spv && "
+               "printf 'namespace mesh_shader_stamp {}\\n' > build/shaders/mesh_stamp.cpp");
+    c_generate(client, "build/shaders/light_stamp.cpp", "shd/light.comp",
                "glslangValidator -V -I@VulkanBlood@/bld/shaders "
-               "shd/light.comp -o build/shaders/light.comp.spv");
-    c_generate(client, "build/shaders/blood.comp.spv",
+               "shd/light.comp -o build/shaders/light.comp.spv && "
+               "printf 'namespace light_shader_stamp {}\\n' > build/shaders/light_stamp.cpp");
+    c_generate(client, "build/shaders/blood_stamp.cpp",
                "@VulkanBlood@/bld/shaders/decal.comp",
                "glslangValidator -V @VulkanBlood@/bld/shaders/decal.comp "
-               "-o build/shaders/blood.comp.spv");
+               "-o build/shaders/blood.comp.spv && "
+               "printf 'namespace blood_shader_stamp {}\\n' > build/shaders/blood_stamp.cpp");
     c_use(client, glfw);
     c_use(client, fastgltf);
     c_use(client, ozz);
