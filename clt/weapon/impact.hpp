@@ -31,6 +31,7 @@ namespace clt::impact
         std::uint32_t variant = 0;
         float age = 0, lifetime = 240;
         float wetness = 1;
+        bool growing_pool = false;
     };
 
     struct pool

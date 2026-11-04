@@ -100,11 +100,27 @@ void main()
             continue;
 
         vec2 decal_uv = local.xy + .5;
-        // Hell2025's decal RGB stores the splatter shape, not its material color.
-        // Use channel maximum so blue/grayscale mask variants render consistently.
-        vec4 shape = sample_decal(uint(decal.normal.w + .5), decal_uv);
-        float ink = max(shape.r, max(shape.g, shape.b));
-        float mask = smoothstep(.025, .40, pow(clamp(ink, 0.0, 1.0), .78));
+        uint type = uint(decal.normal.w + .5);
+        float ink = 1.0;
+        float mask;
+        if (type >= 8u)
+        {
+            // Growing pools have filled interiors and irregular, softly wetted edges.
+            vec2 p = local.xy * 2.0;
+            float theta = atan(p.y, p.x);
+            float edge = .84 + .065 * sin(theta * 5.0 + float(type)) +
+                         .045 * sin(theta * 11.0 - float(type));
+            float radius = length(p);
+            mask = 1.0 - smoothstep(edge - .10, edge + .025, radius);
+            ink = 1.0 - smoothstep(0.0, 1.2, radius) * .3;
+        }
+        else
+        {
+            // Hell2025's RGB is a splatter mask, NOT a blood albedo.
+            vec4 shape = sample_decal(type, decal_uv);
+            ink = max(shape.r, max(shape.g, shape.b));
+            mask = smoothstep(.025, .40, pow(clamp(ink, 0.0, 1.0), .78));
+        }
         float grain = fract(sin(dot(world.xy + world.zy,
                           vec2(12.9898, 78.233))) * 43758.5453);
         float alpha = clamp(mask * (.87 + .13 * grain) * .96, 0.0, 1.0);

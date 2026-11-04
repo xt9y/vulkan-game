@@ -87,7 +87,23 @@ namespace clt::impact
             item.wetness = .82f + unit(seed) * .18f;
             item.lifetime = 280;
             item.transform = decal_transform(position, normal, size, unit(seed) * 2.f * pi);
-            for (int r = 0; r < 3; ++r) item.transform(r, 1) *= stretch;
+            const vec3 n = normalize(normal);
+            const vec3 gravity{0, -1, 0};
+            const auto tangent = gravity - n * dot(gravity, n);
+            if (stretch > 1.15f && vk::util::math::length(tangent) > .2f)
+            {
+                const auto down = normalize(tangent);
+                const auto across = normalize(cross(down, n));
+                for (int r = 0; r < 3; ++r)
+                {
+                    item.transform(r, 0) = (&across.x)[r] * size;
+                    item.transform(r, 1) = (&down.x)[r] * size * stretch;
+                }
+            }
+            else
+            {
+                for (int r = 0; r < 3; ++r) item.transform(r, 1) *= stretch;
+            }
             const auto scene = connection::snapshot();
             if (owns_instance(scene.get(), target))
             {
@@ -305,7 +321,8 @@ namespace clt::impact
                 : item.transform;
             const auto age = std::clamp(item.age / item.lifetime, 0.f, 1.f);
             result.push_back({
-                m, item.variant, std::clamp(item.wetness * (1.f - age), .2f, 1.f)
+                m, item.variant, std::clamp(item.wetness * (1.f - age), .2f, 1.f),
+                false
             });
         }
         for (const auto& item : pools)
@@ -316,7 +333,7 @@ namespace clt::impact
             const auto m = basis * scale({item.radius, item.radius, 1.f});
             const auto age = std::clamp(item.age / item.lifetime, 0.f, 1.f);
             result.push_back({
-                m, item.variant, std::clamp(1.f - age, .2f, 1.f)
+                m, item.variant, std::clamp(1.f - age, .2f, 1.f), true
             });
         }
         return result;
