@@ -578,6 +578,11 @@ namespace clt::scene_renderer
     }
 
 
+    mat4 world_view_projection()
+    {
+        return get().current_world_view_projection;
+    }
+
     gbuffer outputs(std::uint32_t image)
     {
         const auto& target = get().targets.at(image);
