@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -137,21 +138,44 @@ namespace clt::blood_events
     void shot(const ::weapon::hit& hit,
               const std::shared_ptr<const ::scene::state>& source)
     {
-        if(!hit.impacted || !source || !bld::system::get())return;
+        if(!bld::system::get())return;
+        if(!hit.impacted || !source)
+        {
+#ifndef NDEBUG
+            std::clog << "blood: shot " << (hit.impacted ? "has no scene" : "missed") << '\n';
+#endif
+            return;
+        }
         index(source);
         const auto target=find(hit.instance);
         // Blood is an explicit game-owned property, independent of skinning.
         // Static/rigid character meshes must bleed just like animated ones.
-        if(!target.mesh || !target.mesh->bleeds)return;
+        if(!target.mesh || !target.mesh->bleeds)
+        {
+#ifndef NDEBUG
+            std::clog << "blood: hit instance " << hit.instance
+                      << " (not a bleedable mesh)\n";
+#endif
+            return;
+        }
         const auto uv=attach(target,hit);
         bld::impact event{};
-        event.seed=0; // Derive a distinct deterministic seed from the event ID.
+        event.seed=0;
         event.target=hit.instance;
         event.position=hit.position;
         event.normal=hit.normal;
         event.uv=uv.uv;
         event.uv_valid=uv.valid;
         bld::system::hit(event);
+#ifndef NDEBUG
+        const auto *solver=fld::system::get();
+        const auto *atlas=bld::surface::find(hit.instance);
+        std::clog << "blood: hit instance " << hit.instance
+                  << " uv=" << uv.valid
+                  << " particles=" << (solver ? solver->particles.size() : 0)
+                  << " stains=" << (atlas ? atlas->marks.size() : 0)
+                  << '\n';
+#endif
     }
 
     void update(float seconds,const ::weapon::world& collision,
