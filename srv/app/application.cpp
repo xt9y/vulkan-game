@@ -12,6 +12,7 @@
 #include "srv/shared/net/scene_stream.hpp"
 #include "srv/shared/net/socket.hpp"
 #include "srv/shared/net/weapon.hpp"
+#include "srv/shared/net/blood.hpp"
 #include "srv/shared/player/movement.hpp"
 
 #include <algorithm>
@@ -66,12 +67,12 @@ namespace srv::application
     }
 
     void load_model(std::filesystem::path path, ::scene::transform pose,
-                    std::uint32_t animation)
+                    std::uint32_t animation, bool flesh)
     {
         if (get()->initialized) throw std::runtime_error("Register model imports before init");
         if (path.empty() || !std::filesystem::is_regular_file(path))
             throw std::runtime_error("Model file not found: " + path.string());
-        get()->models.push_back({std::move(path), pose, animation});
+        get()->models.push_back({std::move(path), pose, animation, flesh});
     }
 
     void add_weapon(::weapon::definition definition)
@@ -123,6 +124,7 @@ namespace srv::application
             if (!generation::submit([requests = std::move(requests)]() -> generation::completion
             {
                 ::scene::state combined;
+                std::vector<std::uint32_t> flesh_ids;
                 auto mesh_id = std::uint32_t(1);
                 auto instance_id = std::uint32_t(1);
                 auto texture_id = std::uint32_t(1);
@@ -161,6 +163,7 @@ namespace srv::application
                         }
                         instance.pose = request.pose;
                         instance.animation = request.animation;
+                        if (request.flesh) flesh_ids.push_back(instance.id);
                     }
                     std::cout << "srv: imported " << request.path.string() << " ("
                               << imported.meshes.size() << " meshes, "
@@ -187,9 +190,11 @@ namespace srv::application
                         std::make_move_iterator(imported.skins.begin()),
                         std::make_move_iterator(imported.skins.end()));
                 }
-                return [imported = std::make_shared<::scene::state>(std::move(combined))]() mutable
+                return [imported = std::make_shared<::scene::state>(std::move(combined)),
+                        flesh_ids = std::move(flesh_ids)]() mutable
                 {
                     get()->importing = std::move(imported);
+                    get()->flesh_instances.insert(flesh_ids.begin(), flesh_ids.end());
                     get()->next_texture = 0;
                     get()->next_skin = 0;
                     get()->next_mesh = 0;
@@ -236,6 +241,42 @@ namespace srv::application
         for (auto& mesh : patch.meshes)
         {
             data.scene.meshes.push_back(std::move(mesh));
+        }
+
+        // Static triangle collisions exclude skinned meshes. Attach a conservative
+        // capsule to each streamed flesh-skinned mesh as an initial hit volume.
+        for (const auto& instance : patch.instances)
+        {
+            if (!data.flesh_instances.contains(instance.id)) continue;
+            const auto mesh = std::find_if(data.scene.meshes.begin(), data.scene.meshes.end(),
+                [&](const ::scene::mesh& entry) { return entry.id == instance.mesh_id; });
+            if (mesh == data.scene.meshes.end() || !mesh->skin_id || mesh->vertices.empty())
+                continue;
+            auto lo = mesh->vertices.front().position;
+            auto hi = lo;
+            for (const auto& vertex : mesh->vertices)
+            {
+                const auto p = vertex.position;
+                lo = {std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z)};
+                hi = {std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z)};
+            }
+            const auto center = vk::util::math::vec3{(lo.x + hi.x) * .5f, 0, (lo.z + hi.z) * .5f};
+            const auto s = instance.pose.scale;
+            const auto move = [&](vk::util::math::vec3 p)
+            {
+                return instance.pose.position + vk::util::math::rotate(instance.pose.rotation,
+                    vk::util::math::vec3{p.x * s.x, p.y * s.y, p.z * s.z});
+            };
+            const float radius = std::max(.06f,
+                std::max((hi.x - lo.x) * std::abs(s.x),
+                         (hi.z - lo.z) * std::abs(s.z)) * .45f);
+            const float inset = std::min(radius, (hi.y - lo.y) * std::abs(s.y) * .4f) /
+                std::max(std::abs(s.y), .001f);
+            data.flesh_capsules.push_back({
+                move({center.x, lo.y + inset, center.z}),
+                move({center.x, hi.y - inset, center.z}),
+                radius, instance.id
+            });
         }
 
         // Only the new geometry needs collision bounds and a new BVH root.
@@ -459,6 +500,9 @@ namespace srv::application
         get()->scene_batches.clear();
         get()->colliders.clear();
         get()->weapon_world = {};
+        get()->flesh_instances.clear();
+        get()->flesh_capsules.clear();
+        get()->next_blood_event = 0;
         get()->weapons = {};
         get()->on_weapon_command = {};
         get()->scene_hash = 0;
@@ -700,7 +744,9 @@ namespace srv::application
                             owned->state,
                             client.avatar,
                             seconds,
-                            get()->weapon_world
+                            get()->weapon_world,
+                            get()->flesh_instances,
+                            get()->flesh_capsules
                         };
                         const auto impact = get()->on_weapon_command(context);
                         if (next.kind == ::weapon::action::fire)

@@ -8,6 +8,7 @@
 #include "srv/shared/player/movement.hpp"
 #include "srv/shared/scene/scene.hpp"
 #include "srv/shared/weapon/weapon.hpp"
+#include "srv/shared/weapon/hitbox.hpp"
 
 #include <cstddef>
 #include <filesystem>
@@ -15,6 +16,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <unordered_set>
 
 namespace srv::application
 {
@@ -23,6 +25,7 @@ namespace srv::application
         std::filesystem::path path;
         ::scene::transform pose;
         std::uint32_t animation;
+        bool flesh = false;
     };
 
     struct weapon_command_context
@@ -33,6 +36,8 @@ namespace srv::application
         const ::player::state& player;
         double now;
         const ::weapon::world& world;
+        const std::unordered_set<std::uint32_t>& flesh_instances;
+        const std::vector<::weapon::hitbox::capsule>& flesh_capsules;
     };
 
     using weapon_command_handler = std::function<::weapon::hit(weapon_command_context&)>;
@@ -55,6 +60,9 @@ namespace srv::application
         std::uint32_t next_event = 0;
         player::collision_world colliders;
         ::weapon::world weapon_world;
+        std::unordered_set<std::uint32_t> flesh_instances;
+        std::vector<::weapon::hitbox::capsule> flesh_capsules;
+        std::uint32_t next_blood_event = 0;
         ::weapon::registry weapons;
         weapon_command_handler on_weapon_command;
         spatial::index collision_index;
@@ -74,7 +82,7 @@ namespace srv::application
     // The game defines both its initial scene and model imports before init().
     void set_scene(::scene::state scene);
     void load_model(std::filesystem::path path, ::scene::transform pose,
-                    std::uint32_t animation);
+                    std::uint32_t animation, bool flesh = false);
     // Register game rules and receive authenticated, owned, equipped weapon commands.
     void add_weapon(::weapon::definition definition);
     void on_weapon_command(weapon_command_handler handler);

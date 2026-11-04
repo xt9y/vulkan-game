@@ -2,6 +2,7 @@
 
 #include "srv/shared/net/endpoint.hpp"
 #include "srv/shared/net/weapon.hpp"
+#include "srv/shared/net/blood.hpp"
 #include "srv/shared/player/movement.hpp"
 
 #include <chrono>
@@ -39,6 +40,8 @@ namespace srv::session
         };
 
         std::deque<pending_shot> shots;
+        struct pending_blood { net::blood::event value; std::uint32_t repeats = 3; };
+        std::deque<pending_blood> blood_events;
         std::optional<net::weapon::shot> last_shot;
         std::deque<::player::input> inputs;
         std::uint32_t processed_input = 0;

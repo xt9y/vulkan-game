@@ -5,6 +5,8 @@
 #include "srv/shared/player/movement.hpp"
 #include "srv/shared/scene/scene.hpp"
 #include "srv/shared/weapon/metadata.hpp"
+#include "srv/shared/weapon/hitbox.hpp"
+#include <limits>
 
 #include <algorithm>
 #include <atomic>
@@ -125,8 +127,18 @@ int main(int argc, char** argv)
                 auto origin = event.player.position;
                 origin.y += player::parameters().height;
                 const auto direction = weapon::direction(event.command.yaw, event.command.pitch);
-                const auto impact = event.world.trace(origin, direction, event.definition.range);
-                // Apply game damage, decals, scoring or other impact rules here.
+                auto impact = event.world.trace(origin, direction, event.definition.range);
+                const auto actor = weapon::hitbox::trace(
+                    origin, direction, event.definition.range, event.flesh_capsules);
+                const auto distance = [&](const weapon::hit& h)
+                {
+                    return h.impacted
+                        ? vk::util::math::length_squared(h.position - origin)
+                        : std::numeric_limits<float>::infinity();
+                };
+                if (distance(actor) < distance(impact)) impact = actor;
+                if (impact.impacted && event.flesh_instances.contains(impact.instance))
+                    impact.flesh = true;
                 return impact;
             }
         );
@@ -180,7 +192,7 @@ int main(int argc, char** argv)
                            );
         // The source conversion faces +Z, toward the player spawn.
         mermaid.scale = {1.5, 1.5, 1.5};
-        srv::application::load_model("assets/mermaid/mermaid.glb", mermaid, 0);
+        srv::application::load_model("assets/mermaid/mermaid.glb", mermaid, 0, true);
         srv::application::set_scene(std::move(initial_scene));
 
         // Game-owned asset declarations; imported meshes and animations stream to clients.

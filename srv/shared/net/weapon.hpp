@@ -40,7 +40,7 @@ namespace net::weapon
 
     using command_packet = std::array<std::uint8_t, 32>;
     using snapshot_packet = std::array<std::uint8_t, 56>;
-    using shot_packet = std::array<std::uint8_t, 92>;
+    using shot_packet = std::array<std::uint8_t, 96>;
     command_packet encode_command(const command& value);
     std::optional<command> decode_command(const std::uint8_t* bytes, std::size_t size);
     snapshot_packet encode_snapshot(const snapshot& value);

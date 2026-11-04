@@ -224,6 +224,7 @@ namespace weapon
         bool impacted = false;
         vec3 position{}, normal{};
         std::uint32_t instance = 0, triangle = 0;
+        bool flesh = false;
     };
 
     struct world
