@@ -41,6 +41,14 @@ namespace clt::impact
         std::uint32_t variant = 0;
     };
 
+    struct wound
+    {
+        std::uint32_t target = 0;
+        vk::util::math::vec2 uv{};
+        float radius = .04f;
+        float strength = 1;
+    };
+
     struct vat_animation
     {
         mat4 transform = mat4::identity();
@@ -55,6 +63,7 @@ namespace clt::impact
         std::deque<stain> stains;
         std::deque<pool> pools;
         std::deque<vat_animation> vat_animations;
+        std::deque<wound> wounds;
 
         void spawn(const net::impact::event& effect);
         void update(const ::weapon::world& collision, float dt);

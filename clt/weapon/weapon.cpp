@@ -1145,6 +1145,12 @@ namespace clt::weapon
         return get().impact_effects.projectors();
     }
 
+    std::vector<impact::wound> impact_wounds()
+    {
+        const auto& list = get().impact_effects.wounds;
+        return {list.begin(), list.end()};
+    }
+
     status inspect()
     {
         const auto& d = get();

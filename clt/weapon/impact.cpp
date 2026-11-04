@@ -220,6 +220,15 @@ namespace clt::impact
         const bool bleeding = effect.type == ::weapon::impact_type::flesh;
         if (bleeding)
         {
+            if (effect.uv_valid)
+            {
+                if (wounds.size() >= 256) wounds.pop_front();
+                wounds.push_back({
+                    effect.target, effect.uv,
+                    .035f + unit(seed) * .04f,
+                    .8f + unit(seed) * .2f
+                });
+            }
             constexpr std::array<std::uint32_t, 3> variants{19, 20, 22};
             for (std::size_t i = 0; i < variants.size(); ++i)
             {

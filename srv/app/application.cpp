@@ -783,6 +783,8 @@ namespace srv::application
                             if (!effect.id) effect.id = ++get()->next_impact_event;
                             effect.target = impact.instance;
                             effect.type = impact.type;
+                            effect.uv = impact.uv;
+                            effect.uv_valid = impact.uv_valid;
                             effect.seed = (effect.id * 0x9e3779b9u) ^ next.sequence;
                             effect.position = impact.position;
                             effect.normal = impact.normal;

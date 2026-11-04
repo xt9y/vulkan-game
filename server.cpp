@@ -141,6 +141,39 @@ int main(int argc, char** argv)
                 {
                     const auto found = event.impact_instances.find(impact.instance);
                     if (found != event.impact_instances.end()) impact.type = found->second;
+                    if (impact.type == weapon::impact_type::flesh && !impact.uv_valid)
+                    {
+                        // Approximate a UV-space wound from the bind-pose vertices.
+                        // The wound then follows the model's animated UV surface.
+                        const auto& scene = srv::application::get()->scene;
+                        const auto instance = std::find_if(scene.instances.begin(), scene.instances.end(),
+                            [&](const ::scene::instance& item) { return item.id == impact.instance; });
+                        if (instance != scene.instances.end())
+                        {
+                            const auto mesh = std::find_if(scene.meshes.begin(), scene.meshes.end(),
+                                [&](const ::scene::mesh& item) { return item.id == instance->mesh_id; });
+                            if (mesh != scene.meshes.end())
+                            {
+                                float nearest = std::numeric_limits<float>::infinity();
+                                for (const auto& vertex : mesh->vertices)
+                                {
+                                    const auto& s = instance->pose.scale;
+                                    const auto point = instance->pose.position +
+                                        vk::util::math::rotate(instance->pose.rotation,
+                                            {vertex.position.x * s.x, vertex.position.y * s.y,
+                                             vertex.position.z * s.z});
+                                    const float distance = vk::util::math::length_squared(
+                                        point - impact.position);
+                                    if (distance < nearest)
+                                    {
+                                        nearest = distance;
+                                        impact.uv = {vertex.u, vertex.v};
+                                        impact.uv_valid = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 return impact;
             }

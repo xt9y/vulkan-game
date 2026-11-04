@@ -103,6 +103,7 @@ namespace clt::weapon
     std::size_t instance_capacity(std::uint32_t mesh_id);
     std::uint32_t vat_type(std::uint32_t mesh_id);
     std::vector<impact::projector> impact_projectors();
+    std::vector<impact::wound> impact_wounds();
 
     // Render-thread view of the predicted HUD and presentation state.
     status inspect();
