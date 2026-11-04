@@ -749,6 +749,28 @@ namespace srv::application
                             get()->flesh_capsules
                         };
                         const auto impact = get()->on_weapon_command(context);
+                        if (impact.impacted && impact.flesh &&
+                            owned->state.last_result == ::weapon::result::fired)
+                        {
+                            net::blood::event effect{};
+                            effect.id = ++get()->next_blood_event;
+                            if (!effect.id) effect.id = ++get()->next_blood_event;
+                            effect.target = impact.instance;
+                            effect.seed = (effect.id * 0x9e3779b9u) ^ next.sequence;
+                            effect.position = impact.position;
+                            effect.normal = impact.normal;
+                            effect.direction = ::weapon::direction(next.yaw, next.pitch);
+                            effect.intensity = 1;
+                            effect.tick = get()->tick;
+                            for (auto& receiver : session::get()->clients)
+                            {
+                                if (!receiver.active) continue;
+                                effect.token = receiver.token;
+                                if (receiver.blood_events.size() >= 128)
+                                    receiver.blood_events.pop_front();
+                                receiver.blood_events.push_back({effect, 3});
+                            }
+                        }
                         if (next.kind == ::weapon::action::fire)
                         {
                             net::weapon::shot shot{
@@ -806,6 +828,16 @@ namespace srv::application
                     );
                     owned.published = update;
                 }
+                for (auto& pending : client.blood_events)
+                {
+                    const auto packet = net::blood::encode(pending.value);
+                    net::socket::send(get()->socket, client.endpoint,
+                        packet.data(), packet.size());
+                    --pending.repeats;
+                }
+                std::erase_if(client.blood_events,
+                    [](const session::resource::pending_blood& pending)
+                    { return pending.repeats == 0; });
                 for (auto& pending : client.shots)
                 {
                     const auto packet = net::weapon::encode_shot(pending.value);

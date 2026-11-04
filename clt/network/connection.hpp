@@ -4,6 +4,7 @@
 #include "srv/shared/net/movement.hpp"
 #include "srv/shared/net/socket.hpp"
 #include "srv/shared/net/weapon.hpp"
+#include "srv/shared/net/blood.hpp"
 #include "srv/shared/scene/scene.hpp"
 
 #include <atomic>
@@ -17,6 +18,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace clt::connection
@@ -52,6 +54,11 @@ namespace clt::connection
         std::optional<net::movement::snapshot> authority;
         std::optional<::player::parameters_t> server_parameters;
 
+        std::mutex blood_mutex;
+        std::deque<net::blood::event> blood_events;
+        std::deque<std::uint32_t> blood_history;
+        std::unordered_set<std::uint32_t> blood_seen;
+
         std::mutex weapon_mutex;
         std::deque<net::weapon::command> weapon_outgoing;
         std::deque<net::weapon::snapshot> weapon_updates;
@@ -70,6 +77,7 @@ namespace clt::connection
     bool send_weapon(net::weapon::command command);
     std::vector<net::weapon::snapshot> take_weapon_updates();
     std::vector<net::weapon::shot> take_weapon_shots();
+    std::vector<net::blood::event> take_blood_events();
     void check_error();
     void send_input(const ::player::input& input);
     std::optional<net::movement::snapshot> take_authority();

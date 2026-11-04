@@ -155,6 +155,16 @@ namespace clt::connection
         return result;
     }
 
+    std::vector<net::blood::event> take_blood_events()
+    {
+        auto& data = *get();
+        std::lock_guard<std::mutex> lock(data.blood_mutex);
+        std::vector<net::blood::event> result(
+            data.blood_events.begin(), data.blood_events.end());
+        data.blood_events.clear();
+        return result;
+    }
+
     void check_error()
     {
         std::exception_ptr error;
@@ -213,6 +223,12 @@ namespace clt::connection
         }
 
         {
+            std::lock_guard<std::mutex> lock(get()->blood_mutex);
+            get()->blood_events.clear();
+            get()->blood_history.clear();
+            get()->blood_seen.clear();
+        }
+        {
             std::lock_guard<std::mutex> lock(get()->scene_mutex);
             get()->scene.reset();
             get()->pending_scene.clear();
@@ -248,6 +264,12 @@ namespace clt::connection
             get()->authority.reset();
         }
 
+        {
+            std::lock_guard<std::mutex> lock(get()->blood_mutex);
+            get()->blood_events.clear();
+            get()->blood_history.clear();
+            get()->blood_seen.clear();
+        }
         {
             std::lock_guard<std::mutex> lock(get()->scene_mutex);
             get()->scene.reset();
@@ -338,6 +360,12 @@ namespace clt::connection
                     data.pending_scene.clear();
                     data.last_publish = {};
                     {
+                        std::lock_guard<std::mutex> blood_lock(data.blood_mutex);
+                        data.blood_events.clear();
+                        data.blood_history.clear();
+                        data.blood_seen.clear();
+                    }
+                    {
                         std::lock_guard<std::mutex> animation_lock(data.animation_mutex);
                         data.animations.clear();
                         data.attachment_events.clear();
@@ -364,6 +392,30 @@ namespace clt::connection
                         if (!size)
                         {
                             break;
+                        }
+
+                        if (const auto effect = net::blood::decode(buffer.data(), *size))
+                        {
+                            if (net::endpoint::equal(peer, server) &&
+                                effect->token == token &&
+                                data.connected.load(std::memory_order_relaxed))
+                            {
+                                std::lock_guard<std::mutex> lock(data.blood_mutex);
+                                if (data.blood_seen.insert(effect->id).second)
+                                {
+                                    if (data.blood_history.size() >= 512)
+                                    {
+                                        data.blood_seen.erase(data.blood_history.front());
+                                        data.blood_history.pop_front();
+                                    }
+                                    data.blood_history.push_back(effect->id);
+                                    if (data.blood_events.size() >= 256)
+                                        data.blood_events.pop_front();
+                                    data.blood_events.push_back(*effect);
+                                }
+                                last_received = now;
+                            }
+                            continue;
                         }
 
                         auto accept_weapon = [&](const net::weapon::snapshot& update)
