@@ -1037,15 +1037,7 @@ namespace clt::weapon
             }
             else if (mesh.id >= impact_stain_id && mesh.id < impact_stain_id + 5)
             {
-                const auto variant = mesh.id - impact_stain_id;
-                for (const auto& stain : d.impact_effects.stains)
-                    if (stain.variant == variant)
-                        item.instances.push_back(instance(stain.transform));
-                for (const auto& pool : d.impact_effects.pools)
-                    if (pool.variant == variant)
-                        item.instances.push_back(instance(
-                            impact::decal_transform(pool.position, pool.normal,
-                                pool.radius, pool.angle)));
+                // Surface stains are projected by the tiled deferred decal pass.
             }
             else if (mesh.id >= impact_drop_id &&
                      mesh.id <= impact_drop_id + std::uint32_t(::weapon::impact_type::glass))
@@ -1146,6 +1138,11 @@ namespace clt::weapon
     {
         const auto found = get().vat_mesh_kind.find(mesh_id);
         return found != get().vat_mesh_kind.end() ? found->second : 0u;
+    }
+
+    std::vector<impact::projector> impact_projectors()
+    {
+        return get().impact_effects.projectors();
     }
 
     status inspect()

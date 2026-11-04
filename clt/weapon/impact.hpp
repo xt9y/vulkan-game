@@ -35,6 +35,12 @@ namespace clt::impact
         std::uint32_t variant = 0;
     };
 
+    struct projector
+    {
+        mat4 transform = mat4::identity();
+        std::uint32_t variant = 0;
+    };
+
     struct vat_animation
     {
         mat4 transform = mat4::identity();
@@ -52,10 +58,12 @@ namespace clt::impact
 
         void spawn(const net::impact::event& effect);
         void update(const ::weapon::world& collision, float dt);
+        std::vector<projector> projectors() const;
     };
 
     mat4 decal_transform(vec3 position, vec3 normal, float size, float angle);
     mat4 drop_transform(vec3 position, float radius);
+    inline constexpr std::uint32_t decal_texture_id = 0x600f0000u;
     // Local effects use the existing instanced PBR scene renderer and texture cache.
     void append_assets(::scene::state& scene,
                        std::uint32_t first_decal,

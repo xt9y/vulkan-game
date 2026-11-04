@@ -1,6 +1,7 @@
 #pragma once
 #include "clt/animation/animation.hpp"
 #include "clt/render/vat_gpu.hpp"
+#include "clt/weapon/impact.hpp"
 #include "srv/shared/weapon/weapon.hpp"
 
 #include <cstdint>
@@ -101,6 +102,7 @@ namespace clt::weapon
     // Local world effects can exceed the regular 192-instance weapon budget.
     std::size_t instance_capacity(std::uint32_t mesh_id);
     std::uint32_t vat_type(std::uint32_t mesh_id);
+    std::vector<impact::projector> impact_projectors();
 
     // Render-thread view of the predicted HUD and presentation state.
     status inspect();

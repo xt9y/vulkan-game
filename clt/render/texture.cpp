@@ -234,6 +234,16 @@ namespace clt::texture
         vk::device::get()->handle.updateDescriptorSets(writes, {});
     }
 
+    vk::ImageView view(std::uint32_t texture_id)
+    {
+        return find(texture_id).view;
+    }
+
+    vk::Sampler sampler()
+    {
+        return get().sampler;
+    }
+
     void reset()
     {
         for (auto& resource : get().textures) destroy(resource);

@@ -16,7 +16,7 @@ namespace clt::impact
     {
         using namespace vk::util::math;
 
-        constexpr std::uint32_t first_texture = 0x600f0000u;
+        constexpr std::uint32_t first_texture = decal_texture_id;
         constexpr std::array<const char*, 5> decal_names{
             "BloodDecal_0.png", "BloodDecal4.png", "BloodDecal6.png",
             "BloodDecal7.png", "BloodDecal9.png"
@@ -274,6 +274,20 @@ namespace clt::impact
                 effect.type
             });
         }
+    }
+
+    std::vector<projector> system::projectors() const
+    {
+        std::vector<projector> result;
+        result.reserve(stains.size() + pools.size());
+        for (const auto& item : stains)
+            result.push_back({item.transform, item.variant});
+        for (const auto& item : pools)
+            result.push_back({
+                decal_transform(item.position, item.normal, item.radius, item.angle),
+                item.variant
+            });
+        return result;
     }
 
     void system::update(const ::weapon::world& collision, float dt)
