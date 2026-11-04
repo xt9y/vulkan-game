@@ -212,7 +212,9 @@ namespace clt::weapon
 
         instance_data instance(mat4 model)
         {
-            return {model, transpose(inverse_affine(model))};
+            auto normal = transpose(inverse_affine(model));
+            normal(3, 3) = 0; // First-person meshes are not decal receivers.
+            return {model, normal};
         }
 
         std::uint32_t clip_index(motion name)
@@ -927,6 +929,7 @@ namespace clt::weapon
                 {
                     const bool skinned = skinned_meshes.contains(instance.mesh_id);
                     if (skinned) d.skinned_instances.insert(instance.id);
+                    bld::surfaces::set_skinned(instance.id, skinned);
                     if (skinned || (anchors && anchors->transforms.contains(instance.id)))
                         bld::surfaces::set_transform(instance.id,
                             trs(instance.pose.position, instance.pose.rotation,
