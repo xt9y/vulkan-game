@@ -498,11 +498,11 @@ namespace clt::scene_renderer
         auto& data = get();
         data.shaders = {vertex_path, fragment_path};
 
-        std::array<vk::DescriptorSetLayoutBinding, 11> bindings{};
+        std::array<vk::DescriptorSetLayoutBinding, 12> bindings{};
         for (std::uint32_t i = 0; i < bindings.size(); ++i)
         {
-            bindings[i].binding = i == 10 ? 14u : i;
-            bindings[i].descriptorType = (i < 4 || i == 9 || i == 10) ?
+            bindings[i].binding = i == 10 ? 14u : i == 11 ? 15u : i;
+            bindings[i].descriptorType = (i < 4 || i >= 9) ?
                 vk::DescriptorType::eStorageBuffer :
                 vk::DescriptorType::eCombinedImageSampler;
             bindings[i].descriptorCount = 1;
@@ -656,7 +656,7 @@ namespace clt::scene_renderer
         const auto count =
             std::uint32_t(data.local_meshes.size() * vk::swapchain::get()->images.size());
         const std::array<vk::DescriptorPoolSize, 2> sizes{
-            {{vk::DescriptorType::eStorageBuffer, count * 6},
+            {{vk::DescriptorType::eStorageBuffer, count * 7},
              {vk::DescriptorType::eCombinedImageSampler, count * 5}}
         };
         vk::DescriptorPoolCreateInfo pool{};
@@ -720,6 +720,15 @@ namespace clt::scene_renderer
                 stain_write.descriptorType = vk::DescriptorType::eStorageBuffer;
                 stain_write.pBufferInfo = &blood_info;
                 device.updateDescriptorSets({stain_write}, {});
+                auto projected=bld::render::wounds::descriptor_projected_batch(
+                    mesh.id, {}, 0);
+                vk::WriteDescriptorSet projected_write{};
+                projected_write.dstSet=frame.set;
+                projected_write.dstBinding=15;
+                projected_write.descriptorCount=1;
+                projected_write.descriptorType=vk::DescriptorType::eStorageBuffer;
+                projected_write.pBufferInfo=&projected;
+                device.updateDescriptorSets({projected_write}, {});
                 texture::bind(frame.set, mesh.surface);
             }
         }
@@ -852,6 +861,15 @@ namespace clt::scene_renderer
             stain_write.descriptorType = vk::DescriptorType::eStorageBuffer;
             stain_write.pBufferInfo = &blood_info;
             vk::device::get()->handle.updateDescriptorSets({stain_write}, {});
+            auto projected=bld::render::wounds::descriptor_projected_batch(
+                mesh.id, {}, 0);
+            vk::WriteDescriptorSet projected_write{};
+            projected_write.dstSet=frame.set;
+            projected_write.dstBinding=15;
+            projected_write.descriptorCount=1;
+            projected_write.descriptorType=vk::DescriptorType::eStorageBuffer;
+            projected_write.pBufferInfo=&projected;
+            vk::device::get()->handle.updateDescriptorSets({projected_write}, {});
             texture::bind(frame.set, mesh.surface);
         }
     }
@@ -1163,7 +1181,7 @@ namespace clt::scene_renderer
                 const auto count = std::max<std::size_t>(1, meshes.size()) *
                     std::max<std::size_t>(1, vk::swapchain::get()->images.size());
                 std::array<vk::DescriptorPoolSize, 2> pool_sizes{{
-                    {vk::DescriptorType::eStorageBuffer, std::uint32_t(count * 6)},
+                    {vk::DescriptorType::eStorageBuffer, std::uint32_t(count * 7)},
                     {vk::DescriptorType::eCombinedImageSampler, std::uint32_t(count * 5)}
                 }};
 
@@ -1387,13 +1405,18 @@ namespace clt::scene_renderer
             if (!mesh.has_blood) continue;
             auto stain_info = bld::render::wounds::descriptor_batch(
                 mesh.id, actors, image);
-            vk::WriteDescriptorSet write{};
-            write.dstSet = mesh.frames.at(image).set;
-            write.dstBinding = 14;
-            write.descriptorCount = 1;
-            write.descriptorType = vk::DescriptorType::eStorageBuffer;
-            write.pBufferInfo = &stain_info;
-            vk::device::get()->handle.updateDescriptorSets({write}, {});
+            auto projected_info = bld::render::wounds::descriptor_projected_batch(
+                mesh.id, actors, image);
+            std::array<vk::WriteDescriptorSet,2> writes{};
+            writes[0].dstSet = mesh.frames.at(image).set;
+            writes[0].dstBinding = 14;
+            writes[0].descriptorCount = 1;
+            writes[0].descriptorType = vk::DescriptorType::eStorageBuffer;
+            writes[0].pBufferInfo = &stain_info;
+            writes[1]=writes[0];
+            writes[1].dstBinding=15;
+            writes[1].pBufferInfo=&projected_info;
+            vk::device::get()->handle.updateDescriptorSets(writes, {});
         }
 
         for (const auto& item : weapon_draws)
