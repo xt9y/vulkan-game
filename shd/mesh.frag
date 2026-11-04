@@ -43,16 +43,10 @@ void main()
     }
     int alpha = (flags >> 5) & 3;
     if (alpha == 1 && base.a < pc.surface.w) discard;
-    // Deferred fallback for alpha-blended materials. True transmission
-    // requires a separate sorted/weighted forward transparency pass.
-    if (alpha == 2)
-    {
-        const int bayer[16] = int[16](0, 8, 2, 10, 12, 4, 14, 6,
-                                      3, 11, 1, 9, 15, 7, 13, 5);
-        ivec2 pixel = ivec2(gl_FragCoord.xy) & 3;
-        if (base.a <= (float(bayer[pixel.y * 4 + pixel.x]) + 0.5) / 16.0)
-            discard;
-    }
+    // The opaque G-buffer cannot alpha blend. Use stable clipping for
+    // hair cards instead of repeating 4x4 Bayer/checkerboard artifacts.
+    // Physically correct translucency needs a separate forward/OIT pass.
+    if (alpha == 2 && base.a < 0.42) discard;
 
     float metallic = pc.surface.x;
     float roughness = pc.surface.y;

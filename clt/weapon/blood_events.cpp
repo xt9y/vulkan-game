@@ -20,6 +20,7 @@ namespace clt::blood_events
             std::unordered_map<std::uint32_t,const ::scene::mesh*> meshes;
             std::unordered_map<std::uint32_t,const ::scene::instance*> instances;
             std::unordered_set<std::uint32_t> registered;
+            std::unordered_map<std::uint32_t,bld::vec2> metrics;
         };
 
         cache& data()
@@ -35,6 +36,7 @@ namespace clt::blood_events
             d.source=source;
             d.meshes.clear();
             d.instances.clear();
+            d.metrics.clear();
             if(!source)return;
             d.meshes.reserve(source->meshes.size());
             d.instances.reserve(source->instances.size());
@@ -131,12 +133,59 @@ namespace clt::blood_events
 
         coords attach(const receiver& r,const ::weapon::hit& hit)
         {
-            const auto uv=coordinates(r,hit);
+            auto uv=coordinates(r,hit);
             if(!r.instance || !r.mesh || !bld::surface::get())return uv;
+            // A chart spans many triangles. Calibrating metres/UV from
+            // whichever tiny triangle happened to be shot first makes flow
+            // speeds and thickness depend on shot order. Compute a stable
+            // area-weighted surface metric once for the whole mesh.
+            auto [metric_it,inserted]=data().metrics.try_emplace(
+                r.mesh->id,bld::vec2{});
+            if(inserted)
+            {
+                const auto& mesh=*r.mesh;
+                const auto& pose=r.instance->pose;
+                const auto world=trs(pose.position,pose.rotation,pose.scale);
+                const auto position=[&](vec3 p)
+                {
+                    const auto w=world*vec4{p.x,p.y,p.z,1.f};
+                    return vec3{w.x,w.y,w.z};
+                };
+                double su=0.,sv=0.,area_sum=0.;
+                for(std::size_t t=0;t+2<mesh.indices.size();t+=3)
+                {
+                    const auto& a=mesh.vertices[mesh.indices[t]];
+                    const auto& b=mesh.vertices[mesh.indices[t+1]];
+                    const auto& c=mesh.vertices[mesh.indices[t+2]];
+                    const float du1=b.u-a.u,du2=c.u-a.u;
+                    const float dv1=b.v-a.v,dv2=c.v-a.v;
+                    const float det=du1*dv2-du2*dv1;
+                    if(std::abs(det)<1e-8f)continue;
+                    const vec3 e0=position(b.position)-position(a.position);
+                    const vec3 e1=position(c.position)-position(a.position);
+                    const float weight=.5f*length(cross(e0,e1));
+                    if(weight<=1e-10f)continue;
+                    const float u=length((e0*dv2-e1*dv1)/det);
+                    const float v=length((e1*du1-e0*du2)/det);
+                    if(!std::isfinite(u) || !std::isfinite(v))continue;
+                    su+=weight*std::clamp(u,.001f,100.f);
+                    sv+=weight*std::clamp(v,.001f,100.f);
+                    area_sum+=weight;
+                }
+                if(area_sum>0.)
+                    metric_it->second={
+                        float(std::clamp(su/area_sum,.001,100.)),
+                        float(std::clamp(sv/area_sum,.001,100.))};
+                else metric_it->second=uv.metric;
+            }
+            uv.metric=metric_it->second;
             const auto& pose=r.instance->pose;
+            // Bare character skin must not absorb blood like cloth.
+            // Alpha-blended hair is excluded from the skin-film receiver.
             bld::surface::register_target(
                 r.instance->id,
-                r.mesh->bleeds ? bld::substrate::textile : bld::substrate::painted,
+                r.mesh->bleeds && r.mesh->surface.alpha_mode != 2 ?
+                    bld::substrate::skin : bld::substrate::painted,
                 trs(pose.position,pose.rotation,pose.scale),
                 r.mesh->skin_id!=0,uv.metric);
             data().registered.insert(r.instance->id);
@@ -144,7 +193,8 @@ namespace clt::blood_events
             // film solver use local mesh normals and tangent directions to
             // follow curved hands/arms instead of sliding a 2D stamp down UV.
             const auto *atlas=bld::surface::find(r.instance->id);
-            if(r.mesh->bleeds && uv.valid &&
+            if(r.mesh->bleeds && r.mesh->surface.alpha_mode != 2 &&
+               uv.valid &&
                (!atlas || atlas->film.geometry.empty()))
             {
                 std::vector<fld::surface::chart_vertex> chart;
@@ -174,7 +224,8 @@ namespace clt::blood_events
         const auto target=find(hit.instance);
         // Blood is an explicit game-owned property, independent of skinning.
         // Static/rigid character meshes must bleed just like animated ones.
-        if(!target.mesh || !target.mesh->bleeds)
+        if(!target.mesh || !target.mesh->bleeds ||
+           target.mesh->surface.alpha_mode == 2)
         {
 #ifndef NDEBUG
             std::clog << "blood: hit instance " << hit.instance
