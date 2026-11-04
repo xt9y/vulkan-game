@@ -31,7 +31,6 @@ namespace clt::impact
         std::uint32_t variant = 0;
         float age = 0, lifetime = 240;
         float wetness = 1;
-        bool growing_pool = false;
     };
 
     struct pool
@@ -48,6 +47,7 @@ namespace clt::impact
         mat4 transform = mat4::identity();
         std::uint32_t variant = 0;
         float wetness = 1;
+        bool growing_pool = false;
     };
 
     struct wound
