@@ -155,16 +155,6 @@ namespace clt::connection
         return result;
     }
 
-    std::vector<net::impact::event> take_impact_events()
-    {
-        auto& data = *get();
-        std::lock_guard<std::mutex> lock(data.impact_mutex);
-        std::vector<net::impact::event> result(
-            data.impact_events.begin(), data.impact_events.end());
-        data.impact_events.clear();
-        return result;
-    }
-
     void check_error()
     {
         std::exception_ptr error;
@@ -359,12 +349,7 @@ namespace clt::connection
                     data.scene.reset();
                     data.pending_scene.clear();
                     data.last_publish = {};
-                    {
-                        std::lock_guard<std::mutex> blood_lock(data.impact_mutex);
-                        data.impact_events.clear();
-                        data.impact_history.clear();
-                        data.impact_seen.clear();
-                    }
+                    bld::network::reset();
                     {
                         std::lock_guard<std::mutex> animation_lock(data.animation_mutex);
                         data.animations.clear();
@@ -394,25 +379,15 @@ namespace clt::connection
                             break;
                         }
 
-                        if (const auto effect = net::impact::decode(buffer.data(), *size))
+                        if (*size == 4 + bld::network::packet{}.size() &&
+                            buffer[4] == 'B' && buffer[5] == 'L' &&
+                            buffer[6] == 'D' && buffer[7] == '1')
                         {
                             if (net::endpoint::equal(peer, server) &&
-                                effect->token == token &&
-                                data.connected.load(std::memory_order_relaxed))
+                                net::movement::detail::get(buffer.data()) == token &&
+                                data.connected.load(std::memory_order_relaxed) &&
+                                bld::network::receive(buffer.data() + 4, *size - 4))
                             {
-                                std::lock_guard<std::mutex> lock(data.impact_mutex);
-                                if (data.impact_seen.insert(effect->id).second)
-                                {
-                                    if (data.impact_history.size() >= 512)
-                                    {
-                                        data.impact_seen.erase(data.impact_history.front());
-                                        data.impact_history.pop_front();
-                                    }
-                                    data.impact_history.push_back(effect->id);
-                                    if (data.impact_events.size() >= 256)
-                                        data.impact_events.pop_front();
-                                    data.impact_events.push_back(*effect);
-                                }
                                 last_received = now;
                             }
                             continue;

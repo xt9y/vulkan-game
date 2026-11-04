@@ -12,7 +12,8 @@
 #include "srv/shared/net/scene_stream.hpp"
 #include "srv/shared/net/socket.hpp"
 #include "srv/shared/net/weapon.hpp"
-#include "srv/shared/net/impact.hpp"
+#include <bld/network/events.hpp>
+#include "srv/shared/net/movement.hpp"
 #include "srv/shared/player/movement.hpp"
 
 #include <algorithm>
@@ -781,23 +782,24 @@ namespace srv::application
                             impact.type == ::weapon::impact_type::flesh &&
                             owned->state.last_result == ::weapon::result::fired)
                         {
-                            net::impact::event effect{};
+                            bld::impact effect{};
                             effect.id = ++get()->next_impact_event;
                             if (!effect.id) effect.id = ++get()->next_impact_event;
+                            effect.source = client.token;
                             effect.target = impact.instance;
-                            effect.type = impact.type;
+                            effect.type = bld::material::flesh;
                             effect.uv = impact.uv;
                             effect.uv_valid = impact.uv_valid;
-                            effect.seed = (effect.id * 0x9e3779b9u) ^ next.sequence;
+                            effect.seed = (std::uint32_t(effect.id) * 0x9e3779b9u) ^
+                                          next.sequence;
                             effect.position = impact.position;
                             effect.normal = impact.normal;
                             effect.direction = ::weapon::direction(next.yaw, next.pitch);
-                            effect.intensity = 1;
+                            effect.energy = 1.f;
                             effect.tick = get()->tick;
                             for (auto& receiver : session::get()->clients)
                             {
                                 if (!receiver.active) continue;
-                                effect.token = receiver.token;
                                 if (receiver.impact_events.size() >= 128)
                                     receiver.impact_events.pop_front();
                                 receiver.impact_events.push_back({effect, 3});
@@ -862,7 +864,12 @@ namespace srv::application
                 }
                 for (auto& pending : client.impact_events)
                 {
-                    const auto packet = net::impact::encode(pending.value);
+                    const auto effect = bld::network::encode(pending.value);
+                    // Session token is an application envelope; the standalone
+                    // blood library never owns sockets or player authentication.
+                    std::array<std::uint8_t, 4 + bld::network::packet{}.size()> packet{};
+                    net::movement::detail::put(packet.data(), client.token);
+                    std::copy(effect.begin(), effect.end(), packet.begin() + 4);
                     net::socket::send(get()->socket, client.endpoint,
                         packet.data(), packet.size());
                     --pending.repeats;
