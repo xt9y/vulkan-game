@@ -82,7 +82,8 @@ void main()
 
     if (pc.blood_enabled != 0u)
     {
-        bld_material(uv, 256, blood_instance, base.rgb, roughness, metallic);
+        bld_material_film(uv, 256, blood_instance, world_position, N,
+                          base.rgb, roughness, metallic);
         bld_projected_material(world_position, N, blood_instance,
                                base.rgb, roughness, metallic);
     }
