@@ -10,7 +10,7 @@
 static void compile_shaders(void)
 {
     static const char* sources[] = {
-        "shd/mesh.vert", "shd/cull.comp",
+        "shd/mesh.vert", "shd/mesh.frag", "shd/cull.comp",
         "shd/light.comp", "shd/tone.comp",
         "shd/fullscreen.vert", "shd/present.frag"
     };
@@ -64,21 +64,9 @@ void build(C_Build* b)
     c_dep_header_only(headers);
     c_dep_include(headers, "include");
 
-    C_Dependency* blood =
-        c_git(b, "VulkanBlood", "https://github.com/xt9y/vulkan-systems.git",
-              "vulkan-fluids-v5");
-    c_dep_subdir(blood, "blood");
-    c_dep_cbuild(blood, "VulkanBlood", C_TARGET_STATIC_LIBRARY);
-    c_dep_include(blood, ".");
-    // VulkanBlood exposes generic film headers under <fld/...>.
-    // c build does not propagate a nested CBuild dependency's include paths.
-    c_dep_include(blood, "../fluid");
-
-    // Link the generic solver explicitly: a static VulkanBlood archive
-    // does not contain the object code from its own VulkanFluid dependency.
     C_Dependency* fluid =
         c_git(b, "VulkanFluid", "https://github.com/xt9y/vulkan-systems.git",
-              "vulkan-fluids-v5");
+              "feature/gpu-fluid-v1");
     c_dep_subdir(fluid, "fluid");
     c_dep_cbuild(fluid, "VulkanFluid", C_TARGET_STATIC_LIBRARY);
     c_dep_include(fluid, ".");
@@ -168,20 +156,37 @@ void build(C_Build* b)
     c_warnings_strict(client);
     c_flag(client, "-std=c++20");
     c_use(client, engine);
-    c_use(client, blood);
     c_use(client, fluid);
     c_use(client, headers);
-    // Compile the skinned-fabric material with the library's UV atlas shader.
-    // Blood and liquid physics/shading remain inside vulkan-systems.
-    c_generate(client, "build/shaders/mesh_stamp.cpp", "shd/mesh.frag",
-               "glslangValidator -V -I@VulkanBlood@/bld/shaders "
-               "shd/mesh.frag -o build/shaders/mesh.frag.spv && "
-               "printf 'namespace mesh_shader_stamp {}\\n' > build/shaders/mesh_stamp.cpp");
-    c_generate(client, "build/shaders/fluid_stamp.cpp",
-               "@VulkanBlood@/../fluid/fld/shaders/surface.comp",
-               "glslangValidator -V @VulkanBlood@/../fluid/fld/shaders/surface.comp "
-               "-o build/shaders/fluid.comp.spv && "
-               "printf 'namespace fluid_shader_stamp {}\\n' > build/shaders/fluid_stamp.cpp");
+    // Shader modules live in the generic fluid library; c build resolves
+    // the dependency source without copying its simulation into the game.
+#define FLD_STAGE(NAME) \
+    c_generate(client, "build/shaders/fluid_" #NAME "_stamp.cpp", \
+               "@VulkanFluid@/fld/shaders/particles.comp", \
+               "glslangValidator -V -DFLD_" #NAME \
+               " @VulkanFluid@/fld/shaders/particles.comp" \
+               " -o build/shaders/fluid_" #NAME ".comp.spv && " \
+               "printf 'namespace fluid_" #NAME "_stamp {}\\n'" \
+               " > build/shaders/fluid_" #NAME "_stamp.cpp")
+    FLD_STAGE(CLEAR);
+    FLD_STAGE(PREDICT);
+    FLD_STAGE(BUILD);
+    FLD_STAGE(LAMBDA);
+    FLD_STAGE(DELTA);
+    FLD_STAGE(APPLY);
+    FLD_STAGE(FINALIZE);
+#undef FLD_STAGE
+#define FLD_RENDER(NAME) \
+    c_generate(client, "build/shaders/fluid_" #NAME "_stamp.cpp", \
+               "@VulkanFluid@/fld/shaders/" #NAME ".comp", \
+               "glslangValidator -V @VulkanFluid@/fld/shaders/" #NAME \
+               ".comp -o build/shaders/fluid_" #NAME ".comp.spv && " \
+               "printf 'namespace fluid_" #NAME "_stamp {}\\n'" \
+               " > build/shaders/fluid_" #NAME "_stamp.cpp")
+    FLD_RENDER(tile_clear);
+    FLD_RENDER(tile_build);
+    FLD_RENDER(surface);
+#undef FLD_RENDER
     c_use(client, glfw);
     c_use(client, fastgltf);
     c_use(client, ozz);
