@@ -656,28 +656,27 @@ namespace clt::scene_renderer
         pool.pPoolSizes = sizes.data();
         const auto device = vk::device::get()->handle;
         data.local_pool = device.createDescriptorPool(pool);
-        std::array<std::uint32_t, 192> identities{};
-        for (std::uint32_t i = 0; i < identities.size(); ++i)
-        {
-            identities[i] = i;
-        }
         for (auto& mesh : data.local_meshes)
         {
+            const auto capacity = weapon::instance_capacity(mesh.id);
+            std::vector<std::uint32_t> identities(capacity);
+            for (std::uint32_t i = 0; i < identities.size(); ++i)
+                identities[i] = i;
             mesh.frames.resize(vk::swapchain::get()->images.size());
             for (auto& frame : mesh.frames)
             {
                 const auto memory = vk::MemoryPropertyFlagBits::eHostVisible |
                                     vk::MemoryPropertyFlagBits::eHostCoherent;
                 frame.local_instances = vk::buffer::create(
-                    192 * sizeof(instance_data), vk::BufferUsageFlagBits::eStorageBuffer, memory
+                    capacity * sizeof(instance_data), vk::BufferUsageFlagBits::eStorageBuffer, memory
                 );
                 frame.visible = vk::buffer::create(
-                    sizeof(identities),
+                    identities.size() * sizeof(identities[0]),
                     vk::BufferUsageFlagBits::eVertexBuffer |
                         vk::BufferUsageFlagBits::eStorageBuffer,
                     memory
                 );
-                vk::buffer::write(frame.visible, identities.data(), sizeof(identities));
+                vk::buffer::write(frame.visible, identities.data(), identities.size() * sizeof(identities[0]));
                 frame.skin_palette = vk::buffer::create(
                     std::max<std::uint32_t>(1, mesh.joint_count) * sizeof(animation::matrix),
                     vk::BufferUsageFlagBits::eStorageBuffer,

@@ -160,7 +160,7 @@ namespace clt::blood
                     std::istreambuf_iterator<char>()
                 };
                 int width = 0, height = 0, channels = 0;
-                if (!bytes.empty() && bytes.size() <= std::size_t(INT32_MAX) &&
+                if (!bytes.empty() && bytes.size() <= std::size_t(std::numeric_limits<int>::max()) &&
                     stbi_info_from_memory(bytes.data(), int(bytes.size()),
                                           &width, &height, &channels) &&
                     width > 0 && height > 0)

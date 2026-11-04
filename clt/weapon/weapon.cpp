@@ -1084,6 +1084,14 @@ namespace clt::weapon
                view;
     }
 
+    std::size_t instance_capacity(std::uint32_t mesh_id)
+    {
+        if (mesh_id >= blood_stain_id && mesh_id < blood_stain_id + 5)
+            return 2048 + 64;
+        if (mesh_id == blood_drop_id) return 1024;
+        return 192;
+    }
+
     status inspect()
     {
         const auto& d = get();
