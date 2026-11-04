@@ -112,11 +112,15 @@ namespace clt::upload
 
         // Texture data stays alive in staging until the upload fence signals.
         vk::image::resource add_image(const void* pixels, std::uint32_t width,
-                                      std::uint32_t height)
+                                      std::uint32_t height,
+                                      vk::Format format = vk::Format::eR8G8B8A8Unorm)
         {
-            if (!pixels || !width || !height)
+            if (!pixels || !width || !height ||
+                (format != vk::Format::eR8G8B8A8Unorm &&
+                 format != vk::Format::eR16G16B16A16Sfloat))
                 throw std::invalid_argument("Invalid texture upload");
-            const std::size_t bytes = std::size_t(width) * height * 4;
+            const std::size_t bytes = std::size_t(width) * height *
+                (format == vk::Format::eR8G8B8A8Unorm ? 4 : 8);
             auto source = vk::buffer::create(
                 bytes, vk::BufferUsageFlagBits::eTransferSrc,
                 vk::MemoryPropertyFlagBits::eHostVisible |
@@ -128,7 +132,7 @@ namespace clt::upload
                 vk::buffer::write(source, pixels, bytes);
                 vk::ImageCreateInfo info{};
                 info.imageType = vk::ImageType::e2D;
-                info.format = vk::Format::eR8G8B8A8Unorm;
+                info.format = format;
                 info.extent = vk::Extent3D{width, height, 1};
                 info.mipLevels = 1;
                 info.arrayLayers = 1;

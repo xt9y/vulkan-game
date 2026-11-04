@@ -211,22 +211,22 @@ namespace clt::texture
 
     void bind(vk::DescriptorSet set, const ::scene::material& surface)
     {
-        const std::array<std::uint32_t, 5> ids{
+        const std::array<std::uint32_t, 8> ids{
             surface.base_color_texture,
             surface.metallic_roughness_texture,
             surface.normal_texture,
             surface.occlusion_texture,
-            surface.emissive_texture
+            surface.emissive_texture, 0, 0, 0
         };
-        std::array<vk::DescriptorImageInfo, 5> images{};
-        std::array<vk::WriteDescriptorSet, 5> writes{};
+        std::array<vk::DescriptorImageInfo, 8> images{};
+        std::array<vk::WriteDescriptorSet, 8> writes{};
         for (std::size_t i = 0; i < ids.size(); ++i)
         {
             images[i].sampler = get().sampler;
             images[i].imageView = find(ids[i]).view;
             images[i].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
             writes[i].dstSet = set;
-            writes[i].dstBinding = std::uint32_t(4 + i);
+            writes[i].dstBinding = std::uint32_t(i < 5 ? 4 + i : 10 + i - 5);
             writes[i].descriptorCount = 1;
             writes[i].descriptorType = vk::DescriptorType::eCombinedImageSampler;
             writes[i].pImageInfo = &images[i];
