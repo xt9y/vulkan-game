@@ -56,6 +56,10 @@ namespace clt::impact
         float radius = .04f, strength = 1;
         float age = 0;
         float angle = 0;
+        vec3 position{};
+        vk::util::math::vec4 local{};
+        float next_drip = 1;
+        std::uint32_t seed = 1;
     };
 
     struct backdrop
@@ -63,6 +67,7 @@ namespace clt::impact
         vec3 position{}, direction{};
         float strength = 1;
         std::uint32_t seed = 1;
+        std::uint32_t target = 0;
     };
 
     struct system
