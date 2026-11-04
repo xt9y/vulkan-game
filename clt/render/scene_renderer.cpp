@@ -604,10 +604,6 @@ namespace clt::scene_renderer
                 {
                     vk::buffer::destroy(frame.local_instances);
                 }
-                if (frame.vat_data.handle)
-                {
-                    vk::buffer::destroy(frame.vat_data);
-                }
                 if (frame.visible.handle)
                 {
                     vk::buffer::destroy(frame.visible);
@@ -662,8 +658,8 @@ namespace clt::scene_renderer
         const auto count =
             std::uint32_t(data.local_meshes.size() * vk::swapchain::get()->images.size());
         const std::array<vk::DescriptorPoolSize, 2> sizes{
-            {{vk::DescriptorType::eStorageBuffer, count * 7},
-             {vk::DescriptorType::eCombinedImageSampler, count * 8}}
+            {{vk::DescriptorType::eStorageBuffer, count * 6},
+             {vk::DescriptorType::eCombinedImageSampler, count * 5}}
         };
         vk::DescriptorPoolCreateInfo pool{};
         pool.maxSets = count;
@@ -697,32 +693,27 @@ namespace clt::scene_renderer
                     vk::BufferUsageFlagBits::eStorageBuffer,
                     memory
                 );
-                frame.vat_data = vk::buffer::create(
-                    capacity * sizeof(vat_gpu::parameters_t),
-                    vk::BufferUsageFlagBits::eStorageBuffer, memory
-                );
                 vk::DescriptorSetAllocateInfo allocate{};
                 allocate.descriptorPool = data.local_pool;
                 allocate.descriptorSetCount = 1;
                 allocate.pSetLayouts = &data.instance_layout;
                 frame.set = device.allocateDescriptorSets(allocate).front();
-                std::array<vk::DescriptorBufferInfo, 6> infos{};
-                std::array<vk::WriteDescriptorSet, 6> writes{};
-                for (std::uint32_t i = 0; i < 6; ++i)
+                std::array<vk::DescriptorBufferInfo, 5> infos{};
+                std::array<vk::WriteDescriptorSet, 5> writes{};
+                for (std::uint32_t i = 0; i < 5; ++i)
                 {
                     infos[i].buffer = i == 4 ? frame.skin_palette.handle :
-                        i == 5 ? frame.vat_data.handle : frame.local_instances.handle;
+                        frame.local_instances.handle;
                     infos[i].range = VK_WHOLE_SIZE;
                     writes[i].dstSet = frame.set;
-                    writes[i].dstBinding = i == 4 ? 9 : i == 5 ? 13 : i;
+                    writes[i].dstBinding = i == 4 ? 9 : i;
                     writes[i].descriptorCount = 1;
                     writes[i].descriptorType = vk::DescriptorType::eStorageBuffer;
                     writes[i].pBufferInfo = &infos[i];
                 }
                 device.updateDescriptorSets(writes, {});
-                vk::DescriptorBufferInfo wound_info{};
-                wound_info.buffer = data.wound_fallback.handle;
-                wound_info.range = VK_WHOLE_SIZE;
+                auto wound_info = bld::render::wound::descriptor_batch(
+                    mesh.id, {}, 0);
                 vk::WriteDescriptorSet wound_write{};
                 wound_write.dstSet = frame.set;
                 wound_write.dstBinding = 14;
@@ -731,7 +722,6 @@ namespace clt::scene_renderer
                 wound_write.pBufferInfo = &wound_info;
                 device.updateDescriptorSets({wound_write}, {});
                 texture::bind(frame.set, mesh.surface);
-                vat_gpu::bind(weapon::vat_type(mesh.id), frame.set);
             }
         }
     }
@@ -759,12 +749,15 @@ namespace clt::scene_renderer
         data.targets.clear();
         vk::render_pass::destroy(data.render_pass);
         data.render_pass = nullptr;
+        bld::render::wound::shutdown();
     }
 
     void create_frame_resources()
     {
         try
         {
+            bld::render::wound::init(
+                std::uint32_t(vk::swapchain::get()->images.size()));
             create_render_pass();
             for (std::size_t i = 0; i < vk::swapchain::get()->images.size(); ++i)
             {
@@ -1201,8 +1194,8 @@ namespace clt::scene_renderer
                 const auto count = std::max<std::size_t>(1, meshes.size()) *
                     std::max<std::size_t>(1, vk::swapchain::get()->images.size());
                 std::array<vk::DescriptorPoolSize, 2> pool_sizes{{
-                    {vk::DescriptorType::eStorageBuffer, std::uint32_t(count * 7)},
-                    {vk::DescriptorType::eCombinedImageSampler, std::uint32_t(count * 8)}
+                    {vk::DescriptorType::eStorageBuffer, std::uint32_t(count * 6)},
+                    {vk::DescriptorType::eCombinedImageSampler, std::uint32_t(count * 5)}
                 }};
 
                 vk::DescriptorPoolCreateInfo pool_info{};
