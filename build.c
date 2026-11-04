@@ -66,7 +66,7 @@ void build(C_Build* b)
 
     C_Dependency* blood =
         c_git(b, "VulkanBlood", "https://github.com/xt9y/vulkan-systems.git",
-              "05df2505bcd12e71e219f4ae668e02b6a7abc491");
+              "3b8ea1d0b84822613ae191e9582f5d4184e3b379");
     c_dep_subdir(blood, "blood");
     c_dep_cbuild(blood, "VulkanBlood", C_TARGET_STATIC_LIBRARY);
     c_dep_include(blood, ".");

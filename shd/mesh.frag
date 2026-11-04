@@ -81,7 +81,7 @@ void main()
     }
 
     if (pc.wound_enabled != 0u)
-        bld_wound_material(uv, 128, base.rgb, roughness);
+        bld_wound_material(uv, 128, wound_instance, base.rgb, roughness);
 
     float ao = pc.surface.z;
     if ((flags & 8) != 0) ao *= texture(occlusion_texture, uv).r;
