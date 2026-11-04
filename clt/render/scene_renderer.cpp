@@ -1243,14 +1243,17 @@ namespace clt::scene_renderer
         data.last_world_view_projection = view_projection;
         const auto weapon_view_projection = weapon::view_projection(aspect, camera.view);
 
-        std::array<vk::ClearValue, 4> clear{};
+        std::array<vk::ClearValue, 5> clear{};
         for (std::size_t i = 0; i < 3; ++i)
         {
             clear[i].color = vk::ClearColorValue(
                 std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f}
             );
         }
-        clear[3].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+        clear[3].color = vk::ClearColorValue(
+            std::array<std::uint32_t, 4>{0u, 0u, 0u, 0u}
+        );
+        clear[4].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
 
         vk::RenderPassBeginInfo begin{};
         begin.renderPass = data.render_pass;
