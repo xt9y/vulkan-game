@@ -51,6 +51,7 @@ layout(push_constant) uniform Draw
     vec4 surface;
     vec4 emissive;
     uint joints_per_instance;
+    uint wound_enabled;
 } pc;
 
 vec2 vat_texture_uv(vec2 source)
