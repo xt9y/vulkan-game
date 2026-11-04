@@ -959,6 +959,28 @@ namespace clt::weapon
             return {true, hit.instance, hit.position, hit.normal, hit.uv,
                     hit.uv_valid, d.skinned_instances.contains(hit.instance)};
         });
+        // Replicated hits may arrive after the scene snapshot is already
+        // installed. Bind fresh rigid decals to the original instance so
+        // their position follows later mesh transform updates.
+        if (source)
+        {
+            const auto* surfaces = bld::surfaces::get();
+            if (surfaces)
+            {
+                for (const auto& mark : surfaces->decals)
+                {
+                    if (mark.anchored || !mark.target) continue;
+                    const auto found = std::find_if(
+                        source->instances.begin(), source->instances.end(),
+                        [&](const ::scene::instance& instance)
+                        { return instance.id == mark.target; });
+                    if (found == source->instances.end()) continue;
+                    bld::surfaces::set_transform(mark.target,
+                        trs(found->pose.position, found->pose.rotation,
+                            found->pose.scale));
+                }
+            }
+        }
         for (auto& c : d.casings)
         {
             c.age += dt;
