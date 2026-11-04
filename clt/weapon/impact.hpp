@@ -3,6 +3,7 @@
 #include "srv/shared/net/impact.hpp"
 #include "srv/shared/scene/scene.hpp"
 #include "srv/shared/weapon/weapon.hpp"
+#include <vk/util/math/matrix.hpp>
 
 #include <cstdint>
 #include <deque>

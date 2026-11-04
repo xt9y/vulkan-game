@@ -236,8 +236,8 @@ namespace clt::impact
                 if (!vat_gpu::prepared(type)) continue;
                 if (vat_animations.size() >= 16) vat_animations.pop_front();
                 const auto metadata = vat_gpu::parameters(type, 0, false);
-                const float lifetime = metadata.timing.y > 0
-                    ? metadata.timing.z / metadata.timing.y : 2.5f;
+                const float lifetime = metadata.timing[1] > 0
+                    ? metadata.timing[2] / metadata.timing[1] : 2.5f;
                 vat_animations.push_back({
                     decal_transform(effect.position, n, .09f + unit(seed) * .04f,
                                     unit(seed) * 6.2831853f),
