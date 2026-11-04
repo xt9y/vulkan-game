@@ -549,7 +549,8 @@ namespace clt::scene_renderer
         );
         const std::uint32_t empty_wounds = 0;
         vk::buffer::write(data.wound_fallback, &empty_wounds, sizeof(empty_wounds));
-        vat_gpu::init();
+        // Blood effects now use attached decals and UV wounds; no unused
+        // VAT textures are uploaded during normal renderer startup.
         texture::pin(weapon::assets());
         texture::synchronize(::scene::state{});
 
