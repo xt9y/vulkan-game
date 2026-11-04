@@ -87,25 +87,34 @@ namespace clt::blood_events
             };
             const auto A=position(a.position),B=position(b.position),C=position(c.position);
             const vec3 e0=B-A,e1=C-A,p=hit.position-A;
-            const float d00=dot(e0,e0),d01=dot(e0,e1),d11=dot(e1,e1);
-            const float d20=dot(p,e0),d21=dot(p,e1);
-            const float denom=d00*d11-d01*d01;
-            if(!std::isfinite(denom) || std::abs(denom)<1e-12f)return result;
-            const float v=(d11*d20-d01*d21)/denom;
-            const float w=(d00*d21-d01*d20)/denom;
-            const float u=1.f-v-w;
+            // Use relative triangle area and double precision. An absolute
+            // 1e-12 cutoff incorrectly rejected small character triangles.
+            const auto dot64=[](vec3 x,vec3 y)->double
+            {
+                return double(x.x)*y.x+double(x.y)*y.y+double(x.z)*y.z;
+            };
+            const double d00=dot64(e0,e0),d01=dot64(e0,e1);
+            const double d11=dot64(e1,e1);
+            const double d20=dot64(p,e0),d21=dot64(p,e1);
+            const double denom=d00*d11-d01*d01;
+            if(!std::isfinite(denom) || denom<=0. ||
+               denom<=d00*d11*1e-12)return result;
+            const double v=(d11*d20-d01*d21)/denom;
+            const double w=(d00*d21-d01*d20)/denom;
+            const double u=1.-v-w;
             if(!std::isfinite(u) || !std::isfinite(v) || !std::isfinite(w) ||
-               u<-.12f || v<-.12f || w<-.12f)return result;
-            const float cu=std::clamp(u,0.f,1.f);
-            const float cv=std::clamp(v,0.f,1.f);
-            const float cw=std::clamp(w,0.f,1.f);
+               u<-.12 || v<-.12 || w<-.12)return result;
+            const float cu=std::clamp(float(u),0.f,1.f);
+            const float cv=std::clamp(float(v),0.f,1.f);
+            const float cw=std::clamp(float(w),0.f,1.f);
             const float sum=cu+cv+cw;
             if(sum<.0001f)return result;
             const float x=(a.u*cu+b.u*cv+c.u*cw)/sum;
             const float y=(a.v*cu+b.v*cv+c.v*cw)/sum;
-            if(!std::isfinite(x) || !std::isfinite(y) ||
-               x<0.f || x>1.f || y<0.f || y>1.f)return result;
-            result.uv={x,y};
+            if(!std::isfinite(x) || !std::isfinite(y))return result;
+            // glTF materials can repeat UVs beyond [0,1]. The shader now
+            // wraps the same coordinates instead of clamping atlas sampling.
+            result.uv={x-std::floor(x),y-std::floor(y)};
             const float du1=b.u-a.u,du2=c.u-a.u;
             const float dv1=b.v-a.v,dv2=c.v-a.v;
             const float det=du1*dv2-du2*dv1;
