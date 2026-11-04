@@ -81,7 +81,11 @@ void main()
     }
 
     if (pc.blood_enabled != 0u)
+    {
         bld_material(uv, 256, blood_instance, base.rgb, roughness, metallic);
+        bld_projected_material(world_position, N, blood_instance,
+                               base.rgb, roughness, metallic);
+    }
 
     float ao = pc.surface.z;
     if ((flags & 8) != 0) ao *= texture(occlusion_texture, uv).r;
