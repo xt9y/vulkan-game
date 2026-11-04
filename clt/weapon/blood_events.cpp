@@ -134,9 +134,12 @@ namespace clt::blood_events
             const auto uv=coordinates(r,hit);
             if(!r.instance || !r.mesh || !bld::surface::get())return uv;
             const auto& pose=r.instance->pose;
+            // Bare character skin must not absorb blood like cloth.
+            // Alpha-blended hair is excluded from the skin-film receiver.
             bld::surface::register_target(
                 r.instance->id,
-                r.mesh->bleeds ? bld::substrate::textile : bld::substrate::painted,
+                r.mesh->bleeds && r.mesh->surface.alpha_mode != 2 ?
+                    bld::substrate::skin : bld::substrate::painted,
                 trs(pose.position,pose.rotation,pose.scale),
                 r.mesh->skin_id!=0,uv.metric);
             data().registered.insert(r.instance->id);
@@ -144,7 +147,8 @@ namespace clt::blood_events
             // film solver use local mesh normals and tangent directions to
             // follow curved hands/arms instead of sliding a 2D stamp down UV.
             const auto *atlas=bld::surface::find(r.instance->id);
-            if(r.mesh->bleeds && uv.valid &&
+            if(r.mesh->bleeds && r.mesh->surface.alpha_mode != 2 &&
+               uv.valid &&
                (!atlas || atlas->film.geometry.empty()))
             {
                 std::vector<fld::surface::chart_vertex> chart;
@@ -174,7 +178,8 @@ namespace clt::blood_events
         const auto target=find(hit.instance);
         // Blood is an explicit game-owned property, independent of skinning.
         // Static/rigid character meshes must bleed just like animated ones.
-        if(!target.mesh || !target.mesh->bleeds)
+        if(!target.mesh || !target.mesh->bleeds ||
+           target.mesh->surface.alpha_mode == 2)
         {
 #ifndef NDEBUG
             std::clog << "blood: hit instance " << hit.instance
