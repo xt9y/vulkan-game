@@ -140,6 +140,21 @@ namespace clt::blood_events
                 trs(pose.position,pose.rotation,pose.scale),
                 r.mesh->skin_id!=0,uv.metric);
             data().registered.insert(r.instance->id);
+            // Register the real UV-to-surface chart once. This lets the
+            // film solver use local mesh normals and tangent directions to
+            // follow curved hands/arms instead of sliding a 2D stamp down UV.
+            const auto *atlas=bld::surface::find(r.instance->id);
+            if(r.mesh->bleeds && uv.valid &&
+               (!atlas || atlas->film.geometry.empty()))
+            {
+                std::vector<fld::surface::chart_vertex> chart;
+                chart.reserve(r.mesh->vertices.size());
+                for(const auto &vertex:r.mesh->vertices)
+                    chart.push_back({vertex.position,vertex.normal,
+                                     {vertex.u,vertex.v}});
+                bld::surface::register_geometry(
+                    r.instance->id,chart,r.mesh->indices);
+            }
             return uv;
         }
     }
