@@ -1,4 +1,5 @@
 #include "impact.hpp"
+#include "clt/render/vat_gpu.hpp"
 
 #include <algorithm>
 #include <array>
@@ -219,6 +220,22 @@ namespace clt::impact
         const bool bleeding = effect.type == ::weapon::impact_type::flesh;
         if (bleeding)
         {
+            constexpr std::array<std::uint32_t, 3> variants{19, 20, 22};
+            for (std::size_t i = 0; i < variants.size(); ++i)
+            {
+                const auto type = variants[(std::size_t(effect.seed) + i) % variants.size()];
+                if (!vat_gpu::prepared(type)) continue;
+                if (vat_animations.size() >= 16) vat_animations.pop_front();
+                const auto metadata = vat_gpu::parameters(type, 0, false);
+                const float lifetime = metadata.timing.y > 0
+                    ? metadata.timing.z / metadata.timing.y : 2.5f;
+                vat_animations.push_back({
+                    decal_transform(effect.position, n, .09f + unit(seed) * .04f,
+                                    unit(seed) * 6.2831853f),
+                    type, 0, lifetime, (random(seed) & 1u) != 0
+                });
+                break;
+            }
             stain_at(*this, effect.position, n, .12f, seed);
             for (int i = 0; i < 4; ++i)
             {
@@ -306,6 +323,12 @@ namespace clt::impact
         });
         for (auto& s : stains) s.age += dt;
         std::erase_if(stains, [](const stain& s) { return s.age >= s.lifetime; });
+        for (auto& animation : vat_animations)
+            animation.age += dt;
+        std::erase_if(vat_animations, [](const vat_animation& a)
+        {
+            return a.age >= a.lifetime;
+        });
         for (auto& p : pools)
         {
             p.age += dt;

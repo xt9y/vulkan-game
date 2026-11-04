@@ -84,6 +84,7 @@ namespace clt::weapon
             std::vector<casing> casings;
             std::deque<hole> holes;
             impact::system impact_effects;
+            std::map<std::uint32_t, std::uint32_t> vat_mesh_kind;
             ::weapon::state predicted;
             std::deque<std::pair<net::weapon::command, double>> pending;
             std::unordered_set<std::uint32_t> confirmed;
@@ -576,6 +577,37 @@ namespace clt::weapon
         d.asset.meshes.push_back(disc(hole_id, false));
         d.asset.meshes.push_back(disc(flash_id, true));
         impact::append_assets(d.asset, impact_stain_id, impact_drop_id);
+
+        // GPU VAT playback is optional when an offline conversion cache is absent.
+        // Existing GLBs are read only, never regenerated or overwritten here.
+        std::uint32_t next_vat_id = 0x60020000u;
+        for (const std::uint32_t type : {19u, 20u, 22u})
+        {
+            if (!vat_gpu::prepared(type)) continue;
+            const auto path = std::filesystem::path("assets/blood") /
+                ("blood" + std::to_string(type) + ".glb");
+            auto imported = srv::assets::load(
+                path, next_vat_id, next_vat_id, next_vat_id, next_vat_id
+            );
+            if (imported.meshes.empty())
+                throw std::runtime_error("VAT mesh has no geometry: " + path.string());
+            for (auto& mesh : imported.meshes)
+            {
+                d.vat_mesh_kind.emplace(mesh.id, type);
+                mesh.skin_id = 0; // Animation comes from EXR texture lookups.
+                mesh.surface = {};
+                mesh.surface.base_color = {.19f, .008f, .012f, 1};
+                mesh.surface.roughness = .14f;
+                mesh.surface.double_sided = true;
+            }
+            next_vat_id += std::uint32_t(std::max({
+                imported.meshes.size(), imported.instances.size(),
+                imported.textures.size(), imported.skins.size()
+            })) + 1;
+            imported.skins.clear();
+            append(std::move(imported));
+        }
+
         d.predicted = current().predicted;
         select(0, seconds());
         d.casings.reserve(192);
@@ -991,7 +1023,19 @@ namespace clt::weapon
         {
             draw item;
             item.mesh_id = mesh.id;
-            if (mesh.id >= impact_stain_id && mesh.id < impact_stain_id + 5)
+            if (const auto found = d.vat_mesh_kind.find(mesh.id);
+                found != d.vat_mesh_kind.end())
+            {
+                const auto type = found->second;
+                for (const auto& animation : d.impact_effects.vat_animations)
+                {
+                    if (animation.type != type) continue;
+                    item.instances.push_back(instance(animation.transform));
+                    item.vat.push_back(vat_gpu::parameters(type, animation.age,
+                                                            animation.mirror));
+                }
+            }
+            else if (mesh.id >= impact_stain_id && mesh.id < impact_stain_id + 5)
             {
                 const auto variant = mesh.id - impact_stain_id;
                 for (const auto& stain : d.impact_effects.stains)
@@ -1089,12 +1133,19 @@ namespace clt::weapon
 
     std::size_t instance_capacity(std::uint32_t mesh_id)
     {
+        if (get().vat_mesh_kind.contains(mesh_id)) return 16;
         if (mesh_id >= impact_stain_id && mesh_id < impact_stain_id + 5)
             return 2048 + 64;
         if (mesh_id >= impact_drop_id &&
             mesh_id <= impact_drop_id + std::uint32_t(::weapon::impact_type::glass))
             return 1024;
         return 192;
+    }
+
+    std::uint32_t vat_type(std::uint32_t mesh_id)
+    {
+        const auto found = get().vat_mesh_kind.find(mesh_id);
+        return found != get().vat_mesh_kind.end() ? found->second : 0u;
     }
 
     status inspect()

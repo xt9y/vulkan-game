@@ -35,11 +35,20 @@ namespace clt::impact
         std::uint32_t variant = 0;
     };
 
+    struct vat_animation
+    {
+        mat4 transform = mat4::identity();
+        std::uint32_t type = 19;
+        float age = 0, lifetime = 2.5f;
+        bool mirror = false;
+    };
+
     struct system
     {
         std::vector<drop> drops;
         std::deque<stain> stains;
         std::deque<pool> pools;
+        std::deque<vat_animation> vat_animations;
 
         void spawn(const net::impact::event& effect);
         void update(const ::weapon::world& collision, float dt);
