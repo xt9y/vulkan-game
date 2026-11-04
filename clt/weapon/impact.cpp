@@ -9,6 +9,8 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <unordered_map>
+#include <unordered_set>
 #include <stb_image.h>
 
 namespace clt::impact
@@ -312,13 +314,31 @@ namespace clt::impact
 
     std::vector<projector> system::projectors(const ::scene::state* scene) const
     {
+        // Build the transform lookup once, not for every decal (100k-instance scenes).
+        std::unordered_set<std::uint32_t> anchors;
+        for (const auto& item : stains)
+            if (item.anchor) anchors.insert(item.anchor);
+        for (const auto& item : pools)
+            if (item.anchor) anchors.insert(item.anchor);
+
+        std::unordered_map<std::uint32_t, mat4> transforms;
+        transforms.reserve(anchors.size());
+        if (scene && !anchors.empty())
+        {
+            for (const auto& instance : scene->instances)
+                if (anchors.contains(instance.id))
+                    transforms.emplace(instance.id,
+                        trs(instance.pose.position, instance.pose.rotation,
+                            instance.pose.scale));
+        }
+
         std::vector<projector> result;
         result.reserve(stains.size() + pools.size());
         for (const auto& item : stains)
         {
-            const auto m = item.anchor && owns_instance(scene, item.anchor)
-                ? instance_matrix(scene, item.anchor) * item.local
-                : item.transform;
+            const auto found = transforms.find(item.anchor);
+            const auto m = found != transforms.end()
+                ? found->second * item.local : item.transform;
             const auto age = std::clamp(item.age / item.lifetime, 0.f, 1.f);
             result.push_back({
                 m, item.variant, std::clamp(item.wetness * (1.f - age), .2f, 1.f),
@@ -327,8 +347,9 @@ namespace clt::impact
         }
         for (const auto& item : pools)
         {
-            const auto basis = item.anchor && owns_instance(scene, item.anchor)
-                ? instance_matrix(scene, item.anchor) * item.local
+            const auto found = transforms.find(item.anchor);
+            const auto basis = found != transforms.end()
+                ? found->second * item.local
                 : decal_transform(item.position, item.normal, 1, item.angle);
             const auto m = basis * scale({item.radius, item.radius, 1.f});
             const auto age = std::clamp(item.age / item.lifetime, 0.f, 1.f);
