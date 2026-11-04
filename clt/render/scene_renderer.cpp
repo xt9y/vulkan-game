@@ -1376,7 +1376,7 @@ namespace clt::scene_renderer
         for (auto& mesh : data.meshes)
         {
             mesh.has_blood = false;
-            if (!mesh.joint_count || mesh.instances.empty()) continue;
+            if (mesh.instances.empty()) continue;
             std::vector<bld::instance_id> actors;
             actors.reserve(mesh.instances.size());
             for (const auto& instance : mesh.instances)
