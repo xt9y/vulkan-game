@@ -1,7 +1,7 @@
 #include "weapon.hpp"
 
 #include "clt/network/connection.hpp"
-#include "clt/weapon/blood.hpp"
+#include "clt/weapon/impact.hpp"
 #include "clt/player/prediction.hpp"
 #include "clt/view/camera.hpp"
 #include "srv/assets/model.hpp"
@@ -27,8 +27,8 @@ namespace clt::weapon
         constexpr std::uint32_t asset_id = 0x60000000;
         constexpr std::uint32_t hole_id = asset_id + 0x10000;
         constexpr std::uint32_t flash_id = hole_id + 1;
-        constexpr std::uint32_t blood_stain_id = flash_id + 1;
-        constexpr std::uint32_t blood_drop_id = blood_stain_id + 5;
+        constexpr std::uint32_t impact_stain_id = flash_id + 1;
+        constexpr std::uint32_t impact_drop_id = impact_stain_id + 5;
 
         struct intent
         {
@@ -83,7 +83,7 @@ namespace clt::weapon
             std::vector<draw> draws;
             std::vector<casing> casings;
             std::deque<hole> holes;
-            blood::system blood_effects;
+            impact::system impact_effects;
             ::weapon::state predicted;
             std::deque<std::pair<net::weapon::command, double>> pending;
             std::unordered_set<std::uint32_t> confirmed;
@@ -575,7 +575,7 @@ namespace clt::weapon
         animation::synchronize(d.asset);
         d.asset.meshes.push_back(disc(hole_id, false));
         d.asset.meshes.push_back(disc(flash_id, true));
-        blood::append_assets(d.asset, blood_stain_id, blood_drop_id);
+        impact::append_assets(d.asset, impact_stain_id, impact_drop_id);
         d.predicted = current().predicted;
         select(0, seconds());
         d.casings.reserve(192);
@@ -625,7 +625,7 @@ namespace clt::weapon
             d.last_fired_sequence = 0;
             d.casings.clear();
             d.holes.clear();
-            d.blood_effects = {};
+            d.impact_effects = {};
             d.connected = connected;
             select(0, now);
         }
@@ -750,7 +750,7 @@ namespace clt::weapon
         }
         for (const auto& effect : connection::take_impact_events())
         {
-            d.blood_effects.spawn(effect);
+            d.impact_effects.spawn(effect);
         }
         if (d.confirmed.size() > 1024)
         {
@@ -923,7 +923,7 @@ namespace clt::weapon
             }
             d.collision_source = source;
         }
-        d.blood_effects.update(d.collision, dt);
+        d.impact_effects.update(d.collision, dt);
         for (auto& c : d.casings)
         {
             c.age += dt;
@@ -991,26 +991,26 @@ namespace clt::weapon
         {
             draw item;
             item.mesh_id = mesh.id;
-            if (mesh.id >= blood_stain_id && mesh.id < blood_stain_id + 5)
+            if (mesh.id >= impact_stain_id && mesh.id < impact_stain_id + 5)
             {
-                const auto variant = mesh.id - blood_stain_id;
-                for (const auto& stain : d.blood_effects.stains)
+                const auto variant = mesh.id - impact_stain_id;
+                for (const auto& stain : d.impact_effects.stains)
                     if (stain.variant == variant)
                         item.instances.push_back(instance(stain.transform));
-                for (const auto& pool : d.blood_effects.pools)
+                for (const auto& pool : d.impact_effects.pools)
                     if (pool.variant == variant)
                         item.instances.push_back(instance(
-                            blood::decal_transform(pool.position, pool.normal,
+                            impact::decal_transform(pool.position, pool.normal,
                                 pool.radius, pool.angle)));
             }
-            else if (mesh.id >= blood_drop_id &&
-                     mesh.id <= blood_drop_id + std::uint32_t(::weapon::impact_type::glass))
+            else if (mesh.id >= impact_drop_id &&
+                     mesh.id <= impact_drop_id + std::uint32_t(::weapon::impact_type::glass))
             {
-                const auto kind = ::weapon::impact_type(mesh.id - blood_drop_id);
-                for (const auto& drop : d.blood_effects.drops)
+                const auto kind = ::weapon::impact_type(mesh.id - impact_drop_id);
+                for (const auto& drop : d.impact_effects.drops)
                     if (drop.type == kind)
                         item.instances.push_back(instance(
-                            blood::drop_transform(drop.position, drop.radius)));
+                            impact::drop_transform(drop.position, drop.radius)));
             }
             else if (mesh.id == hole_id)
             {
@@ -1089,10 +1089,10 @@ namespace clt::weapon
 
     std::size_t instance_capacity(std::uint32_t mesh_id)
     {
-        if (mesh_id >= blood_stain_id && mesh_id < blood_stain_id + 5)
+        if (mesh_id >= impact_stain_id && mesh_id < impact_stain_id + 5)
             return 2048 + 64;
-        if (mesh_id >= blood_drop_id &&
-            mesh_id <= blood_drop_id + std::uint32_t(::weapon::impact_type::glass))
+        if (mesh_id >= impact_drop_id &&
+            mesh_id <= impact_drop_id + std::uint32_t(::weapon::impact_type::glass))
             return 1024;
         return 192;
     }

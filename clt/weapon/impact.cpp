@@ -1,4 +1,4 @@
-#include "blood.hpp"
+#include "impact.hpp"
 
 #include <algorithm>
 #include <array>
@@ -9,7 +9,7 @@
 #include <limits>
 #include <stb_image.h>
 
-namespace clt::blood
+namespace clt::impact
 {
     namespace
     {
@@ -314,4 +314,4 @@ namespace clt::blood
             p.radius = .035f + (p.final_radius - .035f) * smoothed;
         }
     }
-} // namespace clt::blood
+} // namespace clt::impact

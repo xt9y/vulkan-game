@@ -8,7 +8,7 @@
 #include <deque>
 #include <vector>
 
-namespace clt::blood
+namespace clt::impact
 {
     using vk::util::math::vec3;
     using vk::util::math::mat4;
@@ -51,4 +51,4 @@ namespace clt::blood
     void append_assets(::scene::state& scene,
                        std::uint32_t first_decal,
                        std::uint32_t drop_mesh);
-} // namespace clt::blood
+} // namespace clt::impact
