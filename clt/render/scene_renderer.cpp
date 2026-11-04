@@ -578,7 +578,7 @@ namespace clt::scene_renderer
     }
 
 
-    mat4 world_view_projection()
+    vk::util::math::mat4 world_view_projection()
     {
         return get().current_world_view_projection;
     }
