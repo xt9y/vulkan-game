@@ -2,6 +2,7 @@
 #include "srv/game/options.hpp"
 
 #include "scene_renderer.hpp"
+#include "blood.hpp"
 #include "postprocess.hpp"
 #include "passes.hpp"
 #include "upload.hpp"
@@ -251,6 +252,7 @@ namespace clt::renderer
         upload::retire(true);
 
         passes::release();
+        blood::release();
         postprocess::release();
         scene_renderer::release_frame_resources();
         scene_renderer::reset_scene();
@@ -317,6 +319,7 @@ namespace clt::renderer
         vk::swapchain::init(info);
         scene_renderer::create_frame_resources();
         postprocess::create();
+        blood::create();
         passes::create();
 
         for (uint32_t i = 0; i < vk::swapchain::get()->size; ++i)
@@ -472,6 +475,7 @@ namespace clt::renderer
             }
 
             passes::release();
+            blood::release();
             postprocess::release();
             scene_renderer::shutdown();
 
