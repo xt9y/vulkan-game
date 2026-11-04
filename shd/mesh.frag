@@ -3,6 +3,7 @@
 layout(location = 0) in vec3 world_normal;
 layout(location = 1) in vec2 uv;
 layout(location = 2) in vec3 world_position;
+layout(location = 3) flat in uint wound_instance;
 layout(location = 0) out vec4 out_albedo;
 layout(location = 1) out vec4 out_normal;
 layout(location = 2) out vec4 out_material;
@@ -12,6 +13,12 @@ layout(set = 0, binding = 5) uniform sampler2D metallic_roughness_texture;
 layout(set = 0, binding = 6) uniform sampler2D normal_texture;
 layout(set = 0, binding = 7) uniform sampler2D occlusion_texture;
 layout(set = 0, binding = 8) uniform sampler2D emissive_texture;
+
+struct WoundMask { vec4 marks[4]; };
+layout(std430, set = 0, binding = 14) readonly buffer WoundBuffer
+{
+    WoundMask wounds[];
+};
 
 layout(push_constant) uniform Draw
 {
@@ -35,6 +42,19 @@ void main()
     {
         vec4 texel = texture(base_texture, uv);
         base *= vec4(linear_color(texel.rgb), texel.a);
+    }
+    // Up to four impact-UV wounds per skinned instance. UVs move with its bones.
+    if (pc.joints_per_instance != 0u && pc.joints_per_instance != 0xffffffffu)
+    {
+        for (int i = 0; i < 4; ++i)
+        {
+            vec4 mark = wounds[wound_instance].marks[i];
+            if (mark.z <= 0.0) continue;
+            vec2 delta = uv - mark.xy;
+            float mask = 1.0 - smoothstep(mark.z * 0.2, mark.z, length(delta));
+            base.rgb = mix(base.rgb, vec3(0.12, 0.003, 0.007),
+                           mask * clamp(mark.w, 0.0, 0.95));
+        }
     }
     int alpha = (flags >> 5) & 3;
     if (alpha == 1 && base.a < pc.surface.w) discard;
