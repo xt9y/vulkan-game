@@ -169,7 +169,8 @@ namespace clt::upload
                 barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
                 command.pipelineBarrier(
                     vk::PipelineStageFlagBits::eTransfer,
-                    vk::PipelineStageFlagBits::eFragmentShader,
+                    vk::PipelineStageFlagBits::eVertexShader |
+                        vk::PipelineStageFlagBits::eFragmentShader,
                     {}, {}, {}, {barrier}
                 );
                 staging.push_back(source);
