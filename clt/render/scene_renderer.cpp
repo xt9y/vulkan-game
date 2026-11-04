@@ -4,7 +4,6 @@
 #include "clt/network/connection.hpp"
 #include "clt/render/texture.hpp"
 #include "clt/render/upload.hpp"
-#include <bld/bld.hpp>
 #include "clt/view/camera.hpp"
 #include "clt/weapon/weapon.hpp"
 #include "srv/game/options.hpp"
@@ -22,7 +21,6 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include <unordered_map>
 
 namespace clt::scene_renderer
 {
@@ -41,7 +39,6 @@ namespace clt::scene_renderer
             std::array<float, 4> surface;
             std::array<float, 4> emissive;
             std::uint32_t joint_count = 0;
-            std::uint32_t wound_enabled = 0;
         };
         static_assert(sizeof(draw_parameters) <= 128);
 
@@ -50,7 +47,6 @@ namespace clt::scene_renderer
             ::scene::material surface;
             std::uint32_t skin_id = 0;
             std::uint32_t joint_count = 0;
-            bool has_wounds = false;
             vk::buffer::resource vertices;
             vk::buffer::resource indices;
             vk::buffer::resource instance_buffer;
@@ -94,7 +90,6 @@ namespace clt::scene_renderer
             std::array<vec4, 6> last_gpu_planes{};
             bool gpu_planes_valid = false;
             std::uint32_t last_image = 0;
-            mat4 last_world_view_projection = mat4::identity();
             std::uint32_t last_animation_tick = UINT32_MAX;
             std::chrono::steady_clock::time_point animation_received{};
 
@@ -103,8 +98,8 @@ namespace clt::scene_renderer
             vk::Pipeline pipeline{};
 
             struct target {
-                std::array<vk::image::resource, 4> color;
-                std::array<vk::ImageView, 4> views{};
+                std::array<vk::image::resource, 3> color;
+                std::array<vk::ImageView, 3> views{};
                 vk::image::resource depth;
                 vk::ImageView depth_view{};
                 vk::Framebuffer framebuffer{};
@@ -276,8 +271,8 @@ namespace clt::scene_renderer
                     vk::ColorComponentFlagBits::eB |
                     vk::ColorComponentFlagBits::eA;
 
-                std::array<vk::PipelineColorBlendAttachmentState, 4> attachments{
-                    blend, blend, blend, blend
+                std::array<vk::PipelineColorBlendAttachmentState, 3> attachments{
+                    blend, blend, blend
                 };
                 vk::PipelineColorBlendStateCreateInfo blending{};
                 blending.attachmentCount = attachments.size();
@@ -321,12 +316,12 @@ namespace clt::scene_renderer
         }
 
 
-        std::array<vk::Format, 4> color_formats()
+        std::array<vk::Format, 3> color_formats()
         {
             const auto precision = game::options::get()->graphics.gbuffer;
             const auto format = precision == game::options::gbuffer_precision::rgba16f
                 ? vk::Format::eR16G16B16A16Sfloat : vk::Format::eR8G8B8A8Unorm;
-            return {format, format, format, vk::Format::eR32Uint};
+            return {format, format, format};
         }
 
         vk::Format depth_format()
@@ -346,8 +341,8 @@ namespace clt::scene_renderer
         void create_render_pass()
         {
             auto& data = get();
-            std::array<vk::AttachmentDescription, 5> attachments{};
-            std::array<vk::AttachmentReference, 4> colors{};
+            std::array<vk::AttachmentDescription, 4> attachments{};
+            std::array<vk::AttachmentReference, 3> colors{};
 
             for (std::uint32_t i = 0; i < colors.size(); ++i)
             {
@@ -360,14 +355,14 @@ namespace clt::scene_renderer
                 colors[i] = {i, vk::ImageLayout::eColorAttachmentOptimal};
             }
 
-            attachments[4].format = depth_format();
-            attachments[4].samples = vk::SampleCountFlagBits::e1;
-            attachments[4].loadOp = vk::AttachmentLoadOp::eClear;
-            attachments[4].storeOp = vk::AttachmentStoreOp::eStore;
-            attachments[4].initialLayout = vk::ImageLayout::eUndefined;
-            attachments[4].finalLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+            attachments[3].format = depth_format();
+            attachments[3].samples = vk::SampleCountFlagBits::e1;
+            attachments[3].loadOp = vk::AttachmentLoadOp::eClear;
+            attachments[3].storeOp = vk::AttachmentStoreOp::eStore;
+            attachments[3].initialLayout = vk::ImageLayout::eUndefined;
+            attachments[3].finalLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
 
-            vk::AttachmentReference depth{4, vk::ImageLayout::eDepthStencilAttachmentOptimal};
+            vk::AttachmentReference depth{3, vk::ImageLayout::eDepthStencilAttachmentOptimal};
             vk::SubpassDescription subpass{};
             subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
             subpass.colorAttachmentCount = colors.size();
@@ -461,9 +456,8 @@ namespace clt::scene_renderer
                 depth_view.subresourceRange = {vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1};
                 target.depth_view = vk::image_view::create(depth_view);
 
-                const std::array<vk::ImageView, 5> attachments{
-                    target.views[0], target.views[1], target.views[2],
-                    target.views[3], target.depth_view
+                const std::array<vk::ImageView, 4> attachments{
+                    target.views[0], target.views[1], target.views[2], target.depth_view
                 };
                 vk::FramebufferCreateInfo framebuffer{};
                 framebuffer.renderPass = data.render_pass;
@@ -500,20 +494,19 @@ namespace clt::scene_renderer
         auto& data = get();
         data.shaders = {vertex_path, fragment_path};
 
-        std::array<vk::DescriptorSetLayoutBinding, 11> bindings{};
+        std::array<vk::DescriptorSetLayoutBinding, 10> bindings{};
         for (std::uint32_t i = 0; i < bindings.size(); ++i)
         {
-            const auto slot = i == 10 ? 14u : i;
-            bindings[i].binding = slot;
-            bindings[i].descriptorType = (slot < 4 || slot == 9 || slot == 14) ?
+            bindings[i].binding = i;
+            bindings[i].descriptorType = (i < 4 || i == 9) ?
                 vk::DescriptorType::eStorageBuffer :
                 vk::DescriptorType::eCombinedImageSampler;
             bindings[i].descriptorCount = 1;
-            bindings[i].stageFlags = slot < 4 ?
+            bindings[i].stageFlags = i < 4 ?
                 vk::ShaderStageFlags(vk::ShaderStageFlagBits::eCompute) :
-                slot == 9 ? vk::ShaderStageFlags(vk::ShaderStageFlagBits::eVertex) :
-                            vk::ShaderStageFlags(vk::ShaderStageFlagBits::eFragment);
-            if (slot == 0)
+                i == 9 ? vk::ShaderStageFlags(vk::ShaderStageFlagBits::eVertex) :
+                vk::ShaderStageFlags(vk::ShaderStageFlagBits::eFragment);
+            if (i == 0)
                 bindings[i].stageFlags |= vk::ShaderStageFlagBits::eVertex;
         }
 
@@ -581,17 +574,11 @@ namespace clt::scene_renderer
     }
 
 
-    mat4 world_view_projection()
-    {
-        return get().last_world_view_projection;
-    }
-
     gbuffer outputs(std::uint32_t image)
     {
         const auto& target = get().targets.at(image);
         return {{
-            target.views[0], target.views[1], target.views[2],
-            target.views[3], target.depth_view
+            target.views[0], target.views[1], target.views[2], target.depth_view
         }, vk::swapchain::get()->extent};
     }
 
@@ -660,7 +647,7 @@ namespace clt::scene_renderer
         const auto count =
             std::uint32_t(data.local_meshes.size() * vk::swapchain::get()->images.size());
         const std::array<vk::DescriptorPoolSize, 2> sizes{
-            {{vk::DescriptorType::eStorageBuffer, count * 6},
+            {{vk::DescriptorType::eStorageBuffer, count * 5},
              {vk::DescriptorType::eCombinedImageSampler, count * 5}}
         };
         vk::DescriptorPoolCreateInfo pool{};
@@ -669,27 +656,28 @@ namespace clt::scene_renderer
         pool.pPoolSizes = sizes.data();
         const auto device = vk::device::get()->handle;
         data.local_pool = device.createDescriptorPool(pool);
+        std::array<std::uint32_t, 192> identities{};
+        for (std::uint32_t i = 0; i < identities.size(); ++i)
+        {
+            identities[i] = i;
+        }
         for (auto& mesh : data.local_meshes)
         {
-            const auto capacity = weapon::instance_capacity(mesh.id);
-            std::vector<std::uint32_t> identities(capacity);
-            for (std::uint32_t i = 0; i < identities.size(); ++i)
-                identities[i] = i;
             mesh.frames.resize(vk::swapchain::get()->images.size());
             for (auto& frame : mesh.frames)
             {
                 const auto memory = vk::MemoryPropertyFlagBits::eHostVisible |
                                     vk::MemoryPropertyFlagBits::eHostCoherent;
                 frame.local_instances = vk::buffer::create(
-                    capacity * sizeof(instance_data), vk::BufferUsageFlagBits::eStorageBuffer, memory
+                    192 * sizeof(instance_data), vk::BufferUsageFlagBits::eStorageBuffer, memory
                 );
                 frame.visible = vk::buffer::create(
-                    identities.size() * sizeof(identities[0]),
+                    sizeof(identities),
                     vk::BufferUsageFlagBits::eVertexBuffer |
                         vk::BufferUsageFlagBits::eStorageBuffer,
                     memory
                 );
-                vk::buffer::write(frame.visible, identities.data(), identities.size() * sizeof(identities[0]));
+                vk::buffer::write(frame.visible, identities.data(), sizeof(identities));
                 frame.skin_palette = vk::buffer::create(
                     std::max<std::uint32_t>(1, mesh.joint_count) * sizeof(animation::matrix),
                     vk::BufferUsageFlagBits::eStorageBuffer,
@@ -704,8 +692,8 @@ namespace clt::scene_renderer
                 std::array<vk::WriteDescriptorSet, 5> writes{};
                 for (std::uint32_t i = 0; i < 5; ++i)
                 {
-                    infos[i].buffer = i == 4 ? frame.skin_palette.handle :
-                        frame.local_instances.handle;
+                    infos[i].buffer =
+                        i == 4 ? frame.skin_palette.handle : frame.local_instances.handle;
                     infos[i].range = VK_WHOLE_SIZE;
                     writes[i].dstSet = frame.set;
                     writes[i].dstBinding = i == 4 ? 9 : i;
@@ -714,15 +702,6 @@ namespace clt::scene_renderer
                     writes[i].pBufferInfo = &infos[i];
                 }
                 device.updateDescriptorSets(writes, {});
-                auto wound_info = bld::render::wound::descriptor_batch(
-                    mesh.id, {}, 0);
-                vk::WriteDescriptorSet wound_write{};
-                wound_write.dstSet = frame.set;
-                wound_write.dstBinding = 14;
-                wound_write.descriptorCount = 1;
-                wound_write.descriptorType = vk::DescriptorType::eStorageBuffer;
-                wound_write.pBufferInfo = &wound_info;
-                device.updateDescriptorSets({wound_write}, {});
                 texture::bind(frame.set, mesh.surface);
             }
         }
@@ -751,15 +730,12 @@ namespace clt::scene_renderer
         data.targets.clear();
         vk::render_pass::destroy(data.render_pass);
         data.render_pass = nullptr;
-        bld::render::wound::shutdown();
     }
 
     void create_frame_resources()
     {
         try
         {
-            bld::render::wound::init(
-                std::uint32_t(vk::swapchain::get()->images.size()));
             create_render_pass();
             for (std::size_t i = 0; i < vk::swapchain::get()->images.size(); ++i)
             {
@@ -792,11 +768,9 @@ namespace clt::scene_renderer
             std::abs(pose.scale.x), std::abs(pose.scale.y), std::abs(pose.scale.z)
         });
         mesh.instances.push_back(instance);
-        auto normal = rotation(pose.rotation) * scale(inverse);
-        // Unused normal-matrix component transports the receiver instance ID.
-        normal(3, 3) = float(instance.id);
         mesh.transforms.push_back({
-            trs(pose.position, pose.rotation, pose.scale), normal
+            trs(pose.position, pose.rotation, pose.scale),
+            rotation(pose.rotation) * scale(inverse)
         });
         const auto position = pose.position + rotate(pose.rotation, center);
         mesh.bounds.push_back({
@@ -848,15 +822,6 @@ namespace clt::scene_renderer
             palette_write.descriptorType = vk::DescriptorType::eStorageBuffer;
             palette_write.pBufferInfo = &palette_info;
             vk::device::get()->handle.updateDescriptorSets({palette_write}, {});
-            auto wound_info = bld::render::wound::descriptor_batch(
-                mesh.id, {}, 0);
-            vk::WriteDescriptorSet wound_write{};
-            wound_write.dstSet = frame.set;
-            wound_write.dstBinding = 14;
-            wound_write.descriptorCount = 1;
-            wound_write.descriptorType = vk::DescriptorType::eStorageBuffer;
-            wound_write.pBufferInfo = &wound_info;
-            vk::device::get()->handle.updateDescriptorSets({wound_write}, {});
             texture::bind(frame.set, mesh.surface);
         }
     }
@@ -1168,7 +1133,7 @@ namespace clt::scene_renderer
                 const auto count = std::max<std::size_t>(1, meshes.size()) *
                     std::max<std::size_t>(1, vk::swapchain::get()->images.size());
                 std::array<vk::DescriptorPoolSize, 2> pool_sizes{{
-                    {vk::DescriptorType::eStorageBuffer, std::uint32_t(count * 6)},
+                    {vk::DescriptorType::eStorageBuffer, std::uint32_t(count * 5)},
                     {vk::DescriptorType::eCombinedImageSampler, std::uint32_t(count * 5)}
                 }};
 
@@ -1240,20 +1205,16 @@ namespace clt::scene_renderer
         const float aspect = float(extent.width) / float(extent.height);
         const auto view_projection =
             perspective(camera.pose.fov, aspect, 0.1f, 1000.0f) * camera.view;
-        data.last_world_view_projection = view_projection;
         const auto weapon_view_projection = weapon::view_projection(aspect, camera.view);
 
-        std::array<vk::ClearValue, 5> clear{};
+        std::array<vk::ClearValue, 4> clear{};
         for (std::size_t i = 0; i < 3; ++i)
         {
             clear[i].color = vk::ClearColorValue(
                 std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f}
             );
         }
-        clear[3].color = vk::ClearColorValue(
-            std::array<std::uint32_t, 4>{0u, 0u, 0u, 0u}
-        );
-        clear[4].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+        clear[3].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
 
         vk::RenderPassBeginInfo begin{};
         begin.renderPass = data.render_pass;
@@ -1378,29 +1339,6 @@ namespace clt::scene_renderer
             }
         }
 
-        for (auto& mesh : data.meshes)
-        {
-            mesh.has_wounds = false;
-            if (!mesh.joint_count || mesh.instances.empty()) continue;
-
-            std::vector<bld::instance_id> actors;
-            actors.reserve(mesh.instances.size());
-            for (const auto& instance : mesh.instances)
-                actors.push_back(instance.id);
-            mesh.has_wounds = bld::render::wound::has_wounds(actors);
-            if (!mesh.has_wounds) continue;
-
-            auto wound_info = bld::render::wound::descriptor_batch(
-                mesh.id, actors, image);
-            vk::WriteDescriptorSet write{};
-            write.dstSet = mesh.frames.at(image).set;
-            write.dstBinding = 14;
-            write.descriptorCount = 1;
-            write.descriptorType = vk::DescriptorType::eStorageBuffer;
-            write.pBufferInfo = &wound_info;
-            vk::device::get()->handle.updateDescriptorSets({write}, {});
-        }
-
         for (const auto& item : weapon_draws)
         {
             auto found = std::find_if(
@@ -1416,16 +1354,11 @@ namespace clt::scene_renderer
                 continue;
             }
             auto& frame = found->frames.at(image);
-            if (item.instances.size() > weapon::instance_capacity(item.mesh_id))
-                throw std::runtime_error("Local effect instance capacity exceeded");
-            if (!item.instances.empty())
-            {
-                vk::buffer::write(
-                    frame.local_instances,
-                    item.instances.data(),
-                    item.instances.size() * sizeof(weapon::instance_data)
-                );
-            }
+            vk::buffer::write(
+                frame.local_instances,
+                item.instances.data(),
+                item.instances.size() * sizeof(weapon::instance_data)
+            );
             if (!item.palette.empty())
             {
                 vk::buffer::write(
@@ -1471,8 +1404,7 @@ namespace clt::scene_renderer
                     {m.metallic, m.roughness, m.occlusion, m.alpha_cutoff},
                     {m.emissive[0], m.emissive[1],
                      m.emissive[2], float(flags)},
-                    mesh.joint_count,
-                    mesh.has_wounds ? 1u : 0u
+                    mesh.joint_count
                 };
                 command.pushConstants(
                     data.layout, vk::ShaderStageFlagBits::eVertex |
@@ -1543,8 +1475,7 @@ namespace clt::scene_renderer
                     m.base_color,
                     {m.metallic, m.roughness, m.occlusion, m.alpha_cutoff},
                     {m.emissive[0], m.emissive[1], m.emissive[2], float(flags)},
-                    mesh.joint_count,
-                    0u
+                    mesh.joint_count
                 };
                 command.pushConstants(
                     data.layout,

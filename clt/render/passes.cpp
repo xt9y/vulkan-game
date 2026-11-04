@@ -1,7 +1,6 @@
 #include "passes.hpp"
 #include "postprocess.hpp"
 #include "scene_renderer.hpp"
-#include "blood.hpp"
 
 #include <stdexcept>
 #include <vector>
@@ -53,15 +52,12 @@ namespace clt::passes
         }
     }
 
-    const std::array<description, 5>& ordered()
+    const std::array<description, 4>& ordered()
     {
-        static const std::array<description, 5> list{{
+        static const std::array<description, 4> list{{
             {"geometry", vk::PipelineBindPoint::eGraphics, resource::scene,
                 resource::gbuffer, scene_renderer::draw},
-            {"blood", vk::PipelineBindPoint::eCompute, resource::gbuffer,
-                resource::overlay, blood::record},
-            {"lighting", vk::PipelineBindPoint::eCompute,
-                resource::gbuffer | resource::overlay,
+            {"lighting", vk::PipelineBindPoint::eCompute, resource::gbuffer,
                 resource::hdr, postprocess::lighting},
             {"tonemapping", vk::PipelineBindPoint::eCompute, resource::hdr,
                 resource::ldr, postprocess::tonemap},
@@ -90,7 +86,7 @@ namespace clt::passes
             throw std::runtime_error("Render pass index out of range");
         }
 
-        if (index == 2)
+        if (index == 1)
         {
             if (!data.initialized.at(image))
             {
@@ -99,6 +95,10 @@ namespace clt::passes
                 transition(command, target.ldr);
                 data.initialized[image] = true;
             }
+            // Geometry supplies its external attachment-to-compute dependency.
+        }
+        else if (index == 2)
+        {
             dependency(command,
                 vk::PipelineStageFlagBits::eComputeShader,
                 vk::PipelineStageFlagBits::eComputeShader,
@@ -109,19 +109,10 @@ namespace clt::passes
         {
             dependency(command,
                 vk::PipelineStageFlagBits::eComputeShader,
-                vk::PipelineStageFlagBits::eComputeShader,
-                vk::AccessFlagBits::eShaderWrite,
-                vk::AccessFlagBits::eShaderRead);
-        }
-        else if (index == 4)
-        {
-            dependency(command,
-                vk::PipelineStageFlagBits::eComputeShader,
                 vk::PipelineStageFlagBits::eFragmentShader,
                 vk::AccessFlagBits::eShaderWrite,
                 vk::AccessFlagBits::eShaderRead);
         }
-        // Geometry supplies its external attachment-to-compute dependency.
         list[index].record(command, image);
     }
 

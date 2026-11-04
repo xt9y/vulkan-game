@@ -1,7 +1,6 @@
 #include "postprocess.hpp"
 #include "srv/game/options.hpp"
 #include "scene_renderer.hpp"
-#include "blood.hpp"
 #include "clt/view/camera.hpp"
 
 #include <algorithm>
@@ -333,7 +332,7 @@ namespace clt::postprocess
             sampler.addressModeW = vk::SamplerAddressMode::eClampToEdge;
             data.sampler = device.createSampler(sampler);
 
-            data.lighting_set = layout(5, 1, vk::ShaderStageFlagBits::eCompute);
+            data.lighting_set = layout(4, 1, vk::ShaderStageFlagBits::eCompute);
             data.tone_set = layout(1, 1, vk::ShaderStageFlagBits::eCompute);
             data.present_set = layout(1, 0, vk::ShaderStageFlagBits::eFragment);
             data.lighting_layout = pipeline_layout(data.lighting_set, true);
@@ -367,7 +366,7 @@ namespace clt::postprocess
                 vk::swapchain::get()->images.size()
             );
             std::array<vk::DescriptorPoolSize, 2> pool_sizes{{
-                {vk::DescriptorType::eCombinedImageSampler, 7 * count},
+                {vk::DescriptorType::eCombinedImageSampler, 6 * count},
                 {vk::DescriptorType::eStorageImage, 2 * count}
             }};
             vk::DescriptorPoolCreateInfo pool{};
@@ -416,22 +415,18 @@ namespace clt::postprocess
                 current.presentation = allocated[2];
 
                 const auto g = scene_renderer::outputs(i);
-                std::vector<vk::DescriptorImageInfo> lighting(6);
-                for (std::size_t j = 0; j < 3; ++j)
+                std::vector<vk::DescriptorImageInfo> lighting(5);
+                for (std::size_t j = 0; j < g.views.size(); ++j)
                 {
                     lighting[j].sampler = data.sampler;
                     lighting[j].imageView = g.views[j];
-                    lighting[j].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+                    lighting[j].imageLayout = j == 3 ?
+                        vk::ImageLayout::eDepthStencilReadOnlyOptimal :
+                        vk::ImageLayout::eShaderReadOnlyOptimal;
                 }
-                lighting[3].sampler = data.sampler;
-                lighting[3].imageView = g.views[4];
-                lighting[3].imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
-                lighting[4].sampler = data.sampler;
-                lighting[4].imageView = blood::overlay(i);
+                lighting[4].imageView = current.hdr.view;
                 lighting[4].imageLayout = vk::ImageLayout::eGeneral;
-                lighting[5].imageView = current.hdr.view;
-                lighting[5].imageLayout = vk::ImageLayout::eGeneral;
-                update(current.lighting, lighting, 5);
+                update(current.lighting, lighting, 4);
                 std::vector<vk::DescriptorImageInfo> tone(2);
                 tone[0].sampler = data.sampler;
                 tone[0].imageView = current.hdr.view;

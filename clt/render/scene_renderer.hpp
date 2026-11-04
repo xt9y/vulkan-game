@@ -26,13 +26,11 @@ namespace clt::scene_renderer
     culling_readback culling_data();
 
     struct gbuffer {
-        // albedo, normal, material, R32_UINT receiver, depth
-        std::array<vk::ImageView, 5> views{};
+        std::array<vk::ImageView, 4> views{};
         vk::Extent2D extent{};
     };
 
     gbuffer outputs(std::uint32_t image);
-    vk::util::math::mat4 world_view_projection();
 
     bool needs_sync();
     void reset_scene();

@@ -26,8 +26,6 @@ layout(std430, set = 0, binding = 9) readonly buffer BonePalette
 layout(location = 0) out vec3 world_normal;
 layout(location = 1) out vec2 uv;
 layout(location = 2) out vec3 world_position;
-layout(location = 3) flat out uint wound_instance;
-layout(location = 4) flat out uint receiver_id;
 
 layout(push_constant) uniform Draw
 {
@@ -36,14 +34,11 @@ layout(push_constant) uniform Draw
     vec4 surface;  // metallic, roughness, occlusion, alpha cutoff
     vec4 emissive; // RGB, material flags
     uint joints_per_instance;
-    uint wound_enabled;
 } pc;
 
 void main()
 {
-    wound_instance = instance_index;
     Instance instance = instances[instance_index];
-    receiver_id = uint(max(0.0, instance.normal[3][3]) + 0.5);
     mat4 deform = mat4(1.0);
     if (pc.joints_per_instance != 0u)
     {

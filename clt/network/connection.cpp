@@ -212,7 +212,6 @@ namespace clt::connection
             get()->server_parameters.reset();
         }
 
-        bld::network::reset();
         {
             std::lock_guard<std::mutex> lock(get()->scene_mutex);
             get()->scene.reset();
@@ -249,7 +248,6 @@ namespace clt::connection
             get()->authority.reset();
         }
 
-        bld::network::reset();
         {
             std::lock_guard<std::mutex> lock(get()->scene_mutex);
             get()->scene.reset();
@@ -339,7 +337,6 @@ namespace clt::connection
                     data.scene.reset();
                     data.pending_scene.clear();
                     data.last_publish = {};
-                    bld::network::reset();
                     {
                         std::lock_guard<std::mutex> animation_lock(data.animation_mutex);
                         data.animations.clear();
@@ -367,20 +364,6 @@ namespace clt::connection
                         if (!size)
                         {
                             break;
-                        }
-
-                        if (*size == 4 + bld::network::packet{}.size() &&
-                            buffer[4] == 'B' && buffer[5] == 'L' &&
-                            buffer[6] == 'D' && buffer[7] == '1')
-                        {
-                            if (net::endpoint::equal(peer, server) &&
-                                net::movement::detail::get(buffer.data()) == token &&
-                                data.connected.load(std::memory_order_relaxed) &&
-                                bld::network::receive(buffer.data() + 4, *size - 4))
-                            {
-                                last_received = now;
-                            }
-                            continue;
                         }
 
                         auto accept_weapon = [&](const net::weapon::snapshot& update)

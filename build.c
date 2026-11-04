@@ -10,8 +10,8 @@
 static void compile_shaders(void)
 {
     static const char* sources[] = {
-        "shd/mesh.vert", "shd/cull.comp",
-        "shd/tone.comp",
+        "shd/mesh.vert", "shd/mesh.frag", "shd/cull.comp",
+        "shd/light.comp", "shd/tone.comp",
         "shd/fullscreen.vert", "shd/present.frag"
     };
 #ifdef _WIN32
@@ -63,13 +63,6 @@ void build(C_Build* b)
         c_git(b, "VulkanHeaders", "https://github.com/KhronosGroup/Vulkan-Headers.git", "9fbc2a782ee3f8a4db64e7d991e23da75e893f44");
     c_dep_header_only(headers);
     c_dep_include(headers, "include");
-
-    C_Dependency* blood =
-        c_git(b, "VulkanBlood", "https://github.com/xt9y/vulkan-systems.git",
-              "5349add81c74673cbb7e2c3984735db34ab06da9");
-    c_dep_subdir(blood, "blood");
-    c_dep_cbuild(blood, "VulkanBlood", C_TARGET_STATIC_LIBRARY);
-    c_dep_include(blood, ".");
 
     C_Dependency* fastgltf =
         c_git(b, "fastgltf", "https://github.com/spnda/fastgltf.git", "0b800b4a584704f9e9add67c79c4c8732e552787");
@@ -130,7 +123,6 @@ void build(C_Build* b)
     c_warnings_strict(server);
     c_flag(server, "-std=c++20");
     c_use(server, engine);
-    c_use(server, blood);
     c_use(server, headers);
     c_use(server, fastgltf);
     c_use(server, ozz);
@@ -157,23 +149,7 @@ void build(C_Build* b)
     c_warnings_strict(client);
     c_flag(client, "-std=c++20");
     c_use(client, engine);
-    c_use(client, blood);
     c_use(client, headers);
-    // Generated outputs must be compilable sources in c build; each stamp
-    // triggers shader compilation while remaining harmless to the linker.
-    c_generate(client, "build/shaders/mesh_stamp.cpp", "shd/mesh.frag",
-               "glslangValidator -V -I@VulkanBlood@/bld/shaders "
-               "shd/mesh.frag -o build/shaders/mesh.frag.spv && "
-               "printf 'namespace mesh_shader_stamp {}\\n' > build/shaders/mesh_stamp.cpp");
-    c_generate(client, "build/shaders/light_stamp.cpp", "shd/light.comp",
-               "glslangValidator -V -I@VulkanBlood@/bld/shaders "
-               "shd/light.comp -o build/shaders/light.comp.spv && "
-               "printf 'namespace light_shader_stamp {}\\n' > build/shaders/light_stamp.cpp");
-    c_generate(client, "build/shaders/blood_stamp.cpp",
-               "@VulkanBlood@/bld/shaders/decal.comp",
-               "glslangValidator -V @VulkanBlood@/bld/shaders/decal.comp "
-               "-o build/shaders/blood.comp.spv && "
-               "printf 'namespace blood_shader_stamp {}\\n' > build/shaders/blood_stamp.cpp");
     c_use(client, glfw);
     c_use(client, fastgltf);
     c_use(client, ozz);

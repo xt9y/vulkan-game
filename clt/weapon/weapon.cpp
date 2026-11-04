@@ -1,7 +1,6 @@
 #include "weapon.hpp"
 
 #include "clt/network/connection.hpp"
-#include <bld/bld.hpp>
 #include "clt/player/prediction.hpp"
 #include "clt/view/camera.hpp"
 #include "srv/assets/model.hpp"
@@ -86,7 +85,6 @@ namespace clt::weapon
             std::unordered_set<std::uint32_t> confirmed;
             std::shared_ptr<const ::scene::state> collision_source;
             ::weapon::world collision;
-            std::unordered_set<std::uint32_t> skinned_instances;
             clock::time_point started{}, previous{};
             mat4 camera_correction = mat4::identity();
             std::uint32_t skin = 0, camera_joint = UINT32_MAX, muzzle = UINT32_MAX,
@@ -212,9 +210,7 @@ namespace clt::weapon
 
         instance_data instance(mat4 model)
         {
-            auto normal = transpose(inverse_affine(model));
-            normal(3, 3) = 0; // First-person meshes are not decal receivers.
-            return {model, normal};
+            return {model, transpose(inverse_affine(model))};
         }
 
         std::uint32_t clip_index(motion name)
@@ -575,7 +571,6 @@ namespace clt::weapon
         animation::synchronize(d.asset);
         d.asset.meshes.push_back(disc(hole_id, false));
         d.asset.meshes.push_back(disc(flash_id, true));
-
         d.predicted = current().predicted;
         select(0, seconds());
         d.casings.reserve(192);
@@ -625,7 +620,6 @@ namespace clt::weapon
             d.last_fired_sequence = 0;
             d.casings.clear();
             d.holes.clear();
-            bld::system::clear();
             d.connected = connected;
             select(0, now);
         }
@@ -743,8 +737,7 @@ namespace clt::weapon
                 const auto owner = find_weapon(shot.state.weapon_id);
                 if (owner != d.weapons.end())
                 {
-                    if (shot.impact.type != ::weapon::impact_type::flesh)
-                        add_impact(shot.impact, owner->settings);
+                    add_impact(shot.impact, owner->settings);
                 }
             }
         }
@@ -918,68 +911,6 @@ namespace clt::weapon
                 d.collision = {};
             }
             d.collision_source = source;
-            d.skinned_instances.clear();
-            if (source)
-            {
-                std::unordered_set<std::uint32_t> skinned_meshes;
-                for (const auto& mesh : source->meshes)
-                    if (mesh.skin_id) skinned_meshes.insert(mesh.id);
-                auto* anchors = bld::surfaces::get();
-                for (const auto& instance : source->instances)
-                {
-                    const bool skinned = skinned_meshes.contains(instance.mesh_id);
-                    if (skinned) d.skinned_instances.insert(instance.id);
-                    bld::surfaces::set_skinned(instance.id, skinned);
-                    if (skinned || (anchors && anchors->transforms.contains(instance.id)))
-                        bld::surfaces::set_transform(instance.id,
-                            trs(instance.pose.position, instance.pose.rotation,
-                                instance.pose.scale));
-                }
-            }
-        }
-        bld::system::update(dt, [&](bld::vec3 from, bld::vec3 to) -> bld::collision
-        {
-            const auto delta = to - from;
-            const float distance = length(delta);
-            if (distance < 1e-6f) return {};
-            const auto hit = d.collision.trace(from, delta / distance, distance);
-            if (!hit.impacted) return {};
-
-            const auto* anchors = bld::surfaces::get();
-            if (source && anchors && !anchors->transforms.contains(hit.instance))
-            {
-                const auto found = std::find_if(source->instances.begin(),
-                    source->instances.end(), [&](const ::scene::instance& inst)
-                    { return inst.id == hit.instance; });
-                if (found != source->instances.end())
-                    bld::surfaces::set_transform(hit.instance,
-                        trs(found->pose.position, found->pose.rotation,
-                            found->pose.scale));
-            }
-            return {true, hit.instance, hit.position, hit.normal, hit.uv,
-                    hit.uv_valid, d.skinned_instances.contains(hit.instance)};
-        });
-        // Replicated hits may arrive after the scene snapshot is already
-        // installed. Bind fresh rigid decals to the original instance so
-        // their position follows later mesh transform updates.
-        if (source)
-        {
-            const auto* surfaces = bld::surfaces::get();
-            if (surfaces)
-            {
-                for (const auto& mark : surfaces->decals)
-                {
-                    if (mark.anchored || !mark.target) continue;
-                    const auto found = std::find_if(
-                        source->instances.begin(), source->instances.end(),
-                        [&](const ::scene::instance& instance)
-                        { return instance.id == mark.target; });
-                    if (found == source->instances.end()) continue;
-                    bld::surfaces::set_transform(mark.target,
-                        trs(found->pose.position, found->pose.rotation,
-                            found->pose.scale));
-                }
-            }
         }
         for (auto& c : d.casings)
         {
@@ -1121,11 +1052,6 @@ namespace clt::weapon
                    settings.far_plane
                ) *
                view;
-    }
-
-    std::size_t instance_capacity(std::uint32_t)
-    {
-        return 192;
     }
 
     status inspect()

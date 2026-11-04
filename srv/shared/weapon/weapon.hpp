@@ -217,17 +217,6 @@ namespace weapon
     {
         vec3 a, b, c;
         std::uint32_t instance = 0, index = 0;
-        vk::util::math::vec2 uv_a{}, uv_b{}, uv_c{};
-    };
-
-    enum class impact_type : std::uint8_t
-    {
-        default_surface,
-        flesh,
-        metal,
-        stone,
-        wood,
-        glass
     };
 
     struct hit
@@ -235,9 +224,6 @@ namespace weapon
         bool impacted = false;
         vec3 position{}, normal{};
         std::uint32_t instance = 0, triangle = 0;
-        impact_type type = impact_type::default_surface;
-        vk::util::math::vec2 uv{};
-        bool uv_valid = false;
     };
 
     struct world
@@ -289,10 +275,7 @@ namespace weapon
                         transform(mesh->vertices[b].position),
                         transform(mesh->vertices[c].position),
                         instance.id,
-                        std::uint32_t(i / 3),
-                        {mesh->vertices[a].u, mesh->vertices[a].v},
-                        {mesh->vertices[b].u, mesh->vertices[b].v},
-                        {mesh->vertices[c].u, mesh->vertices[c].v}
+                        std::uint32_t(i / 3)
                     };
                     triangles.push_back(t);
                     boxes.push_back(
@@ -354,10 +337,7 @@ namespace weapon
                     {
                         normal = normal * -1.0f;
                     }
-                    const auto texcoord = t.uv_a * (1.f - u - v) +
-                        t.uv_b * u + t.uv_c * v;
-                    nearest = {true, origin + direction * d, normal, t.instance,
-                               t.index, impact_type::default_surface, texcoord, true};
+                    nearest = {true, origin + direction * d, normal, t.instance, t.index};
                 }
             );
             return nearest;

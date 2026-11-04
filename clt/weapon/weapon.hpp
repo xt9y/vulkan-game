@@ -96,9 +96,6 @@ namespace clt::weapon
         std::uint32_t weapon_id = 0;
     };
 
-    // Local world effects can exceed the regular 192-instance weapon budget.
-    std::size_t instance_capacity(std::uint32_t mesh_id);
-
     // Render-thread view of the predicted HUD and presentation state.
     status inspect();
     void shutdown();

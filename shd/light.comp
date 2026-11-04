@@ -1,12 +1,10 @@
 #version 450
-#extension GL_GOOGLE_include_directive : require
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(set=0,binding=0) uniform sampler2D g_albedo;
 layout(set=0,binding=1) uniform sampler2D g_normal;
 layout(set=0,binding=2) uniform sampler2D g_material;
 layout(set=0,binding=3) uniform sampler2D g_depth;
-layout(set=0,binding=4) uniform sampler2D g_blood;
-layout(rgba16f, set=0,binding=5) writeonly uniform image2D hdr;
+layout(rgba16f, set=0,binding=4) writeonly uniform image2D hdr;
 layout(push_constant) uniform Controls
 {
     int enabled;
@@ -17,8 +15,6 @@ layout(push_constant) uniform Controls
     vec4 ambient;
     vec4 sky;
 } pc;
-
-#include "composite.glsl"
 
 const float PI = 3.14159265359;
 
@@ -51,27 +47,22 @@ void main()
     if (any(greaterThanEqual(p, size))) return;
 
     float depth = texelFetch(g_depth, p, 0).r;
-    vec4 blood = texelFetch(g_blood, p, 0);
     if (depth >= 0.999999)
     {
-        vec3 background = pc.sky.rgb;
-        float roughness = 1.0, metallic = 0.0;
-        bld_composite_blood(blood, background, roughness, metallic);
-        imageStore(hdr, p, vec4(background, 1.0));
+        imageStore(hdr, p, vec4(pc.sky.rgb, 1.0));
         return;
     }
 
     vec3 albedo = texelFetch(g_albedo, p, 0).rgb;
-    vec4 surface = texelFetch(g_material, p, 0);
-    float roughness = clamp(surface.r, 0.045, 1.0);
-    float metallic = clamp(surface.g, 0.0, 1.0);
-    bld_composite_blood(blood, albedo, roughness, metallic);
     if (pc.enabled == 0)
     {
         imageStore(hdr, p, vec4(albedo, 1.0));
         return;
     }
     vec3 N = normalize(texelFetch(g_normal, p, 0).rgb * 2.0 - 1.0);
+    vec4 surface = texelFetch(g_material, p, 0);
+    float roughness = clamp(surface.r, 0.045, 1.0);
+    float metallic = clamp(surface.g, 0.0, 1.0);
     float ao = surface.b;
     vec3 V = normalize(pc.view_direction.xyz);
     vec3 L = normalize(pc.sun.xyz);
