@@ -170,7 +170,8 @@ namespace clt::upload
                 command.pipelineBarrier(
                     vk::PipelineStageFlagBits::eTransfer,
                     vk::PipelineStageFlagBits::eVertexShader |
-                        vk::PipelineStageFlagBits::eFragmentShader,
+                        vk::PipelineStageFlagBits::eFragmentShader |
+                        vk::PipelineStageFlagBits::eComputeShader,
                     {}, {}, {}, {barrier}
                 );
                 staging.push_back(source);
