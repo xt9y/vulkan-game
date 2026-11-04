@@ -1442,6 +1442,12 @@ namespace clt::scene_renderer
         // Each texel stores 4-bit coverage and 4-bit wetness. Atlas index is
         // exactly the skinning instance index consumed by the vertex shader.
         const auto active_wounds = weapon::impact_wounds();
+        if (active_wounds.empty())
+        {
+            for (auto& mesh : data.meshes) mesh.has_wounds = false;
+        }
+        else
+        {
         for (auto& mesh : data.meshes)
         {
             if (!mesh.joint_count || mesh.instances.empty()) continue;
@@ -1516,6 +1522,8 @@ namespace clt::scene_renderer
             }
             vk::buffer::write(frame.wounds, atlas.data(),
                               atlas.size() * sizeof(atlas.front()));
+        }
+
         }
 
         for (const auto& item : weapon_draws)
