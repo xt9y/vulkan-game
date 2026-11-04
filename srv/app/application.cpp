@@ -66,12 +66,12 @@ namespace srv::application
     }
 
     void load_model(std::filesystem::path path, ::scene::transform pose,
-                    std::uint32_t animation)
+                    std::uint32_t animation, bool bleeds)
     {
         if (get()->initialized) throw std::runtime_error("Register model imports before init");
         if (path.empty() || !std::filesystem::is_regular_file(path))
             throw std::runtime_error("Model file not found: " + path.string());
-        get()->models.push_back({std::move(path), pose, animation});
+        get()->models.push_back({std::move(path), pose, animation, bleeds});
     }
 
     void add_weapon(::weapon::definition definition)
@@ -143,6 +143,8 @@ namespace srv::application
                                                  texture_id, skin_id);
                     if (imported.meshes.empty())
                         throw std::runtime_error("Model has no renderable meshes: " + request.path.string());
+                    for (auto& mesh : imported.meshes)
+                        mesh.bleeds = request.bleeds;
                     for (auto& instance : imported.instances)
                     {
                         const auto mesh = std::find_if(imported.meshes.begin(), imported.meshes.end(),
