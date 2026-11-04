@@ -230,6 +230,27 @@ namespace clt::impact
         const auto right = normalize(cross(direction, helper));
         const auto up = cross(right, direction);
 
+        // Rigid flesh meshes use a decal anchored in object-local space.
+        // Animated flesh uses the UV atlas instead, so blood follows the skin.
+        const auto hit_scene = connection::snapshot();
+        if (hit_scene)
+        {
+            const auto actor = std::find_if(
+                hit_scene->instances.begin(), hit_scene->instances.end(),
+                [&](const ::scene::instance& item) { return item.id == effect.target; });
+            if (actor != hit_scene->instances.end())
+            {
+                const auto mesh = std::find_if(
+                    hit_scene->meshes.begin(), hit_scene->meshes.end(),
+                    [&](const ::scene::mesh& item) { return item.id == actor->mesh_id; });
+                if (mesh != hit_scene->meshes.end() && !mesh->skin_id)
+                {
+                    stain_at(*this, effect.position, normal,
+                             .24f + unit(seed) * .12f, seed, effect.target, 1.3f);
+                }
+            }
+        }
+
         if (effect.uv_valid)
         {
             if (wounds.size() >= 256) wounds.pop_front();
