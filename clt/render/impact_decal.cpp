@@ -391,8 +391,12 @@ namespace clt::impact_decal
         const auto cols = (extent.width + tile_size - 1) / tile_size;
         const auto rows = (extent.height + tile_size - 1) / tile_size;
         const auto tiles = std::size_t(cols) * rows;
-        std::vector<std::uint32_t> counts(tiles, 0);
-        std::vector<std::uint32_t> indices(tiles * tile_capacity, 0);
+        std::vector<std::uint32_t> counts, indices;
+        if (!sources.empty())
+        {
+            counts.assign(tiles, 0);
+            indices.assign(tiles * tile_capacity, 0);
+        }
         std::vector<gpu_decal> gpu;
         gpu.reserve(std::min<std::size_t>(sources.size(), max_decals));
 
@@ -406,11 +410,13 @@ namespace clt::impact_decal
         }
 
         if (!gpu.empty())
+        {
             vk::buffer::write(target.decals, gpu.data(), gpu.size() * sizeof(gpu[0]));
-        vk::buffer::write(target.tile_counts, counts.data(),
-                          counts.size() * sizeof(counts[0]));
-        vk::buffer::write(target.tile_indices, indices.data(),
-                          indices.size() * sizeof(indices[0]));
+            vk::buffer::write(target.tile_counts, counts.data(),
+                              counts.size() * sizeof(counts[0]));
+            vk::buffer::write(target.tile_indices, indices.data(),
+                              indices.size() * sizeof(indices[0]));
+        }
 
         // Streamed textures can be replaced when scene batches arrive.
         bind_atlas(target.set);
