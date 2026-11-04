@@ -1,0 +1,29 @@
+name: fluid-demo
+on:
+  pull_request:
+    paths:
+      - "clt/**"
+      - "srv/**"
+      - "shd/**"
+      - "build.c"
+      - ".github/workflows/fluid-demo.yml"
+jobs:
+  shaders-and-cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shader tools
+        run: sudo apt-get update && sudo apt-get install -y glslang-tools spirv-tools
+      - name: Compile scene shaders
+        run: |
+          set -eu
+          for shader in shd/mesh.vert shd/mesh.frag shd/cull.comp shd/light.comp shd/tone.comp shd/fullscreen.vert shd/present.frag; do
+            glslangValidator -V "$shader" -o /tmp/scene.spv
+            spirv-val /tmp/scene.spv
+          done
+      - name: Reject legacy blood integration
+        run: |
+          if git grep -n -E '(bld::|blood_events|#include "blood.hpp"|VulkanBlood|wound.glsl)' -- clt server.cpp build.c shd; then
+            echo "Legacy blood code remains in the active game"
+            exit 1
+          fi
