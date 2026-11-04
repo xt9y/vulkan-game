@@ -22,6 +22,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 namespace clt::scene_renderer
 {
@@ -43,6 +44,9 @@ namespace clt::scene_renderer
         };
         static_assert(sizeof(draw_parameters) <= 128);
 
+        struct wound_data { std::array<vec4, 4> marks{}; };
+        static_assert(sizeof(wound_data) == 64);
+
         struct gpu_mesh {
             std::uint32_t id = 0;
             ::scene::material surface;
@@ -59,6 +63,7 @@ namespace clt::scene_renderer
                 vk::buffer::resource skin_palette;
                 vk::buffer::resource local_instances;
                 vk::buffer::resource vat_data;
+                vk::buffer::resource wounds;
                 vk::DescriptorSet set{};
             };
             std::vector<per_image> frames;
@@ -86,6 +91,7 @@ namespace clt::scene_renderer
             std::vector<gpu_mesh> local_meshes;
             vk::DescriptorPool local_pool{};
             vk::buffer::resource vat_fallback;
+            vk::buffer::resource wound_fallback;
             vk::DescriptorSetLayout instance_layout{};
             vk::DescriptorPool instance_pool{};
             vk::PipelineLayout cull_layout{};
@@ -147,6 +153,7 @@ namespace clt::scene_renderer
                     {
                         vk::buffer::destroy(frame.vat_data);
                     }
+                    if (frame.wounds.handle) vk::buffer::destroy(frame.wounds);
                 }
             }
 
@@ -502,17 +509,17 @@ namespace clt::scene_renderer
         auto& data = get();
         data.shaders = {vertex_path, fragment_path};
 
-        std::array<vk::DescriptorSetLayoutBinding, 14> bindings{};
+        std::array<vk::DescriptorSetLayoutBinding, 15> bindings{};
         for (std::uint32_t i = 0; i < bindings.size(); ++i)
         {
             bindings[i].binding = i;
-            bindings[i].descriptorType = (i < 4 || i == 9 || i == 13) ?
+            bindings[i].descriptorType = (i < 4 || i == 9 || i == 13 || i == 14) ?
                 vk::DescriptorType::eStorageBuffer :
                 vk::DescriptorType::eCombinedImageSampler;
             bindings[i].descriptorCount = 1;
             bindings[i].stageFlags = i < 4 ?
                 vk::ShaderStageFlags(vk::ShaderStageFlagBits::eCompute) :
-                i == 9 || i >= 10 ?
+                i == 9 || (i >= 10 && i <= 13) ?
                     vk::ShaderStageFlags(vk::ShaderStageFlagBits::eVertex) :
                     vk::ShaderStageFlags(vk::ShaderStageFlagBits::eFragment);
             if (i == 0)
@@ -533,6 +540,13 @@ namespace clt::scene_renderer
         );
         const vat_gpu::parameters_t empty_vat{};
         vk::buffer::write(data.vat_fallback, &empty_vat, sizeof(empty_vat));
+        data.wound_fallback = vk::buffer::create(
+            sizeof(wound_data), vk::BufferUsageFlagBits::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent
+        );
+        const wound_data empty_wounds{};
+        vk::buffer::write(data.wound_fallback, &empty_wounds, sizeof(empty_wounds));
         vat_gpu::init();
         texture::pin(weapon::assets());
         texture::synchronize(::scene::state{});
@@ -673,7 +687,7 @@ namespace clt::scene_renderer
         const auto count =
             std::uint32_t(data.local_meshes.size() * vk::swapchain::get()->images.size());
         const std::array<vk::DescriptorPoolSize, 2> sizes{
-            {{vk::DescriptorType::eStorageBuffer, count * 6},
+            {{vk::DescriptorType::eStorageBuffer, count * 7},
              {vk::DescriptorType::eCombinedImageSampler, count * 8}}
         };
         vk::DescriptorPoolCreateInfo pool{};
@@ -731,6 +745,16 @@ namespace clt::scene_renderer
                     writes[i].pBufferInfo = &infos[i];
                 }
                 device.updateDescriptorSets(writes, {});
+                vk::DescriptorBufferInfo wound_info{};
+                wound_info.buffer = data.wound_fallback.handle;
+                wound_info.range = VK_WHOLE_SIZE;
+                vk::WriteDescriptorSet wound_write{};
+                wound_write.dstSet = frame.set;
+                wound_write.dstBinding = 14;
+                wound_write.descriptorCount = 1;
+                wound_write.descriptorType = vk::DescriptorType::eStorageBuffer;
+                wound_write.pBufferInfo = &wound_info;
+                device.updateDescriptorSets({wound_write}, {});
                 texture::bind(frame.set, mesh.surface);
                 vat_gpu::bind(weapon::vat_type(mesh.id), frame.set);
             }
@@ -862,6 +886,17 @@ namespace clt::scene_renderer
             vat_write.descriptorType = vk::DescriptorType::eStorageBuffer;
             vat_write.pBufferInfo = &vat_info;
             vk::device::get()->handle.updateDescriptorSets({vat_write}, {});
+            vk::DescriptorBufferInfo wound_info{};
+            wound_info.buffer = frame.wounds.handle
+                ? frame.wounds.handle : get().wound_fallback.handle;
+            wound_info.range = VK_WHOLE_SIZE;
+            vk::WriteDescriptorSet wound_write{};
+            wound_write.dstSet = frame.set;
+            wound_write.dstBinding = 14;
+            wound_write.descriptorCount = 1;
+            wound_write.descriptorType = vk::DescriptorType::eStorageBuffer;
+            wound_write.pBufferInfo = &wound_info;
+            vk::device::get()->handle.updateDescriptorSets({wound_write}, {});
             texture::bind(frame.set, mesh.surface);
         }
     }
@@ -937,6 +972,23 @@ namespace clt::scene_renderer
                     palette_size, vk::BufferUsageFlagBits::eStorageBuffer,
                     vk::MemoryPropertyFlagBits::eHostVisible |
                     vk::MemoryPropertyFlagBits::eHostCoherent);
+            }
+        }
+        if (mesh.joint_count)
+        {
+            const auto wound_bytes = std::max<std::size_t>(
+                sizeof(wound_data), mesh.instances.size() * sizeof(wound_data));
+            for (auto& frame : mesh.frames)
+            {
+                if (!frame.wounds.handle || frame.wounds.size < wound_bytes)
+                {
+                    if (frame.wounds.handle) vk::buffer::destroy(frame.wounds);
+                    frame.wounds = vk::buffer::create(
+                        wound_bytes, vk::BufferUsageFlagBits::eStorageBuffer,
+                        vk::MemoryPropertyFlagBits::eHostVisible |
+                            vk::MemoryPropertyFlagBits::eHostCoherent
+                    );
+                }
             }
         }
         const auto size = mesh.bounds.size() * sizeof(mesh.bounds.front());
@@ -1173,7 +1225,7 @@ namespace clt::scene_renderer
                 const auto count = std::max<std::size_t>(1, meshes.size()) *
                     std::max<std::size_t>(1, vk::swapchain::get()->images.size());
                 std::array<vk::DescriptorPoolSize, 2> pool_sizes{{
-                    {vk::DescriptorType::eStorageBuffer, std::uint32_t(count * 6)},
+                    {vk::DescriptorType::eStorageBuffer, std::uint32_t(count * 7)},
                     {vk::DescriptorType::eCombinedImageSampler, std::uint32_t(count * 8)}
                 }};
 
@@ -1381,6 +1433,34 @@ namespace clt::scene_renderer
             }
         }
 
+        // Four persistent UV wounds per skinned instance. This buffer is updated
+        // only for skinned meshes, leaving static-world instance costs unchanged.
+        const auto active_wounds = weapon::impact_wounds();
+        std::unordered_map<std::uint32_t, wound_data> wound_map;
+        wound_map.reserve(active_wounds.size());
+        for (const auto& wound : active_wounds)
+        {
+            auto& data = wound_map[wound.target];
+            for (std::size_t i = 1; i < data.marks.size(); ++i)
+                data.marks[i - 1] = data.marks[i];
+            data.marks.back() = {wound.uv.x, wound.uv.y,
+                                 wound.radius, wound.strength};
+        }
+        for (auto& mesh : data.meshes)
+        {
+            if (!mesh.joint_count || mesh.instances.empty()) continue;
+            auto& frame = mesh.frames.at(image);
+            if (!frame.wounds.handle) continue;
+            std::vector<wound_data> marks(mesh.instances.size());
+            for (std::size_t i = 0; i < mesh.instances.size(); ++i)
+            {
+                const auto found = wound_map.find(mesh.instances[i].id);
+                if (found != wound_map.end()) marks[i] = found->second;
+            }
+            vk::buffer::write(frame.wounds, marks.data(),
+                              marks.size() * sizeof(marks.front()));
+        }
+
         for (const auto& item : weapon_draws)
         {
             auto found = std::find_if(
@@ -1586,6 +1666,11 @@ namespace clt::scene_renderer
         {
             vk::buffer::destroy(data.vat_fallback);
             data.vat_fallback = {};
+        }
+        if (data.wound_fallback.handle)
+        {
+            vk::buffer::destroy(data.wound_fallback);
+            data.wound_fallback = {};
         }
         texture::shutdown();
         if (data.instance_layout)
