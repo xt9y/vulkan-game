@@ -7,7 +7,9 @@
 #include <fastgltf/types.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -227,6 +229,53 @@ namespace srv::assets
                         vertex.normal = length_squared > 1e-12f ?
                             vertex.normal * (1.0f / std::sqrt(length_squared)) :
                             vk::util::math::vec3{0, 1, 0};
+                    }
+                }
+
+                // Some model parts have no usable TEXCOORD_0. Assign a
+                // deterministic planar chart so impacts can leave localized
+                // UV stains instead of painting every fragment at (0,0).
+                float low_u=std::numeric_limits<float>::infinity();
+                float low_v=low_u;
+                float high_u=-low_u,high_v=-low_u;
+                for(const auto& vertex:mesh.vertices)
+                {
+                    low_u=std::min(low_u,vertex.u);
+                    low_v=std::min(low_v,vertex.v);
+                    high_u=std::max(high_u,vertex.u);
+                    high_v=std::max(high_v,vertex.v);
+                }
+                if(u==primitive.attributes.end() ||
+                   (high_u-low_u<1e-6f && high_v-low_v<1e-6f))
+                {
+                    using vec3=vk::util::math::vec3;
+                    const auto component=[](vec3 p,int axis)
+                    {
+                        return axis==0?p.x:(axis==1?p.y:p.z);
+                    };
+                    std::array<float,3> lo{
+                        mesh.vertices.front().position.x,
+                        mesh.vertices.front().position.y,
+                        mesh.vertices.front().position.z};
+                    auto hi=lo;
+                    for(const auto& vertex:mesh.vertices)
+                        for(int axis=0;axis<3;++axis)
+                        {
+                            const auto value=component(vertex.position,axis);
+                            lo[axis]=std::min(lo[axis],value);
+                            hi[axis]=std::max(hi[axis],value);
+                        }
+                    std::array<int,3> axes{0,1,2};
+                    std::sort(axes.begin(),axes.end(),[&](int a,int b)
+                    {
+                        return hi[a]-lo[a]>hi[b]-lo[b];
+                    });
+                    for(auto& vertex:mesh.vertices)
+                    {
+                        vertex.u=(component(vertex.position,axes[0])-lo[axes[0]])/
+                            std::max(hi[axes[0]]-lo[axes[0]],1e-6f)*.98f+.01f;
+                        vertex.v=(component(vertex.position,axes[1])-lo[axes[1]])/
+                            std::max(hi[axes[1]]-lo[axes[1]],1e-6f)*.98f+.01f;
                     }
                 }
 
