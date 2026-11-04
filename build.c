@@ -10,8 +10,8 @@
 static void compile_shaders(void)
 {
     static const char* sources[] = {
-        "shd/mesh.vert", "shd/mesh.frag", "shd/cull.comp",
-        "shd/light.comp", "shd/tone.comp",
+        "shd/mesh.vert", "shd/cull.comp",
+        "shd/tone.comp",
         "shd/fullscreen.vert", "shd/present.frag"
     };
 #ifdef _WIN32
@@ -66,7 +66,7 @@ void build(C_Build* b)
 
     C_Dependency* blood =
         c_git(b, "VulkanBlood", "https://github.com/xt9y/vulkan-systems.git",
-              "4bf36d1cd629e574bd9f9147987aaa1abf1a0c71");
+              "05df2505bcd12e71e219f4ae668e02b6a7abc491");
     c_dep_subdir(blood, "blood");
     c_dep_cbuild(blood, "VulkanBlood", C_TARGET_STATIC_LIBRARY);
     c_dep_include(blood, ".");
@@ -159,6 +159,12 @@ void build(C_Build* b)
     c_use(client, engine);
     c_use(client, blood);
     c_use(client, headers);
+    c_generate(client, "build/shaders/mesh.frag.spv", "shd/mesh.frag",
+               "glslangValidator -V -I@VulkanBlood@/bld/shaders "
+               "shd/mesh.frag -o build/shaders/mesh.frag.spv");
+    c_generate(client, "build/shaders/light.comp.spv", "shd/light.comp",
+               "glslangValidator -V -I@VulkanBlood@/bld/shaders "
+               "shd/light.comp -o build/shaders/light.comp.spv");
     c_generate(client, "build/shaders/blood.comp.spv",
                "@VulkanBlood@/bld/shaders/decal.comp",
                "glslangValidator -V @VulkanBlood@/bld/shaders/decal.comp "

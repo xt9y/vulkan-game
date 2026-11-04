@@ -4,7 +4,7 @@
 #include "scene_renderer.hpp"
 #include "postprocess.hpp"
 #include "passes.hpp"
-#include "impact_decal.hpp"
+#include "blood.hpp"
 #include "upload.hpp"
 
 #include "clt/platform/vulkan_loader.hpp"
@@ -253,7 +253,7 @@ namespace clt::renderer
 
         passes::release();
         postprocess::release();
-        impact_decal::release();
+        blood::release();
         scene_renderer::release_frame_resources();
         scene_renderer::reset_scene();
         data.image_in_flight.clear();
@@ -318,7 +318,7 @@ namespace clt::renderer
         info.clipped = true;
         vk::swapchain::init(info);
         scene_renderer::create_frame_resources();
-        impact_decal::create();
+        blood::create();
         postprocess::create();
         passes::create();
 
@@ -476,7 +476,7 @@ namespace clt::renderer
 
             passes::release();
             postprocess::release();
-            impact_decal::release();
+            blood::release();
             scene_renderer::shutdown();
 
             vk::command::shutdown();

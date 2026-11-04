@@ -1,7 +1,7 @@
 #include "passes.hpp"
 #include "postprocess.hpp"
 #include "scene_renderer.hpp"
-#include "impact_decal.hpp"
+#include "blood.hpp"
 
 #include <stdexcept>
 #include <vector>
@@ -58,8 +58,8 @@ namespace clt::passes
         static const std::array<description, 5> list{{
             {"geometry", vk::PipelineBindPoint::eGraphics, resource::scene,
                 resource::gbuffer, scene_renderer::draw},
-            {"impact decals", vk::PipelineBindPoint::eCompute, resource::gbuffer,
-                resource::overlay, impact_decal::record},
+            {"blood", vk::PipelineBindPoint::eCompute, resource::gbuffer,
+                resource::overlay, blood::record},
             {"lighting", vk::PipelineBindPoint::eCompute,
                 resource::gbuffer | resource::overlay,
                 resource::hdr, postprocess::lighting},

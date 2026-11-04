@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec3 world_normal;
 layout(location = 1) in vec2 uv;
@@ -14,12 +15,6 @@ layout(set = 0, binding = 6) uniform sampler2D normal_texture;
 layout(set = 0, binding = 7) uniform sampler2D occlusion_texture;
 layout(set = 0, binding = 8) uniform sampler2D emissive_texture;
 
-// Per-instance 128 x 128 UV wound atlas, four R8 texels per packed uint.
-layout(std430, set = 0, binding = 14) readonly buffer WoundBuffer
-{
-    uint wound_pixels[];
-};
-
 layout(push_constant) uniform Draw
 {
     mat4 view_projection;
@@ -30,30 +25,11 @@ layout(push_constant) uniform Draw
     uint wound_enabled;
 } pc;
 
+#include "wound.glsl"
+
 vec3 linear_color(vec3 srgb)
 {
     return pow(max(srgb, vec3(0.0)), vec3(2.2));
-}
-
-vec2 wound_texel(ivec2 xy)
-{
-    xy = clamp(xy, ivec2(0), ivec2(127));
-    uint linear = uint(xy.y * 128 + xy.x);
-    uint word = wound_pixels[wound_instance * 4096u + linear / 4u];
-    uint bits = (word >> ((linear & 3u) * 8u)) & 255u;
-    return vec2(float(bits >> 4u), float(bits & 15u)) / 15.0;
-}
-
-vec2 wound_sample(vec2 coord)
-{
-    vec2 p = clamp(coord, vec2(0), vec2(1)) * 127.0;
-    ivec2 a = ivec2(floor(p));
-    vec2 f = fract(p);
-    vec2 aa = wound_texel(a);
-    vec2 ba = wound_texel(a + ivec2(1, 0));
-    vec2 ab = wound_texel(a + ivec2(0, 1));
-    vec2 bb = wound_texel(a + ivec2(1, 1));
-    return mix(mix(aa, ba, f.x), mix(ab, bb, f.x), f.y);
 }
 
 void main()
@@ -65,10 +41,6 @@ void main()
         vec4 texel = texture(base_texture, uv);
         base *= vec4(linear_color(texel.rgb), texel.a);
     }
-    // Atlas marks are painted once per actor and follow skinned UVs.
-    vec2 wound = pc.wound_enabled != 0u ? wound_sample(uv) : vec2(0);
-    float coverage = clamp(wound.x, 0.0, 1.0);
-    float wetness = clamp(wound.y, 0.0, 1.0);
     int alpha = (flags >> 5) & 3;
     if (alpha == 1 && base.a < pc.surface.w) discard;
     // Deferred fallback for alpha-blended materials. True transmission
@@ -108,14 +80,8 @@ void main()
         }
     }
 
-    if (coverage > 0.0)
-    {
-        const vec3 dry = vec3(.055, .009, .007);
-        const vec3 fresh = vec3(.17, .006, .012);
-        base.rgb = mix(base.rgb, mix(dry, fresh, wetness), coverage * .94);
-        roughness = mix(roughness, mix(.81, .13, wetness), coverage);
-        metallic = mix(metallic, 0.0, coverage);
-    }
+    if (pc.wound_enabled != 0u)
+        bld_wound_material(uv, 128, base.rgb, roughness);
 
     float ao = pc.surface.z;
     if ((flags & 8) != 0) ao *= texture(occlusion_texture, uv).r;

@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(set=0,binding=0) uniform sampler2D g_albedo;
 layout(set=0,binding=1) uniform sampler2D g_normal;
@@ -16,6 +17,8 @@ layout(push_constant) uniform Controls
     vec4 ambient;
     vec4 sky;
 } pc;
+
+#include "composite.glsl"
 
 const float PI = 3.14159265359;
 
@@ -55,20 +58,16 @@ void main()
     }
 
     vec3 albedo = texelFetch(g_albedo, p, 0).rgb;
-    vec4 blood = texelFetch(g_blood, p, 0);
-    albedo = mix(albedo, blood.rgb, blood.a);
+    vec4 surface = texelFetch(g_material, p, 0);
+    float roughness = clamp(surface.r, 0.045, 1.0);
+    float metallic = clamp(surface.g, 0.0, 1.0);
+    bld_composite_blood(texelFetch(g_blood, p, 0), albedo, roughness, metallic);
     if (pc.enabled == 0)
     {
         imageStore(hdr, p, vec4(albedo, 1.0));
         return;
     }
     vec3 N = normalize(texelFetch(g_normal, p, 0).rgb * 2.0 - 1.0);
-    vec4 surface = texelFetch(g_material, p, 0);
-    // Fresh blood is wet/glossy; older stains turn dark and matte.
-    float bloodWetness = clamp((blood.r - .045) / .12, 0.0, 1.0);
-    float roughness = mix(clamp(surface.r, 0.045, 1.0),
-                          mix(.79, .14, bloodWetness), blood.a);
-    float metallic = mix(clamp(surface.g, 0.0, 1.0), 0.0, blood.a);
     float ao = surface.b;
     vec3 V = normalize(pc.view_direction.xyz);
     vec3 L = normalize(pc.sun.xyz);

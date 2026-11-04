@@ -1,7 +1,7 @@
 #include "postprocess.hpp"
 #include "srv/game/options.hpp"
 #include "scene_renderer.hpp"
-#include "impact_decal.hpp"
+#include "blood.hpp"
 #include "clt/view/camera.hpp"
 
 #include <algorithm>
@@ -426,7 +426,7 @@ namespace clt::postprocess
                         vk::ImageLayout::eShaderReadOnlyOptimal;
                 }
                 lighting[4].sampler = data.sampler;
-                lighting[4].imageView = impact_decal::overlay_view(i);
+                lighting[4].imageView = blood::overlay(i);
                 lighting[4].imageLayout = vk::ImageLayout::eGeneral;
                 lighting[5].imageView = current.hdr.view;
                 lighting[5].imageLayout = vk::ImageLayout::eGeneral;
