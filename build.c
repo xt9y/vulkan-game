@@ -66,7 +66,7 @@ void build(C_Build* b)
 
     C_Dependency* blood =
         c_git(b, "VulkanBlood", "https://github.com/xt9y/vulkan-systems.git",
-              "vulkan-fluids-v2");
+              "vulkan-fluids-v3");
     c_dep_subdir(blood, "blood");
     c_dep_cbuild(blood, "VulkanBlood", C_TARGET_STATIC_LIBRARY);
     c_dep_include(blood, ".");
@@ -78,7 +78,7 @@ void build(C_Build* b)
     // does not contain the object code from its own VulkanFluid dependency.
     C_Dependency* fluid =
         c_git(b, "VulkanFluid", "https://github.com/xt9y/vulkan-systems.git",
-              "vulkan-fluids-v2");
+              "vulkan-fluids-v3");
     c_dep_subdir(fluid, "fluid");
     c_dep_cbuild(fluid, "VulkanFluid", C_TARGET_STATIC_LIBRARY);
     c_dep_include(fluid, ".");
