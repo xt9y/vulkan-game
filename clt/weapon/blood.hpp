@@ -18,6 +18,7 @@ namespace clt::blood
         vec3 position{}, velocity{};
         float radius = .01f, age = 0, lifetime = 2;
         std::uint32_t seed = 1;
+        ::weapon::impact_type type = ::weapon::impact_type::flesh;
     };
 
     struct stain

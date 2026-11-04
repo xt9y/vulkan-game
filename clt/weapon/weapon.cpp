@@ -1003,11 +1003,14 @@ namespace clt::weapon
                             blood::decal_transform(pool.position, pool.normal,
                                 pool.radius, pool.angle)));
             }
-            else if (mesh.id == blood_drop_id)
+            else if (mesh.id >= blood_drop_id &&
+                     mesh.id <= blood_drop_id + std::uint32_t(::weapon::impact_type::glass))
             {
+                const auto kind = ::weapon::impact_type(mesh.id - blood_drop_id);
                 for (const auto& drop : d.blood_effects.drops)
-                    item.instances.push_back(instance(
-                        blood::drop_transform(drop.position, drop.radius)));
+                    if (drop.type == kind)
+                        item.instances.push_back(instance(
+                            blood::drop_transform(drop.position, drop.radius)));
             }
             else if (mesh.id == hole_id)
             {
@@ -1088,7 +1091,9 @@ namespace clt::weapon
     {
         if (mesh_id >= blood_stain_id && mesh_id < blood_stain_id + 5)
             return 2048 + 64;
-        if (mesh_id == blood_drop_id) return 1024;
+        if (mesh_id >= blood_drop_id &&
+            mesh_id <= blood_drop_id + std::uint32_t(::weapon::impact_type::glass))
+            return 1024;
         return 192;
     }
 

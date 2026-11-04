@@ -68,12 +68,38 @@ namespace clt::blood
             return mesh;
         }
 
-        ::scene::mesh droplet_mesh(std::uint32_t id)
+        ::scene::mesh droplet_mesh(std::uint32_t id, ::weapon::impact_type type)
         {
             ::scene::mesh mesh;
             mesh.id = id;
-            mesh.surface.base_color = {.22f, .004f, .009f, 1};
-            mesh.surface.roughness = .13f;
+            switch (type)
+            {
+                case ::weapon::impact_type::default_surface:
+                    mesh.surface.base_color = {.22f, .21f, .20f, 1};
+                    mesh.surface.roughness = 1;
+                    break;
+                case ::weapon::impact_type::flesh:
+                    mesh.surface.base_color = {.22f, .004f, .009f, 1};
+                    mesh.surface.roughness = .13f;
+                    break;
+                case ::weapon::impact_type::metal:
+                    mesh.surface.base_color = {.85f, .48f, .07f, 1};
+                    mesh.surface.emissive = {6.f, 2.f, .2f};
+                    mesh.surface.roughness = .25f;
+                    break;
+                case ::weapon::impact_type::stone:
+                    mesh.surface.base_color = {.32f, .33f, .34f, 1};
+                    mesh.surface.roughness = .95f;
+                    break;
+                case ::weapon::impact_type::wood:
+                    mesh.surface.base_color = {.35f, .15f, .055f, 1};
+                    mesh.surface.roughness = .88f;
+                    break;
+                case ::weapon::impact_type::glass:
+                    mesh.surface.base_color = {.6f, .78f, .87f, 1};
+                    mesh.surface.roughness = .04f;
+                    break;
+            }
             mesh.surface.metallic = 0;
             mesh.surface.double_sided = true;
 
@@ -176,7 +202,8 @@ namespace clt::blood
             }
             scene.meshes.push_back(decal_mesh(first_decal + i, i, textured));
         }
-        scene.meshes.push_back(droplet_mesh(drop_mesh_id));
+        for (std::uint32_t i = 0; i <= std::uint32_t(::weapon::impact_type::glass); ++i)
+            scene.meshes.push_back(droplet_mesh(drop_mesh_id + i, ::weapon::impact_type(i)));
     }
 
     void system::spawn(const net::impact::event& effect)
@@ -189,23 +216,30 @@ namespace clt::blood
         const auto right = normalize(cross(n, guide));
         const auto up = cross(right, n);
 
-        // Impact mark on the wounded static surface and a surrounding scatter.
-        stain_at(*this, effect.position, n, .12f, seed);
-        for (int i = 0; i < 4; ++i)
+        const bool bleeding = effect.type == ::weapon::impact_type::flesh;
+        if (bleeding)
         {
-            auto offset = right * ((unit(seed) - .5f) * .28f) +
-                          up * ((unit(seed) - .5f) * .28f);
-            stain_at(*this, effect.position + offset, n,
-                .035f + unit(seed) * .085f, seed);
+            stain_at(*this, effect.position, n, .12f, seed);
+            for (int i = 0; i < 4; ++i)
+            {
+                const auto offset = right * ((unit(seed) - .5f) * .28f) +
+                                    up * ((unit(seed) - .5f) * .28f);
+                stain_at(*this, effect.position + offset, n,
+                    .035f + unit(seed) * .085f, seed);
+            }
         }
 
+        const float amount = bleeding ? 140.f :
+            effect.type == ::weapon::impact_type::metal ? 32.f :
+            effect.type == ::weapon::impact_type::glass ? 48.f : 25.f;
         const auto count = std::uint32_t(std::clamp(
-            140.f * effect.intensity, 24.f, 180.f));
+            amount * effect.intensity, 6.f, 180.f));
         for (std::uint32_t i = 0; i < count; ++i)
         {
             const float x = unit(seed) * 2 - 1;
             const float y = unit(seed) * 2 - 1;
-            const float speed = 1.3f + unit(seed) * 6.5f;
+            const float speed = (bleeding ? 1.3f : 2.5f) +
+                unit(seed) * (bleeding ? 6.5f : 8.0f);
             const auto direction = normalize(
                 n * .85f + through * .25f +
                 right * x * 1.2f + up * y * 1.2f
@@ -214,10 +248,13 @@ namespace clt::blood
             drops.push_back({
                 effect.position + n * .035f,
                 direction * speed + vec3{0, unit(seed) * 1.5f, 0},
-                .003f + unit(seed) * .012f,
+                (bleeding ? .003f : .0015f) +
+                    unit(seed) * (bleeding ? .012f : .007f),
                 0,
-                .55f + unit(seed) * 1.7f,
-                random(seed)
+                (bleeding ? .55f : .18f) +
+                    unit(seed) * (bleeding ? 1.7f : .8f),
+                random(seed),
+                effect.type
             });
         }
     }
@@ -240,17 +277,20 @@ namespace clt::blood
                     const auto hit = collision.trace(d.position, delta / length, length);
                     if (hit.impacted)
                     {
-                        auto seed = d.seed;
-                        stain_at(*this, hit.position, hit.normal,
-                            .023f + unit(seed) * .1f, seed);
-                        if (hit.normal.y > .8f && pools.size() < 64 &&
-                            unit(seed) > .75f)
+                        if (d.type == ::weapon::impact_type::flesh)
                         {
-                            pools.push_back({
-                                hit.position, hit.normal, .035f,
-                                .12f + unit(seed) * .2f, 0,
-                                unit(seed) * 6.2831853f, random(seed) % 5u
-                            });
+                            auto seed = d.seed;
+                            stain_at(*this, hit.position, hit.normal,
+                                .023f + unit(seed) * .1f, seed);
+                            if (hit.normal.y > .8f && pools.size() < 64 &&
+                                unit(seed) > .75f)
+                            {
+                                pools.push_back({
+                                    hit.position, hit.normal, .035f,
+                                    .12f + unit(seed) * .2f, 0,
+                                    unit(seed) * 6.2831853f, random(seed) % 5u
+                                });
+                            }
                         }
                         d.age = d.lifetime;
                         break;
