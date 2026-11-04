@@ -93,6 +93,7 @@ namespace clt::scene_renderer
             std::array<vec4, 6> last_gpu_planes{};
             bool gpu_planes_valid = false;
             std::uint32_t last_image = 0;
+            mat4 last_world_view_projection = mat4::identity();
             std::uint32_t last_animation_tick = UINT32_MAX;
             std::chrono::steady_clock::time_point animation_received{};
 
@@ -589,6 +590,11 @@ namespace clt::scene_renderer
         return result;
     }
 
+
+    mat4 world_view_projection()
+    {
+        return get().last_world_view_projection;
+    }
 
     gbuffer outputs(std::uint32_t image)
     {
@@ -1240,6 +1246,7 @@ namespace clt::scene_renderer
         const float aspect = float(extent.width) / float(extent.height);
         const auto view_projection =
             perspective(camera.pose.fov, aspect, 0.1f, 1000.0f) * camera.view;
+        data.last_world_view_projection = view_projection;
         const auto weapon_view_projection = weapon::view_projection(aspect, camera.view);
 
         std::array<vk::ClearValue, 4> clear{};
