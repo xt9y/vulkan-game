@@ -12,7 +12,7 @@ namespace net::weapon
         header(const std::uint8_t* p, std::size_t size, std::size_t expected, std::uint8_t kind)
         {
             return p && size == expected && p[0] == 'V' && p[1] == 'G' && p[2] == 'U' &&
-                   p[3] == 'N' && p[4] == 2 && p[5] == kind && !p[6] && !p[7];
+                   p[3] == 'N' && p[4] == 4 && p[5] == kind && !p[6] && !p[7];
         }
 
         void write_state(std::uint8_t* p, const snapshot& v)
@@ -61,7 +61,7 @@ namespace net::weapon
 
     command_packet encode_command(const command& v)
     {
-        command_packet p{'V', 'G', 'U', 'N', 2, 1, 0, 0};
+        command_packet p{'V', 'G', 'U', 'N', 4, 1, 0, 0};
         put(p.data() + 8, v.token);
         put(p.data() + 12, v.sequence);
         put(p.data() + 16, std::uint32_t(v.kind));
@@ -91,7 +91,7 @@ namespace net::weapon
 
     snapshot_packet encode_snapshot(const snapshot& v)
     {
-        snapshot_packet p{'V', 'G', 'U', 'N', 2, 2, 0, 0};
+        snapshot_packet p{'V', 'G', 'U', 'N', 4, 2, 0, 0};
         write_state(p.data(), v);
         return p;
     }
@@ -107,7 +107,7 @@ namespace net::weapon
 
     shot_packet encode_shot(const shot& v)
     {
-        shot_packet p{'V', 'G', 'U', 'N', 2, 3, 0, 0};
+        shot_packet p{'V', 'G', 'U', 'N', 4, 3, 0, 0};
         write_state(p.data(), v.state);
         const auto& h = v.impact;
         put(p.data() + 56, h.impacted ? 1 : 0);
@@ -119,6 +119,7 @@ namespace net::weapon
         put_float(p.data() + 80, h.normal.z);
         put(p.data() + 84, h.instance);
         put(p.data() + 88, h.triangle);
+        put(p.data() + 92, std::uint32_t(h.type));
         return p;
     }
 
@@ -129,7 +130,7 @@ namespace net::weapon
             return std::nullopt;
         }
         const auto state = read_state(p);
-        if (!state || get(p + 56) > 1)
+        if (!state || get(p + 56) > 1 || get(p + 92) > std::uint32_t(::weapon::impact_type::glass))
         {
             return std::nullopt;
         }
@@ -139,7 +140,8 @@ namespace net::weapon
              {get_float(p + 60), get_float(p + 64), get_float(p + 68)},
              {get_float(p + 72), get_float(p + 76), get_float(p + 80)},
              get(p + 84),
-             get(p + 88)}
+             get(p + 88),
+             ::weapon::impact_type(get(p + 92))}
         };
         const auto& h = v.impact;
         auto finite = [](float x)

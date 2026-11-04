@@ -1,8 +1,10 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec3 world_normal;
 layout(location = 1) in vec2 uv;
 layout(location = 2) in vec3 world_position;
+layout(location = 3) flat in uint wound_instance;
 layout(location = 0) out vec4 out_albedo;
 layout(location = 1) out vec4 out_normal;
 layout(location = 2) out vec4 out_material;
@@ -20,7 +22,10 @@ layout(push_constant) uniform Draw
     vec4 surface;
     vec4 emissive;
     uint joints_per_instance;
+    uint wound_enabled;
 } pc;
+
+#include "wound.glsl"
 
 vec3 linear_color(vec3 srgb)
 {
@@ -74,6 +79,9 @@ void main()
             N = normalize(mat3(T, B, N) * map_normal);
         }
     }
+
+    if (pc.wound_enabled != 0u)
+        bld_wound_material(uv, 128, wound_instance, base.rgb, roughness);
 
     float ao = pc.surface.z;
     if ((flags & 8) != 0) ao *= texture(occlusion_texture, uv).r;

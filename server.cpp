@@ -5,6 +5,8 @@
 #include "srv/shared/player/movement.hpp"
 #include "srv/shared/scene/scene.hpp"
 #include "srv/shared/weapon/metadata.hpp"
+#include "srv/shared/weapon/hitbox.hpp"
+#include <limits>
 
 #include <algorithm>
 #include <atomic>
@@ -125,8 +127,54 @@ int main(int argc, char** argv)
                 auto origin = event.player.position;
                 origin.y += player::parameters().height;
                 const auto direction = weapon::direction(event.command.yaw, event.command.pitch);
-                const auto impact = event.world.trace(origin, direction, event.definition.range);
-                // Apply game damage, decals, scoring or other impact rules here.
+                auto impact = event.world.trace(origin, direction, event.definition.range);
+                const auto actor = weapon::hitbox::trace(
+                    origin, direction, event.definition.range, event.impact_capsules);
+                const auto distance = [&](const weapon::hit& h)
+                {
+                    return h.impacted
+                        ? vk::util::math::length_squared(h.position - origin)
+                        : std::numeric_limits<float>::infinity();
+                };
+                if (distance(actor) < distance(impact)) impact = actor;
+                if (impact.impacted)
+                {
+                    const auto found = event.impact_instances.find(impact.instance);
+                    if (found != event.impact_instances.end()) impact.type = found->second;
+                    if (impact.type == weapon::impact_type::flesh && !impact.uv_valid)
+                    {
+                        // Approximate a UV-space wound from the bind-pose vertices.
+                        // The wound then follows the model's animated UV surface.
+                        const auto& scene = srv::application::get()->scene;
+                        const auto instance = std::find_if(scene.instances.begin(), scene.instances.end(),
+                            [&](const ::scene::instance& item) { return item.id == impact.instance; });
+                        if (instance != scene.instances.end())
+                        {
+                            const auto mesh = std::find_if(scene.meshes.begin(), scene.meshes.end(),
+                                [&](const ::scene::mesh& item) { return item.id == instance->mesh_id; });
+                            if (mesh != scene.meshes.end())
+                            {
+                                float nearest = std::numeric_limits<float>::infinity();
+                                for (const auto& vertex : mesh->vertices)
+                                {
+                                    const auto& s = instance->pose.scale;
+                                    const auto point = instance->pose.position +
+                                        vk::util::math::rotate(instance->pose.rotation,
+                                            {vertex.position.x * s.x, vertex.position.y * s.y,
+                                             vertex.position.z * s.z});
+                                    const float distance = vk::util::math::length_squared(
+                                        point - impact.position);
+                                    if (distance < nearest)
+                                    {
+                                        nearest = distance;
+                                        impact.uv = {vertex.u, vertex.v};
+                                        impact.uv_valid = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 return impact;
             }
         );
@@ -180,8 +228,10 @@ int main(int argc, char** argv)
                            );
         // The source conversion faces +Z, toward the player spawn.
         mermaid.scale = {1.5, 1.5, 1.5};
-        srv::application::load_model("assets/mermaid/mermaid.glb", mermaid, 0);
+        srv::application::load_model("assets/mermaid/mermaid.glb", mermaid, 0, weapon::impact_type::flesh);
         srv::application::set_scene(std::move(initial_scene));
+        srv::application::set_mesh_impact(1, weapon::impact_type::stone);
+        srv::application::set_mesh_impact(2, weapon::impact_type::metal);
 
         // Game-owned asset declarations; imported meshes and animations stream to clients.
         // ::scene::transform hallway{};

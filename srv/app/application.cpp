@@ -12,6 +12,8 @@
 #include "srv/shared/net/scene_stream.hpp"
 #include "srv/shared/net/socket.hpp"
 #include "srv/shared/net/weapon.hpp"
+#include <bld/network/events.hpp>
+#include "srv/shared/net/movement.hpp"
 #include "srv/shared/player/movement.hpp"
 
 #include <algorithm>
@@ -66,12 +68,28 @@ namespace srv::application
     }
 
     void load_model(std::filesystem::path path, ::scene::transform pose,
-                    std::uint32_t animation)
+                    std::uint32_t animation, ::weapon::impact_type impact)
     {
         if (get()->initialized) throw std::runtime_error("Register model imports before init");
         if (path.empty() || !std::filesystem::is_regular_file(path))
             throw std::runtime_error("Model file not found: " + path.string());
-        get()->models.push_back({std::move(path), pose, animation});
+        get()->models.push_back({std::move(path), pose, animation, impact});
+    }
+
+    void set_mesh_impact(std::uint32_t mesh_id, ::weapon::impact_type type)
+    {
+        if (get()->initialized) throw std::runtime_error("Set impact types before init");
+        if (!mesh_id || std::uint8_t(type) > std::uint8_t(::weapon::impact_type::glass))
+            throw std::invalid_argument("Invalid impact mesh configuration");
+        get()->impact_meshes[mesh_id] = type;
+    }
+
+    void set_instance_impact(std::uint32_t instance_id, ::weapon::impact_type type)
+    {
+        if (get()->initialized) throw std::runtime_error("Set impact types before init");
+        if (!instance_id || std::uint8_t(type) > std::uint8_t(::weapon::impact_type::glass))
+            throw std::invalid_argument("Invalid impact instance configuration");
+        get()->impact_instances[instance_id] = type;
     }
 
     void add_weapon(::weapon::definition definition)
@@ -104,6 +122,13 @@ namespace srv::application
         get()->options = *game::options::get();
         get()->socket = net::socket::create(get()->options.port, get()->options.bind_host);
         session::init();
+        for (const auto& instance : get()->scene.instances)
+        {
+            if (get()->impact_instances.contains(instance.id)) continue;
+            const auto found = get()->impact_meshes.find(instance.mesh_id);
+            if (found != get()->impact_meshes.end())
+                get()->impact_instances.emplace(instance.id, found->second);
+        }
         get()->colliders = player::build_colliders(get()->scene);
         get()->collision_index = player::build_index(get()->colliders);
         get()->weapon_world.append(get()->scene.meshes, get()->scene.instances);
@@ -123,6 +148,7 @@ namespace srv::application
             if (!generation::submit([requests = std::move(requests)]() -> generation::completion
             {
                 ::scene::state combined;
+                std::vector<std::pair<std::uint32_t, ::weapon::impact_type>> impact_ids;
                 auto mesh_id = std::uint32_t(1);
                 auto instance_id = std::uint32_t(1);
                 auto texture_id = std::uint32_t(1);
@@ -161,6 +187,8 @@ namespace srv::application
                         }
                         instance.pose = request.pose;
                         instance.animation = request.animation;
+                        if (request.impact != ::weapon::impact_type::default_surface)
+                            impact_ids.push_back({instance.id, request.impact});
                     }
                     std::cout << "srv: imported " << request.path.string() << " ("
                               << imported.meshes.size() << " meshes, "
@@ -187,9 +215,11 @@ namespace srv::application
                         std::make_move_iterator(imported.skins.begin()),
                         std::make_move_iterator(imported.skins.end()));
                 }
-                return [imported = std::make_shared<::scene::state>(std::move(combined))]() mutable
+                return [imported = std::make_shared<::scene::state>(std::move(combined)),
+                        impact_ids = std::move(impact_ids)]() mutable
                 {
                     get()->importing = std::move(imported);
+                    get()->impact_instances.insert(impact_ids.begin(), impact_ids.end());
                     get()->next_texture = 0;
                     get()->next_skin = 0;
                     get()->next_mesh = 0;
@@ -236,6 +266,43 @@ namespace srv::application
         for (auto& mesh : patch.meshes)
         {
             data.scene.meshes.push_back(std::move(mesh));
+        }
+
+        // Static triangle collisions exclude skinned meshes. Attach a conservative
+        // capsule to each streamed flesh-skinned mesh as an initial hit volume.
+        for (const auto& instance : patch.instances)
+        {
+            const auto impact = data.impact_instances.find(instance.id);
+            if (impact == data.impact_instances.end()) continue;
+            const auto mesh = std::find_if(data.scene.meshes.begin(), data.scene.meshes.end(),
+                [&](const ::scene::mesh& entry) { return entry.id == instance.mesh_id; });
+            if (mesh == data.scene.meshes.end() || !mesh->skin_id || mesh->vertices.empty())
+                continue;
+            auto lo = mesh->vertices.front().position;
+            auto hi = lo;
+            for (const auto& vertex : mesh->vertices)
+            {
+                const auto p = vertex.position;
+                lo = {std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z)};
+                hi = {std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z)};
+            }
+            const auto center = vk::util::math::vec3{(lo.x + hi.x) * .5f, 0, (lo.z + hi.z) * .5f};
+            const auto s = instance.pose.scale;
+            const auto move = [&](vk::util::math::vec3 p)
+            {
+                return instance.pose.position + vk::util::math::rotate(instance.pose.rotation,
+                    vk::util::math::vec3{p.x * s.x, p.y * s.y, p.z * s.z});
+            };
+            const float radius = std::max(.06f,
+                std::max((hi.x - lo.x) * std::abs(s.x),
+                         (hi.z - lo.z) * std::abs(s.z)) * .45f);
+            const float inset = std::min(radius, (hi.y - lo.y) * std::abs(s.y) * .4f) /
+                std::max(std::abs(s.y), .001f);
+            data.impact_capsules.push_back({
+                move({center.x, lo.y + inset, center.z}),
+                move({center.x, hi.y - inset, center.z}),
+                radius, instance.id, impact->second
+            });
         }
 
         // Only the new geometry needs collision bounds and a new BVH root.
@@ -459,6 +526,10 @@ namespace srv::application
         get()->scene_batches.clear();
         get()->colliders.clear();
         get()->weapon_world = {};
+        get()->impact_instances.clear();
+        get()->impact_meshes.clear();
+        get()->impact_capsules.clear();
+        get()->next_impact_event = 0;
         get()->weapons = {};
         get()->on_weapon_command = {};
         get()->scene_hash = 0;
@@ -700,9 +771,40 @@ namespace srv::application
                             owned->state,
                             client.avatar,
                             seconds,
-                            get()->weapon_world
+                            get()->weapon_world,
+                            get()->impact_instances,
+                            get()->impact_capsules
                         };
                         const auto impact = get()->on_weapon_command(context);
+                        // Only flesh triggers replicated effects. Hard surfaces
+                        // retain the existing bullet-hole feedback, not particles.
+                        if (impact.impacted &&
+                            impact.type == ::weapon::impact_type::flesh &&
+                            owned->state.last_result == ::weapon::result::fired)
+                        {
+                            bld::impact effect{};
+                            effect.id = ++get()->next_impact_event;
+                            if (!effect.id) effect.id = ++get()->next_impact_event;
+                            effect.source = client.token;
+                            effect.target = impact.instance;
+                            effect.type = bld::material::flesh;
+                            effect.uv = impact.uv;
+                            effect.uv_valid = impact.uv_valid;
+                            effect.seed = (std::uint32_t(effect.id) * 0x9e3779b9u) ^
+                                          next.sequence;
+                            effect.position = impact.position;
+                            effect.normal = impact.normal;
+                            effect.direction = ::weapon::direction(next.yaw, next.pitch);
+                            effect.energy = 1.f;
+                            effect.tick = get()->tick;
+                            for (auto& receiver : session::get()->clients)
+                            {
+                                if (!receiver.active) continue;
+                                if (receiver.impact_events.size() >= 128)
+                                    receiver.impact_events.pop_front();
+                                receiver.impact_events.push_back({effect, 3});
+                            }
+                        }
                         if (next.kind == ::weapon::action::fire)
                         {
                             net::weapon::shot shot{
@@ -760,6 +862,21 @@ namespace srv::application
                     );
                     owned.published = update;
                 }
+                for (auto& pending : client.impact_events)
+                {
+                    const auto effect = bld::network::encode(pending.value);
+                    // Session token is an application envelope; the standalone
+                    // blood library never owns sockets or player authentication.
+                    std::array<std::uint8_t, 4 + bld::network::packet{}.size()> packet{};
+                    net::movement::detail::put(packet.data(), client.token);
+                    std::copy(effect.begin(), effect.end(), packet.begin() + 4);
+                    net::socket::send(get()->socket, client.endpoint,
+                        packet.data(), packet.size());
+                    --pending.repeats;
+                }
+                std::erase_if(client.impact_events,
+                    [](const session::resource::pending_impact& pending)
+                    { return pending.repeats == 0; });
                 for (auto& pending : client.shots)
                 {
                     const auto packet = net::weapon::encode_shot(pending.value);

@@ -4,6 +4,7 @@
 #include "srv/shared/net/movement.hpp"
 #include "srv/shared/net/socket.hpp"
 #include "srv/shared/net/weapon.hpp"
+#include <bld/network/events.hpp>
 #include "srv/shared/scene/scene.hpp"
 
 #include <atomic>
@@ -17,6 +18,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace clt::connection

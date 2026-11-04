@@ -9,6 +9,7 @@
 #include "clt/render/renderer.hpp"
 #include "clt/view/camera.hpp"
 #include "srv/game/application.hpp"
+#include <bld/bld.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -42,6 +43,8 @@ namespace clt::application
 
         get()->options = *game::options::get();
 
+        bld::system::init();
+        bld::network::init();
         connection::get()->host = get()->options.host;
         connection::get()->port = get()->options.port;
         connection::init();
@@ -180,6 +183,7 @@ namespace clt::application
 
         vulkan_loader::shutdown();
         connection::shutdown();
+        bld::system::shutdown();
         get()->initialized = false;
     }
 } // namespace clt::application

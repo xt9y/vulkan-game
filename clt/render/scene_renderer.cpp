@@ -4,6 +4,7 @@
 #include "clt/network/connection.hpp"
 #include "clt/render/texture.hpp"
 #include "clt/render/upload.hpp"
+#include <bld/bld.hpp>
 #include "clt/view/camera.hpp"
 #include "clt/weapon/weapon.hpp"
 #include "srv/game/options.hpp"
@@ -21,6 +22,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 namespace clt::scene_renderer
 {
@@ -39,6 +41,7 @@ namespace clt::scene_renderer
             std::array<float, 4> surface;
             std::array<float, 4> emissive;
             std::uint32_t joint_count = 0;
+            std::uint32_t wound_enabled = 0;
         };
         static_assert(sizeof(draw_parameters) <= 128);
 
@@ -47,6 +50,7 @@ namespace clt::scene_renderer
             ::scene::material surface;
             std::uint32_t skin_id = 0;
             std::uint32_t joint_count = 0;
+            bool has_wounds = false;
             vk::buffer::resource vertices;
             vk::buffer::resource indices;
             vk::buffer::resource instance_buffer;
@@ -90,6 +94,7 @@ namespace clt::scene_renderer
             std::array<vec4, 6> last_gpu_planes{};
             bool gpu_planes_valid = false;
             std::uint32_t last_image = 0;
+            mat4 last_world_view_projection = mat4::identity();
             std::uint32_t last_animation_tick = UINT32_MAX;
             std::chrono::steady_clock::time_point animation_received{};
 
@@ -494,19 +499,20 @@ namespace clt::scene_renderer
         auto& data = get();
         data.shaders = {vertex_path, fragment_path};
 
-        std::array<vk::DescriptorSetLayoutBinding, 10> bindings{};
+        std::array<vk::DescriptorSetLayoutBinding, 11> bindings{};
         for (std::uint32_t i = 0; i < bindings.size(); ++i)
         {
-            bindings[i].binding = i;
-            bindings[i].descriptorType = (i < 4 || i == 9) ?
+            const auto slot = i == 10 ? 14u : i;
+            bindings[i].binding = slot;
+            bindings[i].descriptorType = (slot < 4 || slot == 9 || slot == 14) ?
                 vk::DescriptorType::eStorageBuffer :
                 vk::DescriptorType::eCombinedImageSampler;
             bindings[i].descriptorCount = 1;
-            bindings[i].stageFlags = i < 4 ?
+            bindings[i].stageFlags = slot < 4 ?
                 vk::ShaderStageFlags(vk::ShaderStageFlagBits::eCompute) :
-                i == 9 ? vk::ShaderStageFlags(vk::ShaderStageFlagBits::eVertex) :
-                vk::ShaderStageFlags(vk::ShaderStageFlagBits::eFragment);
-            if (i == 0)
+                slot == 9 ? vk::ShaderStageFlags(vk::ShaderStageFlagBits::eVertex) :
+                            vk::ShaderStageFlags(vk::ShaderStageFlagBits::eFragment);
+            if (slot == 0)
                 bindings[i].stageFlags |= vk::ShaderStageFlagBits::eVertex;
         }
 
@@ -573,6 +579,11 @@ namespace clt::scene_renderer
         return result;
     }
 
+
+    mat4 world_view_projection()
+    {
+        return get().last_world_view_projection;
+    }
 
     gbuffer outputs(std::uint32_t image)
     {
@@ -647,7 +658,7 @@ namespace clt::scene_renderer
         const auto count =
             std::uint32_t(data.local_meshes.size() * vk::swapchain::get()->images.size());
         const std::array<vk::DescriptorPoolSize, 2> sizes{
-            {{vk::DescriptorType::eStorageBuffer, count * 5},
+            {{vk::DescriptorType::eStorageBuffer, count * 6},
              {vk::DescriptorType::eCombinedImageSampler, count * 5}}
         };
         vk::DescriptorPoolCreateInfo pool{};
@@ -656,28 +667,27 @@ namespace clt::scene_renderer
         pool.pPoolSizes = sizes.data();
         const auto device = vk::device::get()->handle;
         data.local_pool = device.createDescriptorPool(pool);
-        std::array<std::uint32_t, 192> identities{};
-        for (std::uint32_t i = 0; i < identities.size(); ++i)
-        {
-            identities[i] = i;
-        }
         for (auto& mesh : data.local_meshes)
         {
+            const auto capacity = weapon::instance_capacity(mesh.id);
+            std::vector<std::uint32_t> identities(capacity);
+            for (std::uint32_t i = 0; i < identities.size(); ++i)
+                identities[i] = i;
             mesh.frames.resize(vk::swapchain::get()->images.size());
             for (auto& frame : mesh.frames)
             {
                 const auto memory = vk::MemoryPropertyFlagBits::eHostVisible |
                                     vk::MemoryPropertyFlagBits::eHostCoherent;
                 frame.local_instances = vk::buffer::create(
-                    192 * sizeof(instance_data), vk::BufferUsageFlagBits::eStorageBuffer, memory
+                    capacity * sizeof(instance_data), vk::BufferUsageFlagBits::eStorageBuffer, memory
                 );
                 frame.visible = vk::buffer::create(
-                    sizeof(identities),
+                    identities.size() * sizeof(identities[0]),
                     vk::BufferUsageFlagBits::eVertexBuffer |
                         vk::BufferUsageFlagBits::eStorageBuffer,
                     memory
                 );
-                vk::buffer::write(frame.visible, identities.data(), sizeof(identities));
+                vk::buffer::write(frame.visible, identities.data(), identities.size() * sizeof(identities[0]));
                 frame.skin_palette = vk::buffer::create(
                     std::max<std::uint32_t>(1, mesh.joint_count) * sizeof(animation::matrix),
                     vk::BufferUsageFlagBits::eStorageBuffer,
@@ -692,8 +702,8 @@ namespace clt::scene_renderer
                 std::array<vk::WriteDescriptorSet, 5> writes{};
                 for (std::uint32_t i = 0; i < 5; ++i)
                 {
-                    infos[i].buffer =
-                        i == 4 ? frame.skin_palette.handle : frame.local_instances.handle;
+                    infos[i].buffer = i == 4 ? frame.skin_palette.handle :
+                        frame.local_instances.handle;
                     infos[i].range = VK_WHOLE_SIZE;
                     writes[i].dstSet = frame.set;
                     writes[i].dstBinding = i == 4 ? 9 : i;
@@ -702,6 +712,15 @@ namespace clt::scene_renderer
                     writes[i].pBufferInfo = &infos[i];
                 }
                 device.updateDescriptorSets(writes, {});
+                auto wound_info = bld::render::wound::descriptor_batch(
+                    mesh.id, {}, 0);
+                vk::WriteDescriptorSet wound_write{};
+                wound_write.dstSet = frame.set;
+                wound_write.dstBinding = 14;
+                wound_write.descriptorCount = 1;
+                wound_write.descriptorType = vk::DescriptorType::eStorageBuffer;
+                wound_write.pBufferInfo = &wound_info;
+                device.updateDescriptorSets({wound_write}, {});
                 texture::bind(frame.set, mesh.surface);
             }
         }
@@ -730,12 +749,15 @@ namespace clt::scene_renderer
         data.targets.clear();
         vk::render_pass::destroy(data.render_pass);
         data.render_pass = nullptr;
+        bld::render::wound::shutdown();
     }
 
     void create_frame_resources()
     {
         try
         {
+            bld::render::wound::init(
+                std::uint32_t(vk::swapchain::get()->images.size()));
             create_render_pass();
             for (std::size_t i = 0; i < vk::swapchain::get()->images.size(); ++i)
             {
@@ -822,6 +844,15 @@ namespace clt::scene_renderer
             palette_write.descriptorType = vk::DescriptorType::eStorageBuffer;
             palette_write.pBufferInfo = &palette_info;
             vk::device::get()->handle.updateDescriptorSets({palette_write}, {});
+            auto wound_info = bld::render::wound::descriptor_batch(
+                mesh.id, {}, 0);
+            vk::WriteDescriptorSet wound_write{};
+            wound_write.dstSet = frame.set;
+            wound_write.dstBinding = 14;
+            wound_write.descriptorCount = 1;
+            wound_write.descriptorType = vk::DescriptorType::eStorageBuffer;
+            wound_write.pBufferInfo = &wound_info;
+            vk::device::get()->handle.updateDescriptorSets({wound_write}, {});
             texture::bind(frame.set, mesh.surface);
         }
     }
@@ -1133,7 +1164,7 @@ namespace clt::scene_renderer
                 const auto count = std::max<std::size_t>(1, meshes.size()) *
                     std::max<std::size_t>(1, vk::swapchain::get()->images.size());
                 std::array<vk::DescriptorPoolSize, 2> pool_sizes{{
-                    {vk::DescriptorType::eStorageBuffer, std::uint32_t(count * 5)},
+                    {vk::DescriptorType::eStorageBuffer, std::uint32_t(count * 6)},
                     {vk::DescriptorType::eCombinedImageSampler, std::uint32_t(count * 5)}
                 }};
 
@@ -1205,6 +1236,7 @@ namespace clt::scene_renderer
         const float aspect = float(extent.width) / float(extent.height);
         const auto view_projection =
             perspective(camera.pose.fov, aspect, 0.1f, 1000.0f) * camera.view;
+        data.last_world_view_projection = view_projection;
         const auto weapon_view_projection = weapon::view_projection(aspect, camera.view);
 
         std::array<vk::ClearValue, 4> clear{};
@@ -1339,6 +1371,29 @@ namespace clt::scene_renderer
             }
         }
 
+        for (auto& mesh : data.meshes)
+        {
+            mesh.has_wounds = false;
+            if (!mesh.joint_count || mesh.instances.empty()) continue;
+
+            std::vector<bld::instance_id> actors;
+            actors.reserve(mesh.instances.size());
+            for (const auto& instance : mesh.instances)
+                actors.push_back(instance.id);
+            mesh.has_wounds = bld::render::wound::has_wounds(actors);
+            if (!mesh.has_wounds) continue;
+
+            auto wound_info = bld::render::wound::descriptor_batch(
+                mesh.id, actors, image);
+            vk::WriteDescriptorSet write{};
+            write.dstSet = mesh.frames.at(image).set;
+            write.dstBinding = 14;
+            write.descriptorCount = 1;
+            write.descriptorType = vk::DescriptorType::eStorageBuffer;
+            write.pBufferInfo = &wound_info;
+            vk::device::get()->handle.updateDescriptorSets({write}, {});
+        }
+
         for (const auto& item : weapon_draws)
         {
             auto found = std::find_if(
@@ -1354,11 +1409,16 @@ namespace clt::scene_renderer
                 continue;
             }
             auto& frame = found->frames.at(image);
-            vk::buffer::write(
-                frame.local_instances,
-                item.instances.data(),
-                item.instances.size() * sizeof(weapon::instance_data)
-            );
+            if (item.instances.size() > weapon::instance_capacity(item.mesh_id))
+                throw std::runtime_error("Local effect instance capacity exceeded");
+            if (!item.instances.empty())
+            {
+                vk::buffer::write(
+                    frame.local_instances,
+                    item.instances.data(),
+                    item.instances.size() * sizeof(weapon::instance_data)
+                );
+            }
             if (!item.palette.empty())
             {
                 vk::buffer::write(
@@ -1404,7 +1464,8 @@ namespace clt::scene_renderer
                     {m.metallic, m.roughness, m.occlusion, m.alpha_cutoff},
                     {m.emissive[0], m.emissive[1],
                      m.emissive[2], float(flags)},
-                    mesh.joint_count
+                    mesh.joint_count,
+                    mesh.has_wounds ? 1u : 0u
                 };
                 command.pushConstants(
                     data.layout, vk::ShaderStageFlagBits::eVertex |
@@ -1475,7 +1536,8 @@ namespace clt::scene_renderer
                     m.base_color,
                     {m.metallic, m.roughness, m.occlusion, m.alpha_cutoff},
                     {m.emissive[0], m.emissive[1], m.emissive[2], float(flags)},
-                    mesh.joint_count
+                    mesh.joint_count,
+                    0u
                 };
                 command.pushConstants(
                     data.layout,
