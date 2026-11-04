@@ -417,14 +417,15 @@ namespace clt::postprocess
 
                 const auto g = scene_renderer::outputs(i);
                 std::vector<vk::DescriptorImageInfo> lighting(6);
-                for (std::size_t j = 0; j < g.views.size(); ++j)
+                for (std::size_t j = 0; j < 3; ++j)
                 {
                     lighting[j].sampler = data.sampler;
                     lighting[j].imageView = g.views[j];
-                    lighting[j].imageLayout = j == 3 ?
-                        vk::ImageLayout::eDepthStencilReadOnlyOptimal :
-                        vk::ImageLayout::eShaderReadOnlyOptimal;
+                    lighting[j].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
                 }
+                lighting[3].sampler = data.sampler;
+                lighting[3].imageView = g.views[4];
+                lighting[3].imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
                 lighting[4].sampler = data.sampler;
                 lighting[4].imageView = blood::overlay(i);
                 lighting[4].imageLayout = vk::ImageLayout::eGeneral;

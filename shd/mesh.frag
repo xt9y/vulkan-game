@@ -5,9 +5,11 @@ layout(location = 0) in vec3 world_normal;
 layout(location = 1) in vec2 uv;
 layout(location = 2) in vec3 world_position;
 layout(location = 3) flat in uint wound_instance;
+layout(location = 4) flat in uint receiver_id;
 layout(location = 0) out vec4 out_albedo;
 layout(location = 1) out vec4 out_normal;
 layout(location = 2) out vec4 out_material;
+layout(location = 3) out uint out_receiver_id;
 
 layout(set = 0, binding = 4) uniform sampler2D base_texture;
 layout(set = 0, binding = 5) uniform sampler2D metallic_roughness_texture;
@@ -89,6 +91,7 @@ void main()
     if ((flags & 16) != 0)
         emission *= linear_color(texture(emissive_texture, uv).rgb);
 
+    out_receiver_id = receiver_id;
     out_albedo = base;
     out_normal = vec4(N * 0.5 + 0.5, 1.0);
     out_material = vec4(

@@ -103,8 +103,8 @@ namespace clt::scene_renderer
             vk::Pipeline pipeline{};
 
             struct target {
-                std::array<vk::image::resource, 3> color;
-                std::array<vk::ImageView, 3> views{};
+                std::array<vk::image::resource, 4> color;
+                std::array<vk::ImageView, 4> views{};
                 vk::image::resource depth;
                 vk::ImageView depth_view{};
                 vk::Framebuffer framebuffer{};
@@ -276,8 +276,8 @@ namespace clt::scene_renderer
                     vk::ColorComponentFlagBits::eB |
                     vk::ColorComponentFlagBits::eA;
 
-                std::array<vk::PipelineColorBlendAttachmentState, 3> attachments{
-                    blend, blend, blend
+                std::array<vk::PipelineColorBlendAttachmentState, 4> attachments{
+                    blend, blend, blend, blend
                 };
                 vk::PipelineColorBlendStateCreateInfo blending{};
                 blending.attachmentCount = attachments.size();
@@ -321,12 +321,12 @@ namespace clt::scene_renderer
         }
 
 
-        std::array<vk::Format, 3> color_formats()
+        std::array<vk::Format, 4> color_formats()
         {
             const auto precision = game::options::get()->graphics.gbuffer;
             const auto format = precision == game::options::gbuffer_precision::rgba16f
                 ? vk::Format::eR16G16B16A16Sfloat : vk::Format::eR8G8B8A8Unorm;
-            return {format, format, format};
+            return {format, format, format, vk::Format::eR32Uint};
         }
 
         vk::Format depth_format()
@@ -346,8 +346,8 @@ namespace clt::scene_renderer
         void create_render_pass()
         {
             auto& data = get();
-            std::array<vk::AttachmentDescription, 4> attachments{};
-            std::array<vk::AttachmentReference, 3> colors{};
+            std::array<vk::AttachmentDescription, 5> attachments{};
+            std::array<vk::AttachmentReference, 4> colors{};
 
             for (std::uint32_t i = 0; i < colors.size(); ++i)
             {
@@ -360,14 +360,14 @@ namespace clt::scene_renderer
                 colors[i] = {i, vk::ImageLayout::eColorAttachmentOptimal};
             }
 
-            attachments[3].format = depth_format();
-            attachments[3].samples = vk::SampleCountFlagBits::e1;
-            attachments[3].loadOp = vk::AttachmentLoadOp::eClear;
-            attachments[3].storeOp = vk::AttachmentStoreOp::eStore;
-            attachments[3].initialLayout = vk::ImageLayout::eUndefined;
-            attachments[3].finalLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+            attachments[4].format = depth_format();
+            attachments[4].samples = vk::SampleCountFlagBits::e1;
+            attachments[4].loadOp = vk::AttachmentLoadOp::eClear;
+            attachments[4].storeOp = vk::AttachmentStoreOp::eStore;
+            attachments[4].initialLayout = vk::ImageLayout::eUndefined;
+            attachments[4].finalLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
 
-            vk::AttachmentReference depth{3, vk::ImageLayout::eDepthStencilAttachmentOptimal};
+            vk::AttachmentReference depth{4, vk::ImageLayout::eDepthStencilAttachmentOptimal};
             vk::SubpassDescription subpass{};
             subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
             subpass.colorAttachmentCount = colors.size();
@@ -461,8 +461,9 @@ namespace clt::scene_renderer
                 depth_view.subresourceRange = {vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1};
                 target.depth_view = vk::image_view::create(depth_view);
 
-                const std::array<vk::ImageView, 4> attachments{
-                    target.views[0], target.views[1], target.views[2], target.depth_view
+                const std::array<vk::ImageView, 5> attachments{
+                    target.views[0], target.views[1], target.views[2],
+                    target.views[3], target.depth_view
                 };
                 vk::FramebufferCreateInfo framebuffer{};
                 framebuffer.renderPass = data.render_pass;
@@ -589,7 +590,8 @@ namespace clt::scene_renderer
     {
         const auto& target = get().targets.at(image);
         return {{
-            target.views[0], target.views[1], target.views[2], target.depth_view
+            target.views[0], target.views[1], target.views[2],
+            target.views[3], target.depth_view
         }, vk::swapchain::get()->extent};
     }
 
@@ -790,9 +792,11 @@ namespace clt::scene_renderer
             std::abs(pose.scale.x), std::abs(pose.scale.y), std::abs(pose.scale.z)
         });
         mesh.instances.push_back(instance);
+        auto normal = rotation(pose.rotation) * scale(inverse);
+        // Unused normal-matrix component transports the receiver instance ID.
+        normal(3, 3) = float(instance.id);
         mesh.transforms.push_back({
-            trs(pose.position, pose.rotation, pose.scale),
-            rotation(pose.rotation) * scale(inverse)
+            trs(pose.position, pose.rotation, pose.scale), normal
         });
         const auto position = pose.position + rotate(pose.rotation, center);
         mesh.bounds.push_back({

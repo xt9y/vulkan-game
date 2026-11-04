@@ -105,7 +105,8 @@ namespace clt::blood
         input.height = gbuffer.extent.height;
         input.view_projection = projection;
         input.inverse_view_projection = bld::math::inverse(projection);
-        input.depth = gbuffer.views[3];
+        input.depth = gbuffer.views[4];
+        input.receiver_ids = gbuffer.views[3];
         input.normals = gbuffer.views[1];
         input.output = target.view;
         input.sampler = texture::sampler();

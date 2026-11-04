@@ -26,7 +26,8 @@ namespace clt::scene_renderer
     culling_readback culling_data();
 
     struct gbuffer {
-        std::array<vk::ImageView, 4> views{};
+        // albedo, normal, material, R32_UINT receiver, depth
+        std::array<vk::ImageView, 5> views{};
         vk::Extent2D extent{};
     };
 
