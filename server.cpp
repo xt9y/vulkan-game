@@ -62,6 +62,21 @@ namespace
 
         return mesh;
     }
+    
+    ::scene::mesh make_rect(std::uint32_t id, float x, float y, float z)
+    {
+        ::scene::mesh mesh;
+        mesh.id = id;
+    
+        quad(mesh, {-x, -y,  z}, { x, -y,  z}, { x,  y,  z}, {-x,  y,  z}, { 0,  0,  1});
+        quad(mesh, { x, -y, -z}, {-x, -y, -z}, {-x,  y, -z}, { x,  y, -z}, { 0,  0, -1});
+        quad(mesh, {-x, -y, -z}, {-x, -y,  z}, {-x,  y,  z}, {-x,  y, -z}, {-1,  0,  0});
+        quad(mesh, { x, -y,  z}, { x, -y, -z}, { x,  y, -z}, { x,  y,  z}, { 1,  0,  0});
+        quad(mesh, {-x,  y,  z}, { x,  y,  z}, { x,  y, -z}, {-x,  y, -z}, { 0,  1,  0});
+        quad(mesh, {-x, -y, -z}, { x, -y, -z}, { x, -y,  z}, {-x, -y,  z}, { 0, -1,  0});
+    
+        return mesh;
+    }
 
     void stop(int)
     {
@@ -110,24 +125,20 @@ int main(int argc, char** argv)
         srv::application::on_weapon_command(
             [](srv::application::weapon_command_context& event)
             {
-                const auto result = weapon::apply(
-                    event.state,
-                    event.command.sequence,
-                    event.command.kind,
-                    event.now,
-                    event.definition
-                );
-                if (result != weapon::result::fired)
-                {
-                    return weapon::hit{};
-                }
-
-                auto origin = event.player.position;
-                origin.y += player::parameters().height;
+                const auto origin = event.player.position;
                 const auto direction = weapon::direction(event.command.yaw, event.command.pitch);
-                const auto impact = event.world.trace(origin, direction, event.definition.range);
-                // Apply game damage, decals, scoring or other impact rules here.
-                return impact;
+
+                const auto world_hit = event.world.trace(
+                    origin, direction, event.definition.range
+                );
+                
+                const auto distance = [&](const weapon::hit& h) {
+                    return h.impacted
+                        ? vk::util::math::length_squared(h.position - origin)
+                        : std::numeric_limits<float>::infinity();
+                };
+                
+                return world_hit;
             }
         );
 
@@ -135,10 +146,16 @@ int main(int argc, char** argv)
         std::signal(SIGINT, stop);
         std::signal(SIGTERM, stop);
         ::scene::state initial_scene;
-        auto floor = make_floor(1, 10.0f);
+        // make_rect takes half extents. Keep the walking surface at y = 0
+        // and join four solid walls around the edge of the floor, open above.
+        auto floor = make_rect(1, 10.0f, 0.1f, 10.0f);
         auto cube = make_cube(2, 0.5f);
+        auto rect1 = make_rect(3, 0.34f, 0.34f, 5.0f);
+        auto rect2 = make_rect(4, 5.0f, 0.34f, 0.34f);
         initial_scene.meshes.push_back(std::move(floor));
         initial_scene.meshes.push_back(std::move(cube));
+        initial_scene.meshes.push_back(std::move(rect1));
+        initial_scene.meshes.push_back(std::move(rect2));
 
         auto add = [&](std::uint32_t id, std::uint32_t mesh, vk::util::math::vec3 position)
         {
@@ -148,10 +165,14 @@ int main(int argc, char** argv)
             object.pose.position = position;
             initial_scene.instances.push_back(object);
         };
-        add(1, 1, {0, 0, 0});
+        add(1, 1, {0, -0.1f, 0});
         add(2, 2, {-2, 0.5f, 0});
         add(3, 2, {0, 0.5f, 0});
         add(4, 2, {2, 0.5f, 0});
+        add(5, 3, {5.0f, 0.34f, 0});
+        add(6, 3, {-5.0f, 0.34f, 0});
+        add(7, 4, {0, 0.34f, 5.0f});
+        add(8, 4, {0, 0.34f, -5.0f});
         // The seated conversion places its support point at the origin. Derive
         // that support from the existing middle box rather than a world offset.
         const auto& middle = initial_scene.instances.at(2);
@@ -180,7 +201,7 @@ int main(int argc, char** argv)
                            );
         // The source conversion faces +Z, toward the player spawn.
         mermaid.scale = {1.5, 1.5, 1.5};
-        srv::application::load_model("assets/mermaid/mermaid.glb", mermaid, 0, true);
+        srv::application::load_model("assets/mermaid/mermaid.glb", mermaid, 0);
         srv::application::set_scene(std::move(initial_scene));
 
         // Game-owned asset declarations; imported meshes and animations stream to clients.
