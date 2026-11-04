@@ -2,6 +2,7 @@
 #include "postprocess.hpp"
 #include "scene_renderer.hpp"
 #include <fld/fld.hpp>
+#include <algorithm>
 #include <chrono>
 #include <stdexcept>
 #include <vector>
@@ -20,8 +21,9 @@ namespace clt::fluid
         std::vector<target> targets;
         clock::time_point previous{};
 
-        constexpr const char* particle_stages[7]={
-            "CLEAR","PREDICT","BUILD","LAMBDA","DELTA","APPLY","FINALIZE"
+        constexpr const char* particle_stages[9]={
+            "CLEAR","PREDICT","BUILD","LAMBDA","DELTA","APPLY",
+            "FINALIZE","NORMAL","CAPILLARY"
         };
     }
 
