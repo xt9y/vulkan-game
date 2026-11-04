@@ -155,13 +155,13 @@ namespace clt::connection
         return result;
     }
 
-    std::vector<net::blood::event> take_blood_events()
+    std::vector<net::impact::event> take_impact_events()
     {
         auto& data = *get();
-        std::lock_guard<std::mutex> lock(data.blood_mutex);
-        std::vector<net::blood::event> result(
-            data.blood_events.begin(), data.blood_events.end());
-        data.blood_events.clear();
+        std::lock_guard<std::mutex> lock(data.impact_mutex);
+        std::vector<net::impact::event> result(
+            data.impact_events.begin(), data.impact_events.end());
+        data.impact_events.clear();
         return result;
     }
 
@@ -223,10 +223,10 @@ namespace clt::connection
         }
 
         {
-            std::lock_guard<std::mutex> lock(get()->blood_mutex);
-            get()->blood_events.clear();
-            get()->blood_history.clear();
-            get()->blood_seen.clear();
+            std::lock_guard<std::mutex> lock(get()->impact_mutex);
+            get()->impact_events.clear();
+            get()->impact_history.clear();
+            get()->impact_seen.clear();
         }
         {
             std::lock_guard<std::mutex> lock(get()->scene_mutex);
@@ -265,10 +265,10 @@ namespace clt::connection
         }
 
         {
-            std::lock_guard<std::mutex> lock(get()->blood_mutex);
-            get()->blood_events.clear();
-            get()->blood_history.clear();
-            get()->blood_seen.clear();
+            std::lock_guard<std::mutex> lock(get()->impact_mutex);
+            get()->impact_events.clear();
+            get()->impact_history.clear();
+            get()->impact_seen.clear();
         }
         {
             std::lock_guard<std::mutex> lock(get()->scene_mutex);
@@ -360,10 +360,10 @@ namespace clt::connection
                     data.pending_scene.clear();
                     data.last_publish = {};
                     {
-                        std::lock_guard<std::mutex> blood_lock(data.blood_mutex);
-                        data.blood_events.clear();
-                        data.blood_history.clear();
-                        data.blood_seen.clear();
+                        std::lock_guard<std::mutex> blood_lock(data.impact_mutex);
+                        data.impact_events.clear();
+                        data.impact_history.clear();
+                        data.impact_seen.clear();
                     }
                     {
                         std::lock_guard<std::mutex> animation_lock(data.animation_mutex);
@@ -394,24 +394,24 @@ namespace clt::connection
                             break;
                         }
 
-                        if (const auto effect = net::blood::decode(buffer.data(), *size))
+                        if (const auto effect = net::impact::decode(buffer.data(), *size))
                         {
                             if (net::endpoint::equal(peer, server) &&
                                 effect->token == token &&
                                 data.connected.load(std::memory_order_relaxed))
                             {
-                                std::lock_guard<std::mutex> lock(data.blood_mutex);
-                                if (data.blood_seen.insert(effect->id).second)
+                                std::lock_guard<std::mutex> lock(data.impact_mutex);
+                                if (data.impact_seen.insert(effect->id).second)
                                 {
-                                    if (data.blood_history.size() >= 512)
+                                    if (data.impact_history.size() >= 512)
                                     {
-                                        data.blood_seen.erase(data.blood_history.front());
-                                        data.blood_history.pop_front();
+                                        data.impact_seen.erase(data.impact_history.front());
+                                        data.impact_history.pop_front();
                                     }
-                                    data.blood_history.push_back(effect->id);
-                                    if (data.blood_events.size() >= 256)
-                                        data.blood_events.pop_front();
-                                    data.blood_events.push_back(*effect);
+                                    data.impact_history.push_back(effect->id);
+                                    if (data.impact_events.size() >= 256)
+                                        data.impact_events.pop_front();
+                                    data.impact_events.push_back(*effect);
                                 }
                                 last_received = now;
                             }

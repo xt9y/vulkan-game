@@ -748,7 +748,7 @@ namespace clt::weapon
                 }
             }
         }
-        for (const auto& effect : connection::take_blood_events())
+        for (const auto& effect : connection::take_impact_events())
         {
             d.blood_effects.spawn(effect);
         }

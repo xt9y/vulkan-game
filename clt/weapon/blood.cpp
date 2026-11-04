@@ -179,7 +179,7 @@ namespace clt::blood
         scene.meshes.push_back(droplet_mesh(drop_mesh_id));
     }
 
-    void system::spawn(const net::blood::event& effect)
+    void system::spawn(const net::impact::event& effect)
     {
         std::uint32_t seed = effect.seed ? effect.seed : 1;
         const auto n = normalize(effect.normal);

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "srv/shared/net/blood.hpp"
+#include "srv/shared/net/impact.hpp"
 #include "srv/shared/scene/scene.hpp"
 #include "srv/shared/weapon/weapon.hpp"
 
@@ -40,7 +40,7 @@ namespace clt::blood
         std::deque<stain> stains;
         std::deque<pool> pools;
 
-        void spawn(const net::blood::event& effect);
+        void spawn(const net::impact::event& effect);
         void update(const ::weapon::world& collision, float dt);
     };
 

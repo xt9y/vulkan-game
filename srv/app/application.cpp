@@ -12,7 +12,7 @@
 #include "srv/shared/net/scene_stream.hpp"
 #include "srv/shared/net/socket.hpp"
 #include "srv/shared/net/weapon.hpp"
-#include "srv/shared/net/blood.hpp"
+#include "srv/shared/net/impact.hpp"
 #include "srv/shared/player/movement.hpp"
 
 #include <algorithm>
@@ -751,13 +751,14 @@ namespace srv::application
                             get()->impact_capsules
                         };
                         const auto impact = get()->on_weapon_command(context);
-                        if (impact.impacted && impact.flesh &&
+                        if (impact.impacted &&
                             owned->state.last_result == ::weapon::result::fired)
                         {
-                            net::blood::event effect{};
+                            net::impact::event effect{};
                             effect.id = ++get()->next_impact_event;
                             if (!effect.id) effect.id = ++get()->next_impact_event;
                             effect.target = impact.instance;
+                            effect.type = impact.type;
                             effect.seed = (effect.id * 0x9e3779b9u) ^ next.sequence;
                             effect.position = impact.position;
                             effect.normal = impact.normal;
@@ -768,9 +769,9 @@ namespace srv::application
                             {
                                 if (!receiver.active) continue;
                                 effect.token = receiver.token;
-                                if (receiver.blood_events.size() >= 128)
-                                    receiver.blood_events.pop_front();
-                                receiver.blood_events.push_back({effect, 3});
+                                if (receiver.impact_events.size() >= 128)
+                                    receiver.impact_events.pop_front();
+                                receiver.impact_events.push_back({effect, 3});
                             }
                         }
                         if (next.kind == ::weapon::action::fire)
@@ -830,15 +831,15 @@ namespace srv::application
                     );
                     owned.published = update;
                 }
-                for (auto& pending : client.blood_events)
+                for (auto& pending : client.impact_events)
                 {
-                    const auto packet = net::blood::encode(pending.value);
+                    const auto packet = net::impact::encode(pending.value);
                     net::socket::send(get()->socket, client.endpoint,
                         packet.data(), packet.size());
                     --pending.repeats;
                 }
-                std::erase_if(client.blood_events,
-                    [](const session::resource::pending_blood& pending)
+                std::erase_if(client.impact_events,
+                    [](const session::resource::pending_impact& pending)
                     { return pending.repeats == 0; });
                 for (auto& pending : client.shots)
                 {
