@@ -1,0 +1,18 @@
+{
+  "frameCount": 60,
+  "fps": 24.0,
+  "boundsMin": [
+    -5.03000020980835,
+    -13.245999336242676,
+    -5.300000190734863
+  ],
+  "boundsMax": [
+    5.099999904632568,
+    1.7999999523162842,
+    7.550000190734863
+  ],
+  "positionTexture": "Blood20_pos.exr",
+  "rotationTexture": "Blood20_rot.exr",
+  "lookupTexture": "Blood20_lookup.png",
+  "model": "Blood20_mesh.fbx"
+}
