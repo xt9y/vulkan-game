@@ -174,7 +174,7 @@ namespace clt::blood_events
                 contact.position=hit.position;
                 contact.normal=hit.normal;
                 contact.uv=uv.uv;
-                contact.uv_valid=target.mesh && target.mesh->skin_id && uv.valid;
+                contact.uv_valid=uv.valid;
                 return contact;
             });
     }
