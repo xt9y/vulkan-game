@@ -42,6 +42,7 @@ layout(std430, set = 0, binding = 13) readonly buffer VatInstances
 layout(location = 0) out vec3 world_normal;
 layout(location = 1) out vec2 uv;
 layout(location = 2) out vec3 world_position;
+layout(location = 3) flat out uint wound_instance;
 
 layout(push_constant) uniform Draw
 {
@@ -59,6 +60,7 @@ vec2 vat_texture_uv(vec2 source)
 
 void main()
 {
+    wound_instance = instance_index;
     Instance instance = instances[instance_index];
     vec3 position = in_position;
     vec3 normal = in_normal;
