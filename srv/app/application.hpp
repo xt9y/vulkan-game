@@ -23,6 +23,7 @@ namespace srv::application
         std::filesystem::path path;
         ::scene::transform pose;
         std::uint32_t animation;
+        bool bleeds = false;
     };
 
     struct weapon_command_context
@@ -74,7 +75,7 @@ namespace srv::application
     // The game defines both its initial scene and model imports before init().
     void set_scene(::scene::state scene);
     void load_model(std::filesystem::path path, ::scene::transform pose,
-                    std::uint32_t animation);
+                    std::uint32_t animation, bool bleeds = false);
     // Register game rules and receive authenticated, owned, equipped weapon commands.
     void add_weapon(::weapon::definition definition);
     void on_weapon_command(weapon_command_handler handler);
