@@ -212,12 +212,7 @@ namespace clt::connection
             get()->server_parameters.reset();
         }
 
-        {
-            std::lock_guard<std::mutex> lock(get()->impact_mutex);
-            get()->impact_events.clear();
-            get()->impact_history.clear();
-            get()->impact_seen.clear();
-        }
+        bld::network::reset();
         {
             std::lock_guard<std::mutex> lock(get()->scene_mutex);
             get()->scene.reset();
@@ -254,12 +249,7 @@ namespace clt::connection
             get()->authority.reset();
         }
 
-        {
-            std::lock_guard<std::mutex> lock(get()->impact_mutex);
-            get()->impact_events.clear();
-            get()->impact_history.clear();
-            get()->impact_seen.clear();
-        }
+        bld::network::reset();
         {
             std::lock_guard<std::mutex> lock(get()->scene_mutex);
             get()->scene.reset();
