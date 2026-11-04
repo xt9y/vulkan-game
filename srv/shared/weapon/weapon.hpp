@@ -247,8 +247,11 @@ namespace weapon
                         return m.id == instance.mesh_id;
                     }
                 );
-                // First-person weapon skins are presentation, never world collision.
-                if (mesh == meshes.end() || mesh->skin_id)
+                // Only meshes explicitly streamed as server world geometry
+                // participate; client-only first-person assets are not here.
+                // Use bind-pose triangles for skinned meshes until animated
+                // server-side collision geometry becomes available.
+                if (mesh == meshes.end())
                 {
                     continue;
                 }
