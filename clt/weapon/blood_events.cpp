@@ -126,7 +126,7 @@ namespace clt::blood_events
             const auto& pose=r.instance->pose;
             bld::surface::register_target(
                 r.instance->id,
-                r.mesh->skin_id ? bld::substrate::textile : bld::substrate::painted,
+                r.mesh->bleeds ? bld::substrate::textile : bld::substrate::painted,
                 trs(pose.position,pose.rotation,pose.scale),
                 r.mesh->skin_id!=0,uv.metric);
             data().registered.insert(r.instance->id);
@@ -140,8 +140,9 @@ namespace clt::blood_events
         if(!hit.impacted || !source || !bld::system::get())return;
         index(source);
         const auto target=find(hit.instance);
-        // Do not turn impacts against stone, metal, or geometry into blood.
-        if(!target.mesh || !target.mesh->skin_id)return;
+        // Blood is an explicit game-owned property, independent of skinning.
+        // Static/rigid character meshes must bleed just like animated ones.
+        if(!target.mesh || !target.mesh->bleeds)return;
         const auto uv=attach(target,hit);
         bld::impact event{};
         event.seed=0; // Derive a distinct deterministic seed from the event ID.
