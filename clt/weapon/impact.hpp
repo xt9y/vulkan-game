@@ -39,6 +39,7 @@ namespace clt::impact
         float radius = .08f, final_radius = .4f;
         float age = 0, angle = 0, lifetime = 240;
         std::uint32_t variant = 0, anchor = 0;
+        mat4 local = mat4::identity();
     };
 
     struct projector
@@ -57,12 +58,20 @@ namespace clt::impact
         float angle = 0;
     };
 
+    struct backdrop
+    {
+        vec3 position{}, direction{};
+        float strength = 1;
+        std::uint32_t seed = 1;
+    };
+
     struct system
     {
         std::vector<drop> drops;
         std::deque<stain> stains;
         std::deque<pool> pools;
         std::deque<wound> wounds;
+        std::vector<backdrop> pending_backdrops;
 
         void spawn(const net::impact::event& effect);
         void update(const ::weapon::world& collision, float dt);
