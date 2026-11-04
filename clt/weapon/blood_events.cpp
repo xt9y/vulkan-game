@@ -144,6 +144,7 @@ namespace clt::blood_events
         if(!target.mesh || !target.mesh->skin_id)return;
         const auto uv=attach(target,hit);
         bld::impact event{};
+        event.seed=0; // Derive a distinct deterministic seed from the event ID.
         event.target=hit.instance;
         event.position=hit.position;
         event.normal=hit.normal;
