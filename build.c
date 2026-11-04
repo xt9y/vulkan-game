@@ -70,6 +70,18 @@ void build(C_Build* b)
     c_dep_subdir(blood, "blood");
     c_dep_cbuild(blood, "VulkanBlood", C_TARGET_STATIC_LIBRARY);
     c_dep_include(blood, ".");
+    // VulkanBlood's public headers include <fld/fld.hpp>.
+    // c build does not propagate a nested CBuild dependency's include paths.
+    c_dep_include(blood, "../fluid");
+
+    // Link the generic solver explicitly: a static VulkanBlood archive
+    // does not contain the object code from its own VulkanFluid dependency.
+    C_Dependency* fluid =
+        c_git(b, "VulkanFluid", "https://github.com/xt9y/vulkan-systems.git",
+              "vulkan-fluids-v1");
+    c_dep_subdir(fluid, "fluid");
+    c_dep_cbuild(fluid, "VulkanFluid", C_TARGET_STATIC_LIBRARY);
+    c_dep_include(fluid, ".");
 
     C_Dependency* fastgltf =
         c_git(b, "fastgltf", "https://github.com/spnda/fastgltf.git", "0b800b4a584704f9e9add67c79c4c8732e552787");
@@ -157,6 +169,7 @@ void build(C_Build* b)
     c_flag(client, "-std=c++20");
     c_use(client, engine);
     c_use(client, blood);
+    c_use(client, fluid);
     c_use(client, headers);
     // Compile the skinned-fabric material with the library's UV atlas shader.
     // Blood and liquid physics/shading remain inside vulkan-systems.
