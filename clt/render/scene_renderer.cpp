@@ -1396,11 +1396,16 @@ namespace clt::scene_renderer
                 continue;
             }
             auto& frame = found->frames.at(image);
-            vk::buffer::write(
-                frame.local_instances,
-                item.instances.data(),
-                item.instances.size() * sizeof(weapon::instance_data)
-            );
+            if (item.instances.size() > weapon::instance_capacity(item.mesh_id))
+                throw std::runtime_error("Local effect instance capacity exceeded");
+            if (!item.instances.empty())
+            {
+                vk::buffer::write(
+                    frame.local_instances,
+                    item.instances.data(),
+                    item.instances.size() * sizeof(weapon::instance_data)
+                );
+            }
             if (!item.vat.empty())
             {
                 vk::buffer::write(
