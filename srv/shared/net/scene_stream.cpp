@@ -107,7 +107,7 @@ namespace net::scene_stream
             throw std::runtime_error("Scene snapshot exceeds maximum batch size");
         }
 
-        std::vector<std::uint8_t> bytes{'S', 'C', 'N', '6'};
+        std::vector<std::uint8_t> bytes{'S', 'C', 'N', '7'};
 
         add(bytes, std::uint32_t(scene.meshes.size()));
         add(bytes, std::uint32_t(scene.instances.size()));
@@ -171,7 +171,6 @@ namespace net::scene_stream
 
             add(bytes, mesh.id);
             add(bytes, mesh.skin_id);
-            add(bytes, mesh.bleeds ? 1u : 0u);
             add(bytes, std::uint32_t(mesh.vertices.size()));
             add(bytes, std::uint32_t(mesh.indices.size()));
 
@@ -254,7 +253,7 @@ namespace net::scene_stream
             bytes[0] != 'S' ||
             bytes[1] != 'C' ||
             bytes[2] != 'N' ||
-            bytes[3] != '6')
+            bytes[3] != '7')
         {
             return false;
         }
@@ -366,11 +365,9 @@ namespace net::scene_stream
             ::scene::mesh mesh;
             std::uint32_t vertices = 0;
             std::uint32_t indices = 0;
-            std::uint32_t bleeds = 0;
 
             if (!input.take(mesh.id) ||
                 !input.take(mesh.skin_id) ||
-                !input.take(bleeds) || bleeds > 1 ||
                 !input.take(vertices) ||
                 !input.take(indices) ||
                 vertices == 0 || indices == 0 || indices % 3 ||
@@ -401,7 +398,6 @@ namespace net::scene_stream
                 mesh.surface.alpha_mode > 2) return false;
             mesh.surface.double_sided = double_sided != 0;
 
-            mesh.bleeds = bleeds != 0;
             mesh.vertices.resize(vertices);
             mesh.indices.resize(indices);
 
