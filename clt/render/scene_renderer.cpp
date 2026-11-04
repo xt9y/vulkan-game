@@ -1441,7 +1441,8 @@ namespace clt::scene_renderer
 
         // Disjoint depth ranges give the viewmodel independent depth testing while
         // preserving world depth for deferred HDR lighting and sky classification.
-        for (bool viewmodel : {false, true})
+        // Keep the fluid experiment unobstructed by the first-person gun.
+        for (bool viewmodel : {false})
         {
             command.setViewport(
                 0,
@@ -1484,8 +1485,7 @@ namespace clt::scene_renderer
                     m.base_color,
                     {m.metallic, m.roughness, m.occlusion, m.alpha_cutoff},
                     {m.emissive[0], m.emissive[1], m.emissive[2], float(flags)},
-                    mesh.joint_count,
-                    0u
+                    mesh.joint_count
                 };
                 command.pushConstants(
                     data.layout,
