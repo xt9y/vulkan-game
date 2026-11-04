@@ -77,7 +77,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--worker", action="store_true",
                         help=argparse.SUPPRESS)
-    args = parser.parse_args()
+    # Blender preserves its own CLI arguments in sys.argv.
+    # Only arguments after the '--' separator belong to this script.
+    arguments = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:]
+    args = parser.parse_args(arguments)
 
     if args.worker:
         convert_in_blender()
