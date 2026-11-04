@@ -743,7 +743,7 @@ namespace clt::weapon
                 const auto owner = find_weapon(shot.state.weapon_id);
                 if (owner != d.weapons.end())
                 {
-                    if (!shot.impact.flesh)
+                    if (shot.impact.type != ::weapon::impact_type::flesh)
                         add_impact(shot.impact, owner->settings);
                 }
             }

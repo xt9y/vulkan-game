@@ -219,12 +219,22 @@ namespace weapon
         std::uint32_t instance = 0, index = 0;
     };
 
+    enum class impact_type : std::uint8_t
+    {
+        default_surface,
+        flesh,
+        metal,
+        stone,
+        wood,
+        glass
+    };
+
     struct hit
     {
         bool impacted = false;
         vec3 position{}, normal{};
         std::uint32_t instance = 0, triangle = 0;
-        bool flesh = false;
+        impact_type type = impact_type::default_surface;
     };
 
     struct world

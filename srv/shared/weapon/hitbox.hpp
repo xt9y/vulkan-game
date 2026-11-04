@@ -15,6 +15,7 @@ namespace weapon::hitbox
         vec3 a{}, b{};
         float radius = .15f;
         std::uint32_t actor = 0;
+        impact_type type = impact_type::default_surface;
     };
 
     inline float sphere(vec3 origin, vec3 direction, vec3 center, float radius)
@@ -70,7 +71,7 @@ namespace weapon::hitbox
                 std::max(dot(axis, axis), 1e-10f), 0.f, 1.f);
             const auto normal = normalize(position - (c.a + axis * u));
             nearest = t;
-            result = {true, position, normal, c.actor, 0, true};
+            result = {true, position, normal, c.actor, 0, c.type};
         }
         return result;
     }

@@ -67,12 +67,12 @@ namespace srv::application
     }
 
     void load_model(std::filesystem::path path, ::scene::transform pose,
-                    std::uint32_t animation, bool flesh)
+                    std::uint32_t animation, ::weapon::impact_type impact)
     {
         if (get()->initialized) throw std::runtime_error("Register model imports before init");
         if (path.empty() || !std::filesystem::is_regular_file(path))
             throw std::runtime_error("Model file not found: " + path.string());
-        get()->models.push_back({std::move(path), pose, animation, flesh});
+        get()->models.push_back({std::move(path), pose, animation, impact});
     }
 
     void add_weapon(::weapon::definition definition)
@@ -124,7 +124,7 @@ namespace srv::application
             if (!generation::submit([requests = std::move(requests)]() -> generation::completion
             {
                 ::scene::state combined;
-                std::vector<std::uint32_t> flesh_ids;
+                std::vector<std::pair<std::uint32_t, ::weapon::impact_type>> impact_ids;
                 auto mesh_id = std::uint32_t(1);
                 auto instance_id = std::uint32_t(1);
                 auto texture_id = std::uint32_t(1);
@@ -163,7 +163,8 @@ namespace srv::application
                         }
                         instance.pose = request.pose;
                         instance.animation = request.animation;
-                        if (request.flesh) flesh_ids.push_back(instance.id);
+                        if (request.impact != ::weapon::impact_type::default_surface)
+                            impact_ids.push_back({instance.id, request.impact});
                     }
                     std::cout << "srv: imported " << request.path.string() << " ("
                               << imported.meshes.size() << " meshes, "
@@ -191,10 +192,10 @@ namespace srv::application
                         std::make_move_iterator(imported.skins.end()));
                 }
                 return [imported = std::make_shared<::scene::state>(std::move(combined)),
-                        flesh_ids = std::move(flesh_ids)]() mutable
+                        impact_ids = std::move(impact_ids)]() mutable
                 {
                     get()->importing = std::move(imported);
-                    get()->flesh_instances.insert(flesh_ids.begin(), flesh_ids.end());
+                    get()->impact_instances.insert(impact_ids.begin(), impact_ids.end());
                     get()->next_texture = 0;
                     get()->next_skin = 0;
                     get()->next_mesh = 0;
@@ -247,7 +248,8 @@ namespace srv::application
         // capsule to each streamed flesh-skinned mesh as an initial hit volume.
         for (const auto& instance : patch.instances)
         {
-            if (!data.flesh_instances.contains(instance.id)) continue;
+            const auto impact = data.impact_instances.find(instance.id);
+            if (impact == data.impact_instances.end()) continue;
             const auto mesh = std::find_if(data.scene.meshes.begin(), data.scene.meshes.end(),
                 [&](const ::scene::mesh& entry) { return entry.id == instance.mesh_id; });
             if (mesh == data.scene.meshes.end() || !mesh->skin_id || mesh->vertices.empty())
@@ -272,10 +274,10 @@ namespace srv::application
                          (hi.z - lo.z) * std::abs(s.z)) * .45f);
             const float inset = std::min(radius, (hi.y - lo.y) * std::abs(s.y) * .4f) /
                 std::max(std::abs(s.y), .001f);
-            data.flesh_capsules.push_back({
+            data.impact_capsules.push_back({
                 move({center.x, lo.y + inset, center.z}),
                 move({center.x, hi.y - inset, center.z}),
-                radius, instance.id
+                radius, instance.id, impact->second
             });
         }
 
@@ -500,9 +502,9 @@ namespace srv::application
         get()->scene_batches.clear();
         get()->colliders.clear();
         get()->weapon_world = {};
-        get()->flesh_instances.clear();
-        get()->flesh_capsules.clear();
-        get()->next_blood_event = 0;
+        get()->impact_instances.clear();
+        get()->impact_capsules.clear();
+        get()->next_impact_event = 0;
         get()->weapons = {};
         get()->on_weapon_command = {};
         get()->scene_hash = 0;
@@ -745,16 +747,16 @@ namespace srv::application
                             client.avatar,
                             seconds,
                             get()->weapon_world,
-                            get()->flesh_instances,
-                            get()->flesh_capsules
+                            get()->impact_instances,
+                            get()->impact_capsules
                         };
                         const auto impact = get()->on_weapon_command(context);
                         if (impact.impacted && impact.flesh &&
                             owned->state.last_result == ::weapon::result::fired)
                         {
                             net::blood::event effect{};
-                            effect.id = ++get()->next_blood_event;
-                            if (!effect.id) effect.id = ++get()->next_blood_event;
+                            effect.id = ++get()->next_impact_event;
+                            if (!effect.id) effect.id = ++get()->next_impact_event;
                             effect.target = impact.instance;
                             effect.seed = (effect.id * 0x9e3779b9u) ^ next.sequence;
                             effect.position = impact.position;
