@@ -75,6 +75,22 @@ namespace srv::application
         get()->models.push_back({std::move(path), pose, animation, impact});
     }
 
+    void set_mesh_impact(std::uint32_t mesh_id, ::weapon::impact_type type)
+    {
+        if (get()->initialized) throw std::runtime_error("Set impact types before init");
+        if (!mesh_id || std::uint8_t(type) > std::uint8_t(::weapon::impact_type::glass))
+            throw std::invalid_argument("Invalid impact mesh configuration");
+        get()->impact_meshes[mesh_id] = type;
+    }
+
+    void set_instance_impact(std::uint32_t instance_id, ::weapon::impact_type type)
+    {
+        if (get()->initialized) throw std::runtime_error("Set impact types before init");
+        if (!instance_id || std::uint8_t(type) > std::uint8_t(::weapon::impact_type::glass))
+            throw std::invalid_argument("Invalid impact instance configuration");
+        get()->impact_instances[instance_id] = type;
+    }
+
     void add_weapon(::weapon::definition definition)
     {
         if (get()->initialized)
@@ -105,6 +121,13 @@ namespace srv::application
         get()->options = *game::options::get();
         get()->socket = net::socket::create(get()->options.port, get()->options.bind_host);
         session::init();
+        for (const auto& instance : get()->scene.instances)
+        {
+            if (get()->impact_instances.contains(instance.id)) continue;
+            const auto found = get()->impact_meshes.find(instance.mesh_id);
+            if (found != get()->impact_meshes.end())
+                get()->impact_instances.emplace(instance.id, found->second);
+        }
         get()->colliders = player::build_colliders(get()->scene);
         get()->collision_index = player::build_index(get()->colliders);
         get()->weapon_world.append(get()->scene.meshes, get()->scene.instances);
@@ -503,6 +526,7 @@ namespace srv::application
         get()->colliders.clear();
         get()->weapon_world = {};
         get()->impact_instances.clear();
+        get()->impact_meshes.clear();
         get()->impact_capsules.clear();
         get()->next_impact_event = 0;
         get()->weapons = {};

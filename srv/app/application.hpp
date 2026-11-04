@@ -61,6 +61,7 @@ namespace srv::application
         player::collision_world colliders;
         ::weapon::world weapon_world;
         std::unordered_map<std::uint32_t, ::weapon::impact_type> impact_instances;
+        std::unordered_map<std::uint32_t, ::weapon::impact_type> impact_meshes;
         std::vector<::weapon::hitbox::capsule> impact_capsules;
         std::uint32_t next_impact_event = 0;
         ::weapon::registry weapons;
@@ -84,6 +85,9 @@ namespace srv::application
     void load_model(std::filesystem::path path, ::scene::transform pose,
                     std::uint32_t animation,
                     ::weapon::impact_type impact = ::weapon::impact_type::default_surface);
+    // Set the impact type of a game-owned mesh or instance before init().
+    void set_mesh_impact(std::uint32_t mesh_id, ::weapon::impact_type type);
+    void set_instance_impact(std::uint32_t instance_id, ::weapon::impact_type type);
     // Register game rules and receive authenticated, owned, equipped weapon commands.
     void add_weapon(::weapon::definition definition);
     void on_weapon_command(weapon_command_handler handler);

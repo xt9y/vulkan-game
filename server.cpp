@@ -197,6 +197,8 @@ int main(int argc, char** argv)
         mermaid.scale = {1.5, 1.5, 1.5};
         srv::application::load_model("assets/mermaid/mermaid.glb", mermaid, 0, weapon::impact_type::flesh);
         srv::application::set_scene(std::move(initial_scene));
+        srv::application::set_mesh_impact(1, weapon::impact_type::stone);
+        srv::application::set_mesh_impact(2, weapon::impact_type::metal);
 
         // Game-owned asset declarations; imported meshes and animations stream to clients.
         // ::scene::transform hallway{};
