@@ -144,7 +144,7 @@ namespace clt::fluid
         {
             std::clog << "fluid: submitted_fps=" << submitted/report_seconds
                       << " particles=" << fld::system::particle_count()
-                      << " (GPU frame time not measured)" << '\\n';
+                      << " (GPU frame time not measured)" << std::endl;
             submitted=0;
             report_started=now;
         }
