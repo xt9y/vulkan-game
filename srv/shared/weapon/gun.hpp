@@ -2,6 +2,7 @@
 
 #include "srv/shared/weapon/weapon.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <map>
 #include <string>
