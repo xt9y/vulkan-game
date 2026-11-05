@@ -66,7 +66,7 @@ void build(C_Build* b)
 
     C_Dependency* fluid =
         c_git(b, "VulkanFluid", "https://github.com/xt9y/vulkan-systems.git",
-              "7f6d27576e7bb53444632b5ce617d79fbfd5a4a1");
+              "0c624ef425d9ba4c326adda16dbcfc1ff2e53e08");
     c_dep_subdir(fluid, "fluid");
     c_dep_cbuild(fluid, "VulkanFluid", C_TARGET_STATIC_LIBRARY);
     c_dep_include(fluid, ".");
