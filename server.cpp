@@ -12,6 +12,8 @@
 #include <csignal>
 #include <exception>
 #include <iostream>
+#include <limits>
+#include <stdexcept>
 #include <utility>
 
 namespace
