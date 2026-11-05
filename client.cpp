@@ -1,26 +1,26 @@
+#include "clt/app/application.hpp"
 #include "clt/network/connection.hpp"
 #include "clt/render/postprocess.hpp"
 #include "clt/render/renderer.hpp"
 #include "clt/render/scene_renderer.hpp"
-#include <fld/fld.hpp>
-#include <algorithm>
-#include <chrono>
-#include <stdexcept>
-#include <vector>
-#include <string>
-#include "clt/app/application.hpp"
 #include "clt/weapon/weapon.hpp"
 #include "srv/game/application.hpp"
 #include "srv/game/options.hpp"
 #include "srv/shared/net/socket.hpp"
 #include "srv/shared/weapon/metadata.hpp"
 
+#include <fld/fld.hpp>
 #include <GLFW/glfw3.h>
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <exception>
 #include <iostream>
+#include <stdexcept>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace game_fluid
 {
@@ -50,39 +50,39 @@ namespace game_fluid
     {
         const auto extent=vk::swapchain::get()->extent;
         const auto frames=std::uint32_t(vk::swapchain::get()->images.size());
-            fld::options options{};
-            // Double the drop radius at fixed physical particle spacing:
-            // eight times the volume and 17,845 SPH particles (was 2,205).
-            // Maintain resolution rather than inflating the particle radius.
-            options.max_particles=20000;
-            options.spacing=.042f;
-            options.smoothing_radius=.112f;
-            options.pressure_iterations=4;
-            options.substeps=2;
-            options.floor_height=0.f;
-            // World collision bounds come exclusively from server.cpp::add().
-            options.colliders.reserve(scene.collision_boxes.size());
-            for (const auto& box : scene.collision_boxes)
-            {
-                options.colliders.push_back({
-                    {box.minimum.x,box.minimum.y,box.minimum.z,0.f},
-                    {box.maximum.x,box.maximum.y,box.maximum.z,0.f}
-                });
-            }
-            fld::drop initial{};
-            // Spawn nearer to the player at z=4 and in front of the props.
-            initial.center={.9f,2.75f,.75f};
-            initial.radius=.68f;
-            fld::shader_paths paths{};
-            for(std::uint32_t i=0;i<paths.size();++i)
-                paths[i]=std::string("build/shaders/fluid_")+
-                          particle_stages[i]+".comp.spv";
-            fld::system::init(options,initial,paths);
-            fld::render::init({
-                "build/shaders/fluid_tile_clear.comp.spv",
-                "build/shaders/fluid_tile_build.comp.spv",
-                "build/shaders/fluid_surface.comp.spv"
-            },frames,extent.width,extent.height);
+        fld::options options{};
+        // Double the drop radius at fixed physical particle spacing:
+        // eight times the volume and 17,845 SPH particles (was 2,205).
+        // Maintain resolution rather than inflating the particle radius.
+        options.max_particles=20000;
+        options.spacing=.042f;
+        options.smoothing_radius=.112f;
+        options.pressure_iterations=4;
+        options.substeps=2;
+        options.floor_height=0.f;
+        // World collision bounds come exclusively from server.cpp::add().
+        options.colliders.reserve(scene.collision_boxes.size());
+        for (const auto& box : scene.collision_boxes)
+        {
+            options.colliders.push_back({
+                {box.minimum.x,box.minimum.y,box.minimum.z,0.f},
+                {box.maximum.x,box.maximum.y,box.maximum.z,0.f}
+            });
+        }
+        fld::drop initial{};
+        // Spawn nearer to the player at z=4 and in front of the props.
+        initial.center={.9f,2.75f,.75f};
+        initial.radius=.68f;
+        fld::shader_paths paths{};
+        for(std::uint32_t i=0;i<paths.size();++i)
+            paths[i]=std::string("build/shaders/fluid_")+
+                      particle_stages[i]+".comp.spv";
+        fld::system::init(options,initial,paths);
+        fld::render::init({
+            "build/shaders/fluid_tile_clear.comp.spv",
+            "build/shaders/fluid_tile_build.comp.spv",
+            "build/shaders/fluid_surface.comp.spv"
+        },frames,extent.width,extent.height);
     }
 
     void create()
