@@ -53,7 +53,7 @@ namespace game_blood
         constexpr float liquid_cell_size=.04f;
         constexpr std::uint32_t pressure_iterations=36;
         constexpr std::uint32_t substeps=3;
-        constexpr float fluid_render_scale=.5f;
+        constexpr float fluid_render_scale=.67f; // less aliasing at edges
         bool continuum_initialized=false;
     }
 
