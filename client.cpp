@@ -116,10 +116,10 @@ namespace game_blood
         // Adjust the blood material here without editing the engine.
         fld::blood::material blood{};
         // Game-facing blood controls. The VOF simulation stays in VulkanFluid.
-        blood.viscosity_zero=.035f;    // Pa*s at rest, illustrative whole blood
-        blood.viscosity_high=.0035f;   // Pa*s at high shear, free initial impact
-        blood.relaxation_seconds=1.2f; // Carreau time scale
-        blood.shear_exponent=.52f;
+        blood.viscosity_zero=.056f;    // Pa*s, Carreau low-shear reference
+        blood.viscosity_high=.00345f;  // Pa*s, Carreau high-shear reference
+        blood.relaxation_seconds=3.313f; // Carreau relaxation time
+        blood.shear_exponent=.3568f;
         blood.substrate_drag=6.f;      // near-floor recoil damping only
         blood.shallow_color={.42f,.013f,.011f};
         blood.optical_density=90.f;    // opaque red skin; burgundy with depth
