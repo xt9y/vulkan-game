@@ -70,7 +70,7 @@ namespace clt::fluid
             };
             fld::drop initial{};
             // Spawn nearer to the player at z=4 and in front of the props.
-            initial.center={1.15f,2.9f,1.5f};
+            initial.center={.9f,2.75f,.75f};
             initial.radius=.34f;
             fld::shader_paths paths{};
             for(std::uint32_t i=0;i<paths.size();++i)
