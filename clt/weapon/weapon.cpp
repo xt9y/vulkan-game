@@ -6,6 +6,7 @@
 #include "srv/assets/model.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <deque>
@@ -38,6 +39,10 @@ namespace clt::weapon
         std::deque<intent> intents;
         bool trigger_held = false, reload_held = false, aim = false;
         std::uint32_t movement = 0;
+        bindings selected_input{};
+        double selected_fire_interval=.15;
+        clock::time_point next_automatic_fire{};
+        std::vector<equip_binding> registered_equips;
 
         struct casing
         {
@@ -233,6 +238,15 @@ namespace clt::weapon
             current().predicted = d.predicted;
             d.active = index;
             d.predicted = current().predicted;
+            {
+                std::lock_guard<std::mutex> lock(input_mutex);
+                selected_input=config().input;
+                selected_fire_interval=config().rules.fire_interval;
+                next_automatic_fire={};
+                trigger_held=false;
+            }
+            camera::set_look_sensitivity(config().input.sensitivity,
+                                         config().input.ads_sensitivity_multiplier);
             d.skin = current().model.skin;
             d.camera_joint = animation::joint(d.skin, config().camera_joint);
             d.muzzle = animation::joint(d.skin, config().muzzle_joint);
@@ -244,12 +258,12 @@ namespace clt::weapon
                 throw std::runtime_error("Cannot sample weapon reference pose");
             }
             animation::matrix reference{};
-            if (!animation::joint_transform(d.skin, d.camera_joint, reference) ||
-                d.muzzle == UINT32_MAX || d.ejection == UINT32_MAX)
-            {
-                throw std::runtime_error("Weapon is missing configured attachment joints");
-            }
-            d.camera_correction = inverse_affine(mat4{reference}) * config().correction;
+            const bool camera_joint_valid=
+                d.camera_joint!=UINT32_MAX &&
+                animation::joint_transform(d.skin,d.camera_joint,reference);
+            d.camera_correction=camera_joint_valid?
+                inverse_affine(mat4{reference})*config().correction:
+                config().correction;
             d.presented_aim = false;
             d.ads = 0;
             camera::aim(0);
@@ -409,19 +423,38 @@ namespace clt::weapon
         }
     } // namespace
 
+    bindings active_bindings()
+    {
+        std::lock_guard<std::mutex> lock(input_mutex);
+        return selected_input;
+    }
+
+    std::vector<equip_binding> equip_bindings()
+    {
+        std::lock_guard<std::mutex> lock(input_mutex);
+        return registered_equips;
+    }
+
     void controls(bool trigger, bool ads, bool reload, std::uint32_t buttons)
     {
         const auto camera = camera::snapshot();
         std::lock_guard<std::mutex> lock(input_mutex);
-        if (trigger && !trigger_held && intents.size() < 64)
+        const auto now=clock::now();
+        if (trigger && intents.size() < 64 &&
+            (!trigger_held ||
+             (selected_input.automatic && now>=next_automatic_fire)))
         {
             intents.push_back({::weapon::action::fire, camera.yaw, camera.pitch});
+            next_automatic_fire=now+
+                std::chrono::duration_cast<clock::duration>(
+                    std::chrono::duration<double>(selected_fire_interval));
         }
         if (reload && !reload_held && intents.size() < 64)
         {
             intents.push_back({::weapon::action::reload, camera.yaw, camera.pitch});
         }
         trigger_held = trigger;
+        if(!trigger)next_automatic_fire={};
         reload_held = reload;
         aim = ads;
         movement = buttons;
@@ -435,11 +468,15 @@ namespace clt::weapon
             throw std::logic_error("Register weapons before renderer initialization");
         }
         ::weapon::validate(value.rules);
-        if (value.model.empty() || value.casing_model.empty() ||
+        if (value.model.empty() ||
             find_weapon(value.rules.id) != d.weapons.end() || value.max_casings > 192 ||
             value.max_casings == 0 || value.max_impacts == 0 || value.max_impacts > 192 ||
             value.near_plane <= 0 || value.far_plane <= value.near_plane || value.fov <= 0 ||
-            value.fov >= 3.14159265f || value.ads_fov <= 0 || value.ads_fov >= 3.14159265f)
+            value.fov >= 3.14159265f || value.ads_fov <= 0 || value.ads_fov >= 3.14159265f ||
+            !std::isfinite(value.input.sensitivity) || value.input.sensitivity<=0.f ||
+            value.input.sensitivity>.1f || !std::isfinite(value.input.ads_sensitivity_multiplier) ||
+            value.input.ads_sensitivity_multiplier<=0.f ||
+            value.input.ads_sensitivity_multiplier>1.f)
         {
             throw std::invalid_argument("Invalid client weapon definition");
         }
