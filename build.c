@@ -66,7 +66,7 @@ void build(C_Build* b)
 
     C_Dependency* fluid =
         c_git(b, "VulkanFluid", "https://github.com/xt9y/vulkan-systems.git",
-              "0c624ef425d9ba4c326adda16dbcfc1ff2e53e08");
+              "3044bfa576c2801d82ce4f43a11e4f93c7c9b2c8");
     c_dep_subdir(fluid, "fluid");
     c_dep_cbuild(fluid, "VulkanFluid", C_TARGET_STATIC_LIBRARY);
     c_dep_include(fluid, ".");
@@ -160,72 +160,35 @@ void build(C_Build* b)
     c_use(client, engine);
     c_use(client, fluid);
     c_use(client, headers);
-    // Shader modules live in the generic fluid library; c build resolves
-    // the dependency source without copying its simulation into the game.
-#define FLD_STAGE(NAME) \
-    c_generate(client, "build/shaders/fluid_" #NAME "_stamp.cpp", \
-               "@VulkanFluid@/fld/shaders/particles.comp", \
-               "glslangValidator -V -DFLD_" #NAME \
-               " @VulkanFluid@/fld/shaders/particles.comp" \
-               " -o build/shaders/fluid_" #NAME ".comp.spv && " \
-               "printf 'namespace fluid_" #NAME "_stamp {}\\n'" \
-               " > build/shaders/fluid_" #NAME "_stamp.cpp")
-    FLD_STAGE(CLEAR);
-    FLD_STAGE(PREDICT);
-    FLD_STAGE(BUILD);
-    FLD_STAGE(LAMBDA);
-    FLD_STAGE(DELTA);
-    FLD_STAGE(APPLY);
-    FLD_STAGE(FINALIZE);
-    FLD_STAGE(NORMAL);
-    FLD_STAGE(CAPILLARY);
-    FLD_STAGE(VISCOSITY);
-    FLD_STAGE(VISCOSITY_APPLY);
-#undef FLD_STAGE
-#define FLD_RENDER(NAME) \
-    c_generate(client, "build/shaders/fluid_" #NAME "_stamp.cpp", \
-               "@VulkanFluid@/fld/shaders/" #NAME ".comp", \
-               "glslangValidator -V @VulkanFluid@/fld/shaders/" #NAME \
-               ".comp -o build/shaders/fluid_" #NAME ".comp.spv && " \
-               "printf 'namespace fluid_" #NAME "_stamp {}\\n'" \
-               " > build/shaders/fluid_" #NAME "_stamp.cpp")
-    FLD_RENDER(tile_clear);
-    FLD_RENDER(tile_build);
-    FLD_RENDER(surface);
-    FLD_RENDER(upscale);
-#undef FLD_RENDER
-    // Collision variants use the same generic fluid kernel; they are
-    // selected only when the streamed scene has at least 32 static boxes.
-#define FLD_BVH_STAGE(NAME) \
-    c_generate(client, "build/shaders/fluid_" #NAME "_bvh_stamp.cpp", \
-               "@VulkanFluid@/fld/shaders/particles.comp", \
-               "glslangValidator -V -DFLD_" #NAME " -DFLD_USE_BVH" \
-               " @VulkanFluid@/fld/shaders/particles.comp" \
-               " -o build/shaders/fluid_" #NAME "_bvh.comp.spv && " \
-               "printf 'namespace fluid_" #NAME "_bvh_stamp {}\\n'" \
-               " > build/shaders/fluid_" #NAME "_bvh_stamp.cpp")
-    FLD_BVH_STAGE(PREDICT);
-    FLD_BVH_STAGE(APPLY);
-    FLD_BVH_STAGE(FINALIZE);
-#undef FLD_BVH_STAGE
-    // Reusable BVH build / query shaders live in vulkan-systems/bvh.
-#define BVH_STAGE(NAME) \
-    c_generate(client, "build/shaders/bvh_" #NAME "_stamp.cpp", \
-               "@VulkanFluid@/../bvh/bvh/shaders/bvh.comp", \
-               "glslangValidator -V -DBVH_" #NAME \
-               " @VulkanFluid@/../bvh/bvh/shaders/bvh.comp" \
-               " -o build/shaders/bvh_" #NAME ".comp.spv && " \
-               "printf 'namespace bvh_" #NAME "_stamp {}\\n'" \
-               " > build/shaders/bvh_" #NAME "_stamp.cpp")
-    BVH_STAGE(KEYS);
-    BVH_STAGE(SORT);
-    BVH_STAGE(CLEAR);
-    BVH_STAGE(TOPOLOGY);
-    BVH_STAGE(LEAVES);
-    BVH_STAGE(REFIT);
-    BVH_STAGE(OVERLAP);
-    BVH_STAGE(RAY);
-#undef BVH_STAGE
+    // Grid and volume-surface shaders come from the shared fluid library.
+    // No SPH/BVH shader variants are compiled into the game.
+#define CONT_GRID(NAME) \
+    c_generate(client, "build/shaders/continuum_" #NAME "_stamp.cpp", \
+               "@VulkanFluid@/fld/continuum/shaders/grid.comp", \
+               "glslangValidator -V -DCONT_" #NAME \
+               " @VulkanFluid@/fld/continuum/shaders/grid.comp" \
+               " -o build/shaders/continuum_" #NAME ".comp.spv && " \
+               "printf 'namespace continuum_" #NAME "_stamp {}\\n'" \
+               " > build/shaders/continuum_" #NAME "_stamp.cpp")
+    CONT_GRID(SEED);
+    CONT_GRID(ADVECT_VELOCITY);
+    CONT_GRID(CURVATURE);
+    CONT_GRID(DIVERGENCE);
+    CONT_GRID(PRESSURE);
+    CONT_GRID(PROJECT);
+    CONT_GRID(ADVECT_VOLUME);
+#undef CONT_GRID
+#define CONT_RENDER(NAME,DEFINE) \
+    c_generate(client, "build/shaders/continuum_" #NAME "_stamp.cpp", \
+               "@VulkanFluid@/fld/continuum/shaders/surface.comp", \
+               "glslangValidator -V -DCONT_" #DEFINE \
+               " @VulkanFluid@/fld/continuum/shaders/surface.comp" \
+               " -o build/shaders/continuum_" #NAME ".comp.spv && " \
+               "printf 'namespace continuum_" #NAME "_stamp {}\\n'" \
+               " > build/shaders/continuum_" #NAME "_stamp.cpp")
+    CONT_RENDER(surface,RENDER);
+    CONT_RENDER(upscale,UPSCALE);
+#undef CONT_RENDER
     c_use(client, glfw);
     c_use(client, fastgltf);
     c_use(client, ozz);
