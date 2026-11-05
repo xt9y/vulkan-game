@@ -5,10 +5,10 @@
 
 namespace clt::passes
 {
-    enum class stage : std::uint32_t { geometry, lighting, fluid, tonemapping, presentation, count };
+    enum class stage : std::uint32_t { geometry, lighting, effect, tonemapping, presentation, count };
 
     enum resource : std::uint32_t {
-        scene = 1, gbuffer = 2, hdr = 4, liquid = 8, ldr = 16, swapchain = 32
+        scene = 1, gbuffer = 2, hdr = 4, effect_color = 8, ldr = 16, swapchain = 32
     };
 
     struct description {
