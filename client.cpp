@@ -38,6 +38,7 @@ namespace game_fluid
         clock::time_point previous{},report_started{};
         std::uint32_t submitted=0;
         bool started=false;
+        std::atomic<int> color_mode{0}; // 0 green, 1 red, 2 clear
 
         constexpr const char* particle_stages[11]={
             "CLEAR","PREDICT","BUILD","LAMBDA","DELTA","APPLY",
@@ -46,6 +47,12 @@ namespace game_fluid
     }
 
     void release();
+
+    void cycle_color()
+    {
+        const int current=color_mode.load(std::memory_order_relaxed);
+        color_mode.store((current+1)%3,std::memory_order_relaxed);
+    }
 
     void initialize(const ::scene::state& scene)
     {
@@ -194,8 +201,10 @@ namespace game_fluid
         input.color_layout=vk::ImageLayout::eGeneral;
         // Debug appearance only: edit RGB and opacity here without
         // changing liquid density, volume, viscosity or capillary forces.
-        input.debug_color={.04f,1.f,.06f};  // neon green
-        input.debug_opacity=.85f;           // set 0 to restore clear water
+        const int tint=color_mode.load(std::memory_order_relaxed);
+        input.debug_color=tint==1?
+            fld::vec3{1.f,.035f,.035f}:fld::vec3{.04f,1.f,.06f};
+        input.debug_opacity=tint==2?0.f:.85f;
         fld::render::record(command,image,input);
 #ifndef NDEBUG
         ++submitted;
@@ -235,6 +244,11 @@ namespace
 
     void on_input(const clt::input::frame& frame)
     {
+        static bool color_held=false;
+        const bool color_key=clt::input::key_down(GLFW_KEY_F8);
+        if(color_key && !color_held)game_fluid::cycle_color();
+        color_held=color_key;
+
         // Each gun chooses its own equip key, trigger, ADS and reload input.
         static std::array<bool,GLFW_KEY_LAST+1> equip_held{};
         for(const auto& item:clt::weapon::equip_bindings())
