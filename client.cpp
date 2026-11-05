@@ -51,8 +51,10 @@ namespace game_fluid
         // User-facing quality profile: physics resolution is independent of
         // optical resolution. Raise these values for quality after profiling.
         constexpr float particle_spacing=.064f;
-        constexpr std::uint32_t pressure_iterations=3;
-        constexpr std::uint32_t substeps=1;
+        // Two smaller physics steps improve impact stability and density
+        // projection at the current particle spacing.
+        constexpr std::uint32_t pressure_iterations=2;
+        constexpr std::uint32_t substeps=2;
         constexpr float fluid_render_scale=.5f;
         constexpr std::uint32_t fluid_render_stride=4;
     }
@@ -70,8 +72,8 @@ namespace game_fluid
         const auto extent=vk::swapchain::get()->extent;
         const auto frames=std::uint32_t(vk::swapchain::get()->images.size());
         fld::options options{};
-        // M2-friendly default: same drop dimensions, fewer GPU neighbors and
-        // passes. Increase particle resolution when GPU timings permit.
+        // Coarse real-time physics: stable substeps and a conserved particle
+        // mass for one body of liquid. Visual particle LOD is independent.
         options.max_particles=8192;
         options.spacing=particle_spacing;
         options.smoothing_radius=particle_spacing*2.67f;
