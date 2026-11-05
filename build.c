@@ -66,7 +66,7 @@ void build(C_Build* b)
 
     C_Dependency* fluid =
         c_git(b, "VulkanFluid", "https://github.com/xt9y/vulkan-systems.git",
-              "39e2d04b76768b73aaf2a05357931fe033d86bd7");
+              "7d6a713b0b73df54de737e69d77d81ac39e92521");
     c_dep_subdir(fluid, "fluid");
     c_dep_cbuild(fluid, "VulkanFluid", C_TARGET_STATIC_LIBRARY);
     c_dep_include(fluid, ".");
@@ -178,16 +178,19 @@ void build(C_Build* b)
     CONT_GRID(PROJECT);
     CONT_GRID(ADVECT_VOLUME);
 #undef CONT_GRID
-#define CONT_RENDER(NAME,DEFINE) \
+#define CONT_RENDER(NAME,DEFINE,EXTRA) \
     c_generate(client, "build/shaders/continuum_" #NAME "_stamp.cpp", \
                "@VulkanFluid@/fld/continuum/shaders/surface.comp", \
-               "glslangValidator -V -DCONT_" #DEFINE \
+               "glslangValidator -V -DCONT_" #DEFINE " " EXTRA \
                " @VulkanFluid@/fld/continuum/shaders/surface.comp" \
                " -o build/shaders/continuum_" #NAME ".comp.spv && " \
                "printf 'namespace continuum_" #NAME "_stamp {}\\n'" \
                " > build/shaders/continuum_" #NAME "_stamp.cpp")
-    CONT_RENDER(surface,RENDER);
-    CONT_RENDER(upscale,UPSCALE);
+    // Previous clear-water surface stage intentionally disabled for the
+    // blood demo. Both materials still reuse the same VOF/MAC solver.
+    // CONT_RENDER(surface,RENDER,"");
+    CONT_RENDER(blood_surface,RENDER,"-DFLD_BLOOD");
+    CONT_RENDER(upscale,UPSCALE,"");
 #undef CONT_RENDER
     c_use(client, glfw);
     c_use(client, fastgltf);
