@@ -1,5 +1,4 @@
 #include "weapon.hpp"
-#include "blood_events.hpp"
 
 #include "clt/network/connection.hpp"
 #include "clt/player/prediction.hpp"
@@ -621,7 +620,6 @@ namespace clt::weapon
             d.last_fired_sequence = 0;
             d.casings.clear();
             d.holes.clear();
-            blood_events::reset();
             d.connected = connected;
             select(0, now);
         }
@@ -741,7 +739,6 @@ namespace clt::weapon
                 if (owner != d.weapons.end())
                 {
                     add_impact(shot.impact, owner->settings);
-                    blood_events::shot(shot.impact, source);
                 }
             }
         }
@@ -915,7 +912,6 @@ namespace clt::weapon
             }
             d.collision_source = source;
         }
-        blood_events::update(dt, d.collision, source);
         for (auto& c : d.casings)
         {
             c.age += dt;
@@ -1081,7 +1077,6 @@ namespace clt::weapon
 
     void shutdown()
     {
-        blood_events::reset();
         get() = runtime{};
         std::lock_guard<std::mutex> lock(input_mutex);
         intents.clear();

@@ -1,7 +1,7 @@
 #include "passes.hpp"
 #include "postprocess.hpp"
 #include "scene_renderer.hpp"
-#include "blood.hpp"
+#include "fluid.hpp"
 
 #include <stdexcept>
 #include <vector>
@@ -61,7 +61,7 @@ namespace clt::passes
             {"lighting", vk::PipelineBindPoint::eCompute, resource::gbuffer,
                 resource::hdr, postprocess::lighting},
             {"fluid", vk::PipelineBindPoint::eCompute,
-                resource::gbuffer | resource::hdr, resource::liquid, blood::record},
+                resource::gbuffer | resource::hdr, resource::liquid, fluid::record},
             {"tonemapping", vk::PipelineBindPoint::eCompute,
                 resource::hdr | resource::liquid, resource::ldr,
                 postprocess::tonemap},
