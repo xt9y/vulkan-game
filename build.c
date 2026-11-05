@@ -66,7 +66,7 @@ void build(C_Build* b)
 
     C_Dependency* fluid =
         c_git(b, "VulkanFluid", "https://github.com/xt9y/vulkan-systems.git",
-              "vulkan-fluids-gpu-v4");
+              "1d780a6bf7cfa4d843b382bc6ffd625c0b234ae8");
     c_dep_subdir(fluid, "fluid");
     c_dep_cbuild(fluid, "VulkanFluid", C_TARGET_STATIC_LIBRARY);
     c_dep_include(fluid, ".");
@@ -192,7 +192,40 @@ void build(C_Build* b)
     FLD_RENDER(tile_clear);
     FLD_RENDER(tile_build);
     FLD_RENDER(surface);
+    FLD_RENDER(upscale);
 #undef FLD_RENDER
+    // Collision variants use the same generic fluid kernel; they are
+    // selected only when the streamed scene has at least 32 static boxes.
+#define FLD_BVH_STAGE(NAME) \
+    c_generate(client, "build/shaders/fluid_" #NAME "_bvh_stamp.cpp", \
+               "@VulkanFluid@/fld/shaders/particles.comp", \
+               "glslangValidator -V -DFLD_" #NAME " -DFLD_USE_BVH" \
+               " @VulkanFluid@/fld/shaders/particles.comp" \
+               " -o build/shaders/fluid_" #NAME "_bvh.comp.spv && " \
+               "printf 'namespace fluid_" #NAME "_bvh_stamp {}\\n'" \
+               " > build/shaders/fluid_" #NAME "_bvh_stamp.cpp")
+    FLD_BVH_STAGE(PREDICT);
+    FLD_BVH_STAGE(APPLY);
+    FLD_BVH_STAGE(FINALIZE);
+#undef FLD_BVH_STAGE
+    // Reusable BVH build / query shaders live in vulkan-systems/bvh.
+#define BVH_STAGE(NAME) \
+    c_generate(client, "build/shaders/bvh_" #NAME "_stamp.cpp", \
+               "@VulkanFluid@/../bvh/bvh/shaders/bvh.comp", \
+               "glslangValidator -V -DBVH_" #NAME \
+               " @VulkanFluid@/../bvh/bvh/shaders/bvh.comp" \
+               " -o build/shaders/bvh_" #NAME ".comp.spv && " \
+               "printf 'namespace bvh_" #NAME "_stamp {}\\n'" \
+               " > build/shaders/bvh_" #NAME "_stamp.cpp")
+    BVH_STAGE(KEYS);
+    BVH_STAGE(SORT);
+    BVH_STAGE(CLEAR);
+    BVH_STAGE(TOPOLOGY);
+    BVH_STAGE(LEAVES);
+    BVH_STAGE(REFIT);
+    BVH_STAGE(OVERLAP);
+    BVH_STAGE(RAY);
+#undef BVH_STAGE
     c_use(client, glfw);
     c_use(client, fastgltf);
     c_use(client, ozz);
