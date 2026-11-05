@@ -190,7 +190,7 @@ void build(C_Build* b)
     // blood demo. Both materials still reuse the same VOF/MAC solver.
     // CONT_RENDER(surface,RENDER,"");
     CONT_RENDER(blood_surface,RENDER,"-DFLD_BLOOD");
-    CONT_RENDER(upscale,UPSCALE,"");
+    CONT_RENDER(upscale,UPSCALE,"-DFLD_BLOOD");
 #undef CONT_RENDER
     c_use(client, glfw);
     c_use(client, fastgltf);
