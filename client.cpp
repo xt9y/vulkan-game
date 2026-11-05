@@ -13,6 +13,7 @@
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <csignal>
