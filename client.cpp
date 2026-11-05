@@ -43,13 +43,14 @@ namespace game_blood
 
         // User-facing blood simulation resolution. The fluid backend is
         // unchanged and shared; only the blood material profile is enabled.
-        // Cover the actual walled room (about 10 metres across) instead
-        // of stopping the liquid at an invisible 6.4 metre grid boundary.
-        // A slightly coarser cell keeps the GPU grid cost bounded.
-        constexpr std::uint32_t liquid_width=72;
+        // Follow a small splash at finer resolution instead of simulating
+        // a 1,300 litre sphere across the entire ten-metre level. A local
+        // 3.2-metre volume resolves the puddle/contact line much better
+        // without multiplying the global GPU cell count.
+        constexpr std::uint32_t liquid_width=80;
         constexpr std::uint32_t liquid_height=48;
-        constexpr std::uint32_t liquid_depth=72;
-        constexpr float liquid_cell_size=.145f;
+        constexpr std::uint32_t liquid_depth=80;
+        constexpr float liquid_cell_size=.04f;
         constexpr std::uint32_t pressure_iterations=36;
         constexpr std::uint32_t substeps=3;
         constexpr float fluid_render_scale=.5f;
@@ -63,18 +64,18 @@ namespace game_blood
         const auto extent=vk::swapchain::get()->extent;
         const auto frames=std::uint32_t(vk::swapchain::get()->images.size());
         fld::continuum::drop initial{};
-        initial.center={.9f,2.75f,.75f};
-        initial.radius=.68f;
+        initial.center={.9f,.95f,.75f};
+        initial.radius=.22f; // ~45 litres, large pool demo, not one droplet
         fld::continuum::options settings{};
         settings.width=liquid_width;
         settings.height=liquid_height;
         settings.depth=liquid_depth;
         settings.cell_size=liquid_cell_size;
         settings.origin={
-            -0.5f*liquid_width*liquid_cell_size,
+            initial.center.x-.5f*liquid_width*liquid_cell_size,
             0.f,
-            -0.5f*liquid_depth*liquid_cell_size
-        }; // Y is aligned below the actual floor after inspecting the scene.
+            initial.center.z-.5f*liquid_depth*liquid_cell_size
+        }; // The simulation tile follows the test spill; floor alignment follows.
         settings.gravity={0.f,-9.81f,0.f};
         settings.pressure_iterations=pressure_iterations;
         settings.substeps=substeps;
@@ -115,13 +116,13 @@ namespace game_blood
         // Adjust the blood material here without editing the engine.
         fld::blood::material blood{};
         // Game-facing blood controls. The VOF simulation stays in VulkanFluid.
-        blood.viscosity_zero=.25f;     // Pa*s at low shear
-        blood.viscosity_high=.0035f;   // Pa*s at high shear
-        blood.relaxation_seconds=25.f; // Carreau time scale
-        blood.shear_exponent=.25f;
-        blood.substrate_drag=4.f;      // visual floor adhesion
-        blood.shallow_color={.71f,.046f,.038f}; // bright in thin films
-        blood.optical_density=32.f;    // dark burgundy in thick volumes
+        blood.viscosity_zero=.035f;    // Pa*s at rest, illustrative whole blood
+        blood.viscosity_high=.0035f;   // Pa*s at high shear, free initial impact
+        blood.relaxation_seconds=1.2f; // Carreau time scale
+        blood.shear_exponent=.52f;
+        blood.substrate_drag=6.f;      // near-floor recoil damping only
+        blood.shallow_color={.42f,.013f,.011f};
+        blood.optical_density=90.f;    // opaque red skin; burgundy with depth
         const auto paths=fld::blood::shaders("build/shaders/");
         fld::blood::init(settings,initial,paths,frames,
                          extent.width,extent.height,blood);
