@@ -56,6 +56,9 @@ namespace clt::weapon
         std::filesystem::path casing_model;
         std::map<motion, clip> animations;
         std::string camera_joint, muzzle_joint, ejection_joint, slide_joint;
+        // Optional fallback sockets when an animated model lacks named joints.
+        vk::util::math::vec3 muzzle_offset{0.f,0.f,-.4f};
+        vk::util::math::vec3 ejection_offset{.08f,-.04f,-.12f};
         vk::util::math::mat4 correction = vk::util::math::mat4::identity();
         float fov = 1.2f, ads_fov = 1.2f, near_plane = .01f, far_plane = 20;
         float ads_zoom = 0, ads_speed = 14;
