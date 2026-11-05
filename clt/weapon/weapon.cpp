@@ -913,7 +913,7 @@ namespace clt::weapon
         d.recoil *= std::exp(-config().recoil_decay * dt);
         camera::aim(d.ads * config().ads_zoom);
         std::vector<animation::matrix> palette;
-        if (!animation::sample(
+        if (d.skin && !animation::sample(
                 d.skin,
                 d.clip,
                 float(now - d.clip_started) * d.speed,
@@ -926,7 +926,9 @@ namespace clt::weapon
         {
             throw std::runtime_error("Cannot sample weapon animation");
         }
-        if (d.predicted.magazine == 0 && d.predicted.reload == ::weapon::reload_phase::none)
+        if (d.skin && d.slide != UINT32_MAX &&
+            d.predicted.magazine == 0 &&
+            d.predicted.reload == ::weapon::reload_phase::none)
         {
             // Keep the last round's authored fire pose during its recoil, then hold the slide open.
             const bool firing =
