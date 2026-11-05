@@ -114,7 +114,14 @@ namespace game_blood
         // collision, and conservative VOF infrastructure is still reused.
         // Adjust the blood material here without editing the engine.
         fld::blood::material blood{};
-        blood.substrate_drag=3.f;
+        // Game-facing blood controls. The VOF simulation stays in VulkanFluid.
+        blood.viscosity_zero=.25f;     // Pa*s at low shear
+        blood.viscosity_high=.0035f;   // Pa*s at high shear
+        blood.relaxation_seconds=25.f; // Carreau time scale
+        blood.shear_exponent=.25f;
+        blood.substrate_drag=4.f;      // visual floor adhesion
+        blood.shallow_color={.71f,.046f,.038f}; // bright in thin films
+        blood.optical_density=32.f;    // dark burgundy in thick volumes
         const auto paths=fld::blood::shaders("build/shaders/");
         fld::blood::init(settings,initial,paths,frames,
                          extent.width,extent.height,blood);
