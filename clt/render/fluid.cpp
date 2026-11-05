@@ -40,15 +40,36 @@ namespace clt::fluid
         try
         {
             fld::options options{};
-            options.max_particles=2048;
-            options.spacing=.045f;
-            options.smoothing_radius=.102f;
+            // A coherent liquid volume, not a handful of rendered beads.
+            // 0.34 m / 0.042 m generates 2,205 physical SPH particles.
+            options.max_particles=2800;
+            options.spacing=.042f;
+            options.smoothing_radius=.112f;
             options.pressure_iterations=4;
             options.substeps=2;
             options.floor_height=0.f;
+            const auto solid=[](float x0,float y0,float z0,
+                                float x1,float y1,float z1)
+            {
+                return fld::box{
+                    {x0,y0,z0,0.f},{x1,y1,z1,0.f}
+                };
+            };
+            // Match the real server test scene: four tall walls, three
+            // half-metre boxes; the floor is the solver's y=0 plane.
+            options.colliders={
+                solid( 4.66f,0.f,-5.f, 5.34f,4.f,5.f),
+                solid(-5.34f,0.f,-5.f,-4.66f,4.f,5.f),
+                solid(-5.f,0.f, 4.66f,5.f,4.f,5.34f),
+                solid(-5.f,0.f,-5.34f,5.f,4.f,-4.66f),
+                solid(-2.5f,0.f,-.5f,-1.5f,1.f,.5f),
+                solid(-.5f,0.f,-.5f,.5f,1.f,.5f),
+                solid(1.5f,0.f,-.5f,2.5f,1.f,.5f)
+            };
             fld::drop initial{};
-            initial.center={0.f,2.6f,-1.7f};
-            initial.radius=.28f;
+            // Spawn nearer to the player at z=4 and in front of the props.
+            initial.center={1.15f,2.9f,1.5f};
+            initial.radius=.34f;
             fld::shader_paths paths{};
             for(std::uint32_t i=0;i<paths.size();++i)
                 paths[i]=std::string("build/shaders/fluid_")+
