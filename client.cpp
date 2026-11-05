@@ -40,23 +40,16 @@ namespace game_fluid
         bool started=false;
         std::atomic<int> color_mode{0}; // 0 green, 1 red, 2 clear
 
-        constexpr const char* particle_stages[11]={
-            "CLEAR","PREDICT","BUILD","LAMBDA","DELTA","APPLY",
-            "FINALIZE","NORMAL","CAPILLARY","VISCOSITY","VISCOSITY_APPLY"
-        };
-        constexpr const char* bvh_stages[8]={
-            "KEYS","SORT","CLEAR","TOPOLOGY",
-            "LEAVES","REFIT","OVERLAP","RAY"
-        };
-        // User-facing quality profile: physics resolution is independent of
-        // optical resolution. Raise these values for quality after profiling.
-        constexpr float particle_spacing=.064f;
-        // Two smaller physics steps improve impact stability and density
-        // projection at the current particle spacing.
-        constexpr std::uint32_t pressure_iterations=2;
-        constexpr std::uint32_t substeps=2;
+        // User-facing continuum resolution. This is a volume grid, not
+        // particle spacing; surface and grid can be tuned independently.
+        constexpr std::uint32_t liquid_width=64;
+        constexpr std::uint32_t liquid_height=40;
+        constexpr std::uint32_t liquid_depth=64;
+        constexpr float liquid_cell_size=.1f;
+        constexpr std::uint32_t pressure_iterations=36;
+        constexpr std::uint32_t substeps=3;
         constexpr float fluid_render_scale=.5f;
-        constexpr std::uint32_t fluid_render_stride=4;
+        bool continuum_initialized=false;
     }
 
     void release();
@@ -71,51 +64,48 @@ namespace game_fluid
     {
         const auto extent=vk::swapchain::get()->extent;
         const auto frames=std::uint32_t(vk::swapchain::get()->images.size());
-        fld::options options{};
-        // Coarse real-time physics: stable substeps and a conserved particle
-        // mass for one body of liquid. Visual particle LOD is independent.
-        options.max_particles=8192;
-        options.spacing=particle_spacing;
-        options.smoothing_radius=particle_spacing*2.67f;
-        options.pressure_iterations=pressure_iterations;
-        options.substeps=substeps;
-        options.floor_height=0.f;
-        // World collision bounds come exclusively from server.cpp::add().
-        options.colliders.reserve(scene.collision_boxes.size());
-        for (const auto& box : scene.collision_boxes)
+        fld::continuum::options settings{};
+        settings.width=liquid_width;
+        settings.height=liquid_height;
+        settings.depth=liquid_depth;
+        settings.cell_size=liquid_cell_size;
+        settings.origin={-3.2f,0.f,-3.2f};
+        settings.gravity={0.f,-9.81f,0.f};
+        settings.pressure_iterations=pressure_iterations;
+        settings.substeps=substeps;
+        settings.render_scale=fluid_render_scale;
+        // Collider geometry is authored by server.cpp and streamed normally.
+        settings.colliders.reserve(scene.collision_boxes.size());
+        for(const auto& box:scene.collision_boxes)
         {
-            options.colliders.push_back({
+            settings.colliders.push_back({
                 {box.minimum.x,box.minimum.y,box.minimum.z,0.f},
                 {box.maximum.x,box.maximum.y,box.maximum.z,0.f}
             });
         }
-        fld::drop initial{};
-        // Spawn nearer to the player at z=4 and in front of the props.
+        fld::continuum::drop initial{};
         initial.center={.9f,2.75f,.75f};
         initial.radius=.68f;
-        fld::shader_paths paths{};
-        for(std::uint32_t i=0;i<11;++i)
-            paths[i]=std::string("build/shaders/fluid_")+
-                      particle_stages[i]+".comp.spv";
-        paths[11]="build/shaders/fluid_PREDICT_bvh.comp.spv";
-        paths[12]="build/shaders/fluid_APPLY_bvh.comp.spv";
-        paths[13]="build/shaders/fluid_FINALIZE_bvh.comp.spv";
-        for(std::uint32_t i=0;i<options.bvh_shaders.size();++i)
-            options.bvh_shaders[i]=std::string("build/shaders/bvh_")+
-                                   bvh_stages[i]+".comp.spv";
-        fld::system::init(options,initial,paths);
-        fld::render::init({
-            "build/shaders/fluid_tile_clear.comp.spv",
-            "build/shaders/fluid_tile_build.comp.spv",
-            "build/shaders/fluid_surface.comp.spv",
-            "build/shaders/fluid_upscale.comp.spv"
-        },frames,extent.width,extent.height,
-          fluid_render_scale,fluid_render_stride);
+        fld::continuum::shader_paths paths{};
+        constexpr const char* names[7]={
+            "SEED","ADVECT_VELOCITY","CURVATURE","DIVERGENCE",
+            "PRESSURE","PROJECT","ADVECT_VOLUME"
+        };
+        for(std::uint32_t i=0;i<paths.simulation.size();++i)
+            paths.simulation[i]=std::string("build/shaders/continuum_")+
+                                 names[i]+".comp.spv";
+        paths.rendering={
+            "build/shaders/continuum_surface.comp.spv",
+            "build/shaders/continuum_upscale.comp.spv"
+        };
+        fld::continuum::init(settings,initial,paths,frames,
+                             extent.width,extent.height);
+        continuum_initialized=true;
     }
 
     void create()
     {
-        if(!targets.empty() || fld::system::get())
+        if(!targets.empty() || continuum_initialized)
             throw std::logic_error("Fluid pass already initialized");
         const auto extent=vk::swapchain::get()->extent;
         const auto frames=std::uint32_t(vk::swapchain::get()->images.size());
@@ -158,7 +148,7 @@ namespace game_fluid
 
     bool active()
     {
-        return !targets.empty() && fld::render::active() &&
+        return !targets.empty() && fld::continuum::active() &&
                clt::connection::get()->scene_complete.load(std::memory_order_acquire);
     }
 
@@ -174,13 +164,12 @@ namespace game_fluid
             return;
         // The scene is asynchronous: initialize GPU collisions only after
         // all authoritative boxes are streamed, never before connection.
-        if (!fld::system::get())
+        if (!continuum_initialized)
         {
             const auto scene=clt::connection::snapshot();
             if (!scene) return;
             initialize(*scene);
         }
-        if(!active())return;
         auto &target=targets.at(image);
         if(!target.initialized)
         {
@@ -208,9 +197,8 @@ namespace game_fluid
         }
         const auto seconds=std::chrono::duration<float>(now-previous).count();
         previous=now;
-        fld::system::record(command,std::min(seconds,1.f/30.f));
         const auto gbuffer=clt::scene_renderer::outputs(image);
-        fld::render::input input{};
+        fld::continuum::render_input input{};
         input.width=gbuffer.extent.width;
         input.height=gbuffer.extent.height;
         input.view_projection=clt::scene_renderer::world_view_projection();
@@ -223,16 +211,18 @@ namespace game_fluid
         // changing liquid density, volume, viscosity or capillary forces.
         const int tint=color_mode.load(std::memory_order_relaxed);
         input.debug_color=tint==1?
-            fld::vec3{1.f,.035f,.035f}:fld::vec3{.04f,1.f,.06f};
+            fld::continuum::vec3{1.f,.035f,.035f}:
+            fld::continuum::vec3{.04f,1.f,.06f};
         input.debug_opacity=tint==2?0.f:.85f;
-        fld::render::record(command,image,input);
+        fld::continuum::record(command,image,seconds,input);
 #ifndef NDEBUG
         ++submitted;
         const float report_seconds=std::chrono::duration<float>(now-report_started).count();
         if(report_seconds>=3.f)
         {
             std::clog << "fluid: submitted_fps=" << submitted/report_seconds
-                      << " particles=" << fld::system::particle_count()
+                      << " continuum_grid=" << liquid_width << "x"
+                      << liquid_height << "x" << liquid_depth
                       << " (GPU frame time not measured)" << std::endl;
             submitted=0;
             report_started=now;
@@ -249,8 +239,8 @@ namespace game_fluid
         }
         targets.clear();
         started=false;
-        fld::render::shutdown();
-        fld::system::shutdown();
+        fld::continuum::shutdown();
+        continuum_initialized=false;
     }
 }
 
