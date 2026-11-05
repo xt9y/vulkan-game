@@ -23,9 +23,9 @@ namespace clt::fluid
         clock::time_point previous{},report_started{};
         std::uint32_t submitted=0;
 
-        constexpr const char* particle_stages[9]={
+        constexpr const char* particle_stages[11]={
             "CLEAR","PREDICT","BUILD","LAMBDA","DELTA","APPLY",
-            "FINALIZE","NORMAL","CAPILLARY"
+            "FINALIZE","NORMAL","CAPILLARY","VISCOSITY","VISCOSITY_APPLY"
         };
     }
 
