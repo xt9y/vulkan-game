@@ -4,7 +4,7 @@
 #include "srv/shared/net/socket.hpp"
 #include "srv/shared/player/movement.hpp"
 #include "srv/shared/scene/scene.hpp"
-#include "srv/shared/weapon/metadata.hpp"
+#include "weapons.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -81,17 +81,10 @@ int main(int argc, char** argv)
             1.8f       // player height (collision and camera)
         });
 
-        // Weapon IDs, ammunition, fire cadence and animation events belong to this game.
-        weapon::definition glock;
-        glock.id = 1;
-        glock.magazine_capacity = 15;
-        glock.initial_reserve = 90;
-        glock.fire_interval = .15;
-        glock.range = 200;
-        glock.reload = weapon::load_timing(
-            "assets/glock/metadata.json", "Glock_Reload", "Glock_ReloadEmpty", 20, 20
-        );
-        srv::application::add_weapon(glock);
+        // One game-authored gun profile supplies both the server's
+        // authoritative rules and the client's models, controls and clips.
+        for(const auto& gun:game_weapons::all())
+            srv::application::add_weapon(gun.rules);
         srv::application::on_weapon_command(
             [](srv::application::weapon_command_context& event)
             {
