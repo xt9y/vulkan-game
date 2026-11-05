@@ -522,16 +522,20 @@ namespace clt::weapon
         }
         const auto id=value.rules.id;
         const auto key=value.input.equip_key;
-        slot item;
-        item.settings = std::move(value);
-        item.authority = item.predicted = ::weapon::make_state(item.settings.rules);
-        d.weapons.push_back(std::move(item));
         if(key>=0)
         {
             std::lock_guard<std::mutex> lock(input_mutex);
             for(const auto& registered:registered_equips)
                 if(registered.key==key)
                     throw std::invalid_argument("Duplicate weapon equip key");
+        }
+        slot item;
+        item.settings=std::move(value);
+        item.authority=item.predicted=::weapon::make_state(item.settings.rules);
+        d.weapons.push_back(std::move(item));
+        if(key>=0)
+        {
+            std::lock_guard<std::mutex> lock(input_mutex);
             registered_equips.push_back({id,key});
         }
     }
