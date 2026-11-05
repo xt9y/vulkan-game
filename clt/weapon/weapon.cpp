@@ -275,6 +275,7 @@ namespace clt::weapon
             d.presented_aim = false;
             d.ads = 0;
             camera::aim(0);
+            camera::set_ads_fraction(0);
             d.recoil = 0;
             d.flash_until = 0;
             play(motion::draw, now);
@@ -916,6 +917,7 @@ namespace clt::weapon
         d.ads += (float(aiming) - d.ads) * (1 - std::exp(-config().ads_speed * dt));
         d.recoil *= std::exp(-config().recoil_decay * dt);
         camera::aim(d.ads * config().ads_zoom);
+        camera::set_ads_fraction(d.ads);
         std::vector<animation::matrix> palette;
         if (d.skin && !animation::sample(
                 d.skin,
