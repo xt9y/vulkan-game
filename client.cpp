@@ -92,9 +92,12 @@ namespace game_fluid
         initial.center={.9f,2.75f,.75f};
         initial.radius=.68f;
         fld::shader_paths paths{};
-        for(std::uint32_t i=0;i<paths.size();++i)
+        for(std::uint32_t i=0;i<11;++i)
             paths[i]=std::string("build/shaders/fluid_")+
                       particle_stages[i]+".comp.spv";
+        paths[11]="build/shaders/fluid_BVH_PREDICT.comp.spv";
+        paths[12]="build/shaders/fluid_BVH_APPLY.comp.spv";
+        paths[13]="build/shaders/fluid_BVH_FINALIZE.comp.spv";
         fld::system::init(options,initial,paths);
         fld::render::init({
             "build/shaders/fluid_tile_clear.comp.spv",
