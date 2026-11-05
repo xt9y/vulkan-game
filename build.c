@@ -182,6 +182,18 @@ void build(C_Build* b)
     FLD_STAGE(VISCOSITY);
     FLD_STAGE(VISCOSITY_APPLY);
 #undef FLD_STAGE
+#define FLD_BVH_STAGE(NAME) \
+    c_generate(client, "build/shaders/fluid_BVH_" #NAME "_stamp.cpp", \
+               "@VulkanFluid@/fld/shaders/particles.comp", \
+               "glslangValidator -V -DFLD_" #NAME " -DFLD_USE_BVH" \
+               " @VulkanFluid@/fld/shaders/particles.comp" \
+               " -o build/shaders/fluid_BVH_" #NAME ".comp.spv && " \
+               "printf 'namespace fluid_BVH_" #NAME "_stamp {}\\n'" \
+               " > build/shaders/fluid_BVH_" #NAME "_stamp.cpp")
+    FLD_BVH_STAGE(PREDICT);
+    FLD_BVH_STAGE(APPLY);
+    FLD_BVH_STAGE(FINALIZE);
+#undef FLD_BVH_STAGE
 #define FLD_RENDER(NAME) \
     c_generate(client, "build/shaders/fluid_" #NAME "_stamp.cpp", \
                "@VulkanFluid@/fld/shaders/" #NAME ".comp", \
