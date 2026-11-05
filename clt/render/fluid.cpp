@@ -1,6 +1,7 @@
 #include "fluid.hpp"
 #include "postprocess.hpp"
 #include "scene_renderer.hpp"
+#include "clt/network/connection.hpp"
 #include <fld/fld.hpp>
 #include <algorithm>
 #include <chrono>
@@ -22,6 +23,7 @@ namespace clt::fluid
         std::vector<target> targets;
         clock::time_point previous{},report_started{};
         std::uint32_t submitted=0;
+        bool started=false;
 
         constexpr const char* particle_stages[11]={
             "CLEAR","PREDICT","BUILD","LAMBDA","DELTA","APPLY",
@@ -104,6 +106,7 @@ namespace clt::fluid
             }
             previous=report_started=clock::now();
             submitted=0;
+            started=false;
         }
         catch(...)
         {
@@ -114,7 +117,8 @@ namespace clt::fluid
 
     bool active()
     {
-        return !targets.empty() && fld::render::active();
+        return !targets.empty() && fld::render::active() &&
+               connection::get()->scene_complete.load(std::memory_order_acquire);
     }
 
     vk::ImageView output(std::uint32_t image)
@@ -144,6 +148,12 @@ namespace clt::fluid
             target.initialized=true;
         }
         const auto now=clock::now();
+        if(!started)
+        {
+            previous=report_started=now;
+            submitted=0;
+            started=true;
+        }
         const auto seconds=std::chrono::duration<float>(now-previous).count();
         previous=now;
         fld::system::record(command,std::min(seconds,1.f/30.f));
@@ -180,6 +190,7 @@ namespace clt::fluid
             if(target.image.handle)vk::image::destroy(target.image);
         }
         targets.clear();
+        started=false;
         fld::render::shutdown();
         fld::system::shutdown();
     }
