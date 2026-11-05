@@ -53,31 +53,6 @@ namespace
         return mesh;
     }
 
-    // Only one visual test texture: a plain magenta/black checkerboard.
-    // White geometry uses the renderer's default white material and does
-    // not allocate or stream any custom textures.
-    ::scene::texture make_checker()
-    {
-        constexpr std::uint32_t side=256;
-        constexpr std::uint32_t squares=32;
-        ::scene::texture image{};
-        image.id=0xF1000001u;
-        image.width=side;
-        image.height=side;
-        image.pixels.resize(std::size_t(side)*side*4);
-        for(std::uint32_t y=0;y<side;++y)
-        for(std::uint32_t x=0;x<side;++x)
-        {
-            const bool magenta=((x*squares/side+y*squares/side)&1u)!=0u;
-            const auto index=(std::size_t(y)*side+x)*4;
-            image.pixels[index+0]=magenta?255:0;
-            image.pixels[index+1]=0;
-            image.pixels[index+2]=magenta?255:0;
-            image.pixels[index+3]=255;
-        }
-        return image;
-    }
-
     void stop(int)
     {
         game::application::get()->stop.store(true, std::memory_order_relaxed);
@@ -141,9 +116,9 @@ int main(int argc, char** argv)
         ::scene::state initial_scene;
         // Checker floor is purely visual; its top is y=0 and remains one
         // authoritative collision AABB. All cubes and walls are bright white.
-        initial_scene.textures.push_back(make_checker());
+
         auto floor=make_rect(1,10.f,.1f,10.f,{1.f,1.f,1.f,1.f});
-        floor.surface.base_color_texture=initial_scene.textures.back().id;
+        floor.surface.procedural_pattern=1;
         auto cube=make_rect(2,.5f,.5f,.5f,{1.f,1.f,1.f,1.f});
         auto wall_x=make_rect(3,.34f,2.f,5.f,{1.f,1.f,1.f,1.f});
         auto wall_z=make_rect(4,5.f,2.f,.34f,{1.f,1.f,1.f,1.f});
