@@ -25,7 +25,7 @@
 #include <utility>
 #include <vector>
 
-namespace game_fluid
+namespace game_blood
 {
     namespace
     {
@@ -41,8 +41,8 @@ namespace game_fluid
         std::uint32_t submitted=0;
         bool started=false;
 
-        // User-facing continuum resolution. This is a volume grid, not
-        // particle spacing; surface and grid can be tuned independently.
+        // User-facing blood simulation resolution. The fluid backend is
+        // unchanged and shared; only the blood material profile is enabled.
         // Cover the actual walled room (about 10 metres across) instead
         // of stopping the liquid at an invisible 6.4 metre grid boundary.
         // A slightly coarser cell keeps the GPU grid cost bounded.
@@ -104,25 +104,20 @@ namespace game_fluid
         if(std::isfinite(support))
             settings.origin.y=support-4.f*liquid_cell_size;
 #ifndef NDEBUG
-        std::clog << "fluid: support_y="
+        std::clog << "blood: support_y="
                   << (std::isfinite(support)?support:settings.origin.y)
                   << " grid_origin_y=" << settings.origin.y
                   << " colliders=" << settings.colliders.size() << '\n';
 #endif
-        fld::continuum::shader_paths paths{};
-        constexpr const char* names[7]={
-            "SEED","ADVECT_VELOCITY","CURVATURE","DIVERGENCE",
-            "PRESSURE","PROJECT","ADVECT_VOLUME"
-        };
-        for(std::uint32_t i=0;i<paths.simulation.size();++i)
-            paths.simulation[i]=std::string("build/shaders/continuum_")+
-                                 names[i]+".comp.spv";
-        paths.rendering={
-            "build/shaders/continuum_surface.comp.spv",
-            "build/shaders/continuum_upscale.comp.spv"
-        };
-        fld::continuum::init(settings,initial,paths,frames,
-                             extent.width,extent.height);
+        // The former water-only front end is disabled. Blood now provides
+        // material/rheology defaults and optical shaders; all simulation,
+        // collision, and conservative VOF infrastructure is still reused.
+        // Adjust the blood material here without editing the engine.
+        fld::blood::material blood{};
+        blood.substrate_drag=3.f;
+        const auto paths=fld::blood::shaders("build/shaders/");
+        fld::blood::init(settings,initial,paths,frames,
+                         extent.width,extent.height,blood);
         continuum_initialized=true;
     }
 
@@ -171,7 +166,7 @@ namespace game_fluid
 
     bool active()
     {
-        return !targets.empty() && fld::continuum::active() &&
+        return !targets.empty() && fld::blood::active() &&
                clt::connection::get()->scene_complete.load(std::memory_order_acquire);
     }
 
@@ -230,13 +225,13 @@ namespace game_fluid
         input.output=target.view;
         input.sampler=clt::postprocess::sampler();
         input.color_layout=vk::ImageLayout::eGeneral;
-        fld::continuum::record(command,image,seconds,input);
+        fld::blood::record(command,image,seconds,input);
 #ifndef NDEBUG
         ++submitted;
         const float report_seconds=std::chrono::duration<float>(now-report_started).count();
         if(report_seconds>=3.f)
         {
-            std::clog << "fluid: submitted_fps=" << submitted/report_seconds
+            std::clog << "blood: submitted_fps=" << submitted/report_seconds
                       << " continuum_grid=" << liquid_width << "x"
                       << liquid_height << "x" << liquid_depth
                       << " (GPU frame time not measured)" << std::endl;
@@ -255,7 +250,7 @@ namespace game_fluid
         }
         targets.clear();
         started=false;
-        fld::continuum::shutdown();
+        fld::blood::shutdown();
         continuum_initialized=false;
     }
 }
@@ -332,8 +327,8 @@ int main(int argc, char** argv)
         load_weapons();
         clt::application::set_callbacks({on_input});
         clt::renderer::set_effect({
-            game_fluid::create, game_fluid::release,
-            game_fluid::active, game_fluid::output, game_fluid::record
+            game_blood::create, game_blood::release,
+            game_blood::active, game_blood::output, game_blood::record
         });
         net::socket::init();
         std::signal(SIGINT, stop);
