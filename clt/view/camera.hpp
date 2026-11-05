@@ -23,6 +23,7 @@ namespace clt::camera
     // Updated when the active gun changes; ADS sensitivity is interpolated
     // using the same aim fraction as the camera's zoom.
     void set_look_sensitivity(float base,float ads_multiplier);
+    void set_ads_fraction(float fraction);
     state snapshot();
     // Freeze mouse look, recoil and predicted eye position for one render frame.
     frame capture();
