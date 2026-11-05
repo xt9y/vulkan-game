@@ -3,8 +3,6 @@
 #include "srv/shared/weapon/gun.hpp"
 
 #include <cstdint>
-#include <filesystem>
-#include <map>
 #include <string>
 #include <vector>
 #include <vk/vk.hpp>
