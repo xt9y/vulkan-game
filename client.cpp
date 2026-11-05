@@ -15,9 +15,11 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -43,7 +45,7 @@ namespace game_fluid
         // User-facing continuum resolution. This is a volume grid, not
         // particle spacing; surface and grid can be tuned independently.
         constexpr std::uint32_t liquid_width=64;
-        constexpr std::uint32_t liquid_height=40;
+        constexpr std::uint32_t liquid_height=48;
         constexpr std::uint32_t liquid_depth=64;
         constexpr float liquid_cell_size=.1f;
         constexpr std::uint32_t pressure_iterations=36;
@@ -64,12 +66,15 @@ namespace game_fluid
     {
         const auto extent=vk::swapchain::get()->extent;
         const auto frames=std::uint32_t(vk::swapchain::get()->images.size());
+        fld::continuum::drop initial{};
+        initial.center={.9f,2.75f,.75f};
+        initial.radius=.68f;
         fld::continuum::options settings{};
         settings.width=liquid_width;
         settings.height=liquid_height;
         settings.depth=liquid_depth;
         settings.cell_size=liquid_cell_size;
-        settings.origin={-3.2f,0.f,-3.2f};
+        settings.origin={-3.2f,0.f,-3.2f}; // Y aligned to the actual floor below.
         settings.gravity={0.f,-9.81f,0.f};
         settings.pressure_iterations=pressure_iterations;
         settings.substeps=substeps;
@@ -83,9 +88,27 @@ namespace game_fluid
                 {box.maximum.x,box.maximum.y,box.maximum.z,0.f}
             });
         }
-        fld::continuum::drop initial{};
-        initial.center={.9f,2.75f,.75f};
-        initial.radius=.68f;
+        // The server owns the floor geometry. Place a few grid layers below
+        // its upper face so the floor is voxelized as a real solid, not an
+        // arbitrary boundary at the bottom of the simulation domain.
+        float support=-std::numeric_limits<float>::infinity();
+        for(const auto& box:settings.colliders)
+        {
+            if(initial.center.x>=box.minimum.x &&
+               initial.center.x<=box.maximum.x &&
+               initial.center.z>=box.minimum.z &&
+               initial.center.z<=box.maximum.z &&
+               box.maximum.y<=initial.center.y)
+                support=std::max(support,box.maximum.y);
+        }
+        if(std::isfinite(support))
+            settings.origin.y=support-4.f*liquid_cell_size;
+#ifndef NDEBUG
+        std::clog << "fluid: support_y="
+                  << (std::isfinite(support)?support:settings.origin.y)
+                  << " grid_origin_y=" << settings.origin.y
+                  << " colliders=" << settings.colliders.size() << '\n';
+#endif
         fld::continuum::shader_paths paths{};
         constexpr const char* names[7]={
             "SEED","ADVECT_VELOCITY","CURVATURE","DIVERGENCE",
