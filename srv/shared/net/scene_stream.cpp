@@ -107,7 +107,7 @@ namespace net::scene_stream
             throw std::runtime_error("Scene snapshot exceeds maximum batch size");
         }
 
-        std::vector<std::uint8_t> bytes{'S', 'C', 'N', '8'};
+        std::vector<std::uint8_t> bytes{'S', 'C', 'N', '9'};
 
         add(bytes, std::uint32_t(scene.meshes.size()));
         add(bytes, std::uint32_t(scene.instances.size()));
@@ -188,6 +188,7 @@ namespace net::scene_stream
             add(bytes, mesh.surface.emissive_texture);
             add(bytes, mesh.surface.alpha_mode);
             add(bytes, mesh.surface.double_sided ? 1u : 0u);
+            add(bytes, mesh.surface.procedural_pattern);
 
             for (const auto& vertex : mesh.vertices)
             {
@@ -267,7 +268,7 @@ namespace net::scene_stream
             bytes[0] != 'S' ||
             bytes[1] != 'C' ||
             bytes[2] != 'N' ||
-            bytes[3] != '8')
+            bytes[3] != '9')
         {
             return false;
         }
@@ -389,14 +390,14 @@ namespace net::scene_stream
                 !input.take(vertices) ||
                 !input.take(indices) ||
                 vertices == 0 || indices == 0 || indices % 3 ||
-                input.remaining() < 72 ||
+                input.remaining() < 76 ||
                 std::uint64_t(vertices) * (mesh.skin_id ? 64 : 32) +
-                    std::uint64_t(indices) * 4 > input.remaining() - 72)
+                    std::uint64_t(indices) * 4 > input.remaining() - 76)
             {
                 return false;
             }
 
-            if (input.remaining() < 72) return false;
+            if (input.remaining() < 76) return false;
             for (auto& value : mesh.surface.base_color)
                 if (!input.take_float(value)) return false;
             for (auto& value : mesh.surface.emissive)
@@ -415,6 +416,8 @@ namespace net::scene_stream
             if (!input.take(double_sided) || double_sided > 1 ||
                 mesh.surface.alpha_mode > 2) return false;
             mesh.surface.double_sided = double_sided != 0;
+            if (!input.take(mesh.surface.procedural_pattern) ||
+                mesh.surface.procedural_pattern > 1) return false;
 
             mesh.vertices.resize(vertices);
             mesh.indices.resize(indices);
