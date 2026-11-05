@@ -42,9 +42,10 @@ namespace clt::fluid
         try
         {
             fld::options options{};
-            // A coherent liquid volume, not a handful of rendered beads.
-            // 0.34 m / 0.042 m generates 2,205 physical SPH particles.
-            options.max_particles=2800;
+            // Double the drop radius at fixed physical particle spacing:
+            // eight times the volume and 17,845 SPH particles (was 2,205).
+            // Maintain resolution rather than inflating the particle radius.
+            options.max_particles=20000;
             options.spacing=.042f;
             options.smoothing_radius=.112f;
             options.pressure_iterations=4;
@@ -71,7 +72,7 @@ namespace clt::fluid
             fld::drop initial{};
             // Spawn nearer to the player at z=4 and in front of the props.
             initial.center={.9f,2.75f,.75f};
-            initial.radius=.34f;
+            initial.radius=.68f;
             fld::shader_paths paths{};
             for(std::uint32_t i=0;i<paths.size();++i)
                 paths[i]=std::string("build/shaders/fluid_")+

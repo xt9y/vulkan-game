@@ -1441,8 +1441,8 @@ namespace clt::scene_renderer
 
         // Disjoint depth ranges give the viewmodel independent depth testing while
         // preserving world depth for deferred HDR lighting and sky classification.
-        // Keep the fluid experiment unobstructed by the first-person gun.
-        for (bool viewmodel : {false})
+        // Draw both world-attached weapons and the first-person viewmodel.
+        for (bool viewmodel : {false, true})
         {
             command.setViewport(
                 0,
