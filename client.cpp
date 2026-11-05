@@ -42,10 +42,13 @@ namespace game_fluid
 
         // User-facing continuum resolution. This is a volume grid, not
         // particle spacing; surface and grid can be tuned independently.
-        constexpr std::uint32_t liquid_width=64;
+        // Cover the actual walled room (about 10 metres across) instead
+        // of stopping the liquid at an invisible 6.4 metre grid boundary.
+        // A slightly coarser cell keeps the GPU grid cost bounded.
+        constexpr std::uint32_t liquid_width=72;
         constexpr std::uint32_t liquid_height=48;
-        constexpr std::uint32_t liquid_depth=64;
-        constexpr float liquid_cell_size=.1f;
+        constexpr std::uint32_t liquid_depth=72;
+        constexpr float liquid_cell_size=.145f;
         constexpr std::uint32_t pressure_iterations=36;
         constexpr std::uint32_t substeps=3;
         constexpr float fluid_render_scale=.5f;
@@ -66,7 +69,11 @@ namespace game_fluid
         settings.height=liquid_height;
         settings.depth=liquid_depth;
         settings.cell_size=liquid_cell_size;
-        settings.origin={-3.2f,0.f,-3.2f}; // Y aligned to the actual floor below.
+        settings.origin={
+            -0.5f*liquid_width*liquid_cell_size,
+            0.f,
+            -0.5f*liquid_depth*liquid_cell_size
+        }; // Y is aligned below the actual floor after inspecting the scene.
         settings.gravity={0.f,-9.81f,0.f};
         settings.pressure_iterations=pressure_iterations;
         settings.substeps=substeps;
