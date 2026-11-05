@@ -66,7 +66,7 @@ void build(C_Build* b)
 
     C_Dependency* fluid =
         c_git(b, "VulkanFluid", "https://github.com/xt9y/vulkan-systems.git",
-              "vulkan-fluids-gpu-v1");
+              "vulkan-fluids-gpu-v2");
     c_dep_subdir(fluid, "fluid");
     c_dep_cbuild(fluid, "VulkanFluid", C_TARGET_STATIC_LIBRARY);
     c_dep_include(fluid, ".");
@@ -177,6 +177,8 @@ void build(C_Build* b)
     FLD_STAGE(FINALIZE);
     FLD_STAGE(NORMAL);
     FLD_STAGE(CAPILLARY);
+    FLD_STAGE(VISCOSITY);
+    FLD_STAGE(VISCOSITY_APPLY);
 #undef FLD_STAGE
 #define FLD_RENDER(NAME) \
     c_generate(client, "build/shaders/fluid_" #NAME "_stamp.cpp", \

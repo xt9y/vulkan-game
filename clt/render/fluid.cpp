@@ -1,6 +1,7 @@
 #include "fluid.hpp"
 #include "postprocess.hpp"
 #include "scene_renderer.hpp"
+#include "clt/network/connection.hpp"
 #include <fld/fld.hpp>
 #include <algorithm>
 #include <chrono>
@@ -22,10 +23,11 @@ namespace clt::fluid
         std::vector<target> targets;
         clock::time_point previous{},report_started{};
         std::uint32_t submitted=0;
+        bool started=false;
 
-        constexpr const char* particle_stages[9]={
+        constexpr const char* particle_stages[11]={
             "CLEAR","PREDICT","BUILD","LAMBDA","DELTA","APPLY",
-            "FINALIZE","NORMAL","CAPILLARY"
+            "FINALIZE","NORMAL","CAPILLARY","VISCOSITY","VISCOSITY_APPLY"
         };
     }
 
@@ -40,15 +42,36 @@ namespace clt::fluid
         try
         {
             fld::options options{};
-            options.max_particles=2048;
-            options.spacing=.045f;
-            options.smoothing_radius=.102f;
+            // A coherent liquid volume, not a handful of rendered beads.
+            // 0.34 m / 0.042 m generates 2,205 physical SPH particles.
+            options.max_particles=2800;
+            options.spacing=.042f;
+            options.smoothing_radius=.112f;
             options.pressure_iterations=4;
             options.substeps=2;
             options.floor_height=0.f;
+            const auto solid=[](float x0,float y0,float z0,
+                                float x1,float y1,float z1)
+            {
+                return fld::box{
+                    {x0,y0,z0,0.f},{x1,y1,z1,0.f}
+                };
+            };
+            // Match the real server test scene: four tall walls, three
+            // half-metre boxes; the floor is the solver's y=0 plane.
+            options.colliders={
+                solid( 4.66f,0.f,-5.f, 5.34f,4.f,5.f),
+                solid(-5.34f,0.f,-5.f,-4.66f,4.f,5.f),
+                solid(-5.f,0.f, 4.66f,5.f,4.f,5.34f),
+                solid(-5.f,0.f,-5.34f,5.f,4.f,-4.66f),
+                solid(-2.5f,0.f,-.5f,-1.5f,1.f,.5f),
+                solid(-.5f,0.f,-.5f,.5f,1.f,.5f),
+                solid(1.5f,0.f,-.5f,2.5f,1.f,.5f)
+            };
             fld::drop initial{};
-            initial.center={0.f,2.6f,-1.7f};
-            initial.radius=.28f;
+            // Spawn nearer to the player at z=4 and in front of the props.
+            initial.center={.9f,2.75f,.75f};
+            initial.radius=.34f;
             fld::shader_paths paths{};
             for(std::uint32_t i=0;i<paths.size();++i)
                 paths[i]=std::string("build/shaders/fluid_")+
@@ -83,6 +106,7 @@ namespace clt::fluid
             }
             previous=report_started=clock::now();
             submitted=0;
+            started=false;
         }
         catch(...)
         {
@@ -93,7 +117,8 @@ namespace clt::fluid
 
     bool active()
     {
-        return !targets.empty() && fld::render::active();
+        return !targets.empty() && fld::render::active() &&
+               connection::get()->scene_complete.load(std::memory_order_acquire);
     }
 
     vk::ImageView output(std::uint32_t image)
@@ -123,6 +148,12 @@ namespace clt::fluid
             target.initialized=true;
         }
         const auto now=clock::now();
+        if(!started)
+        {
+            previous=report_started=now;
+            submitted=0;
+            started=true;
+        }
         const auto seconds=std::chrono::duration<float>(now-previous).count();
         previous=now;
         fld::system::record(command,std::min(seconds,1.f/30.f));
@@ -159,6 +190,7 @@ namespace clt::fluid
             if(target.image.handle)vk::image::destroy(target.image);
         }
         targets.clear();
+        started=false;
         fld::render::shutdown();
         fld::system::shutdown();
     }
