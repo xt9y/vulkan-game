@@ -220,16 +220,23 @@ namespace clt::weapon
 
         std::uint32_t clip_index(motion name)
         {
-            return current().clips.at(name);
+            return get().skin?current().clips.at(name):0u;
         }
 
         void play(motion name, double now)
         {
             auto& d = get();
-            d.clip = clip_index(name);
-            d.clip_started = now;
-            d.speed = config().animations.at(name).speed;
-            d.loop = config().animations.at(name).loop;
+            d.clip_started=now;
+            if(!d.skin)
+            {
+                d.clip=0;
+                d.speed=1;
+                d.loop=false;
+                return;
+            }
+            d.clip=clip_index(name);
+            d.speed=config().animations.at(name).speed;
+            d.loop=config().animations.at(name).loop;
         }
 
         void select(std::size_t index, double now)
@@ -247,23 +254,24 @@ namespace clt::weapon
             }
             camera::set_look_sensitivity(config().input.sensitivity,
                                          config().input.ads_sensitivity_multiplier);
-            d.skin = current().model.skin;
-            d.camera_joint = animation::joint(d.skin, config().camera_joint);
-            d.muzzle = animation::joint(d.skin, config().muzzle_joint);
-            d.ejection = animation::joint(d.skin, config().ejection_joint);
-            d.slide = animation::joint(d.skin, config().slide_joint);
-            std::vector<animation::matrix> palette;
-            if (!animation::sample(d.skin, clip_index(motion::idle), 0, palette))
+            d.skin=current().model.skin;
+            d.camera_joint=d.muzzle=d.ejection=d.slide=UINT32_MAX;
+            d.camera_correction=config().correction;
+            if(d.skin)
             {
-                throw std::runtime_error("Cannot sample weapon reference pose");
+                d.camera_joint=animation::joint(d.skin,config().camera_joint);
+                d.muzzle=animation::joint(d.skin,config().muzzle_joint);
+                d.ejection=animation::joint(d.skin,config().ejection_joint);
+                d.slide=animation::joint(d.skin,config().slide_joint);
+                std::vector<animation::matrix> palette;
+                if(!animation::sample(d.skin,clip_index(motion::idle),0,palette))
+                    throw std::runtime_error("Cannot sample weapon reference pose");
+                animation::matrix reference{};
+                if(d.camera_joint!=UINT32_MAX &&
+                   animation::joint_transform(d.skin,d.camera_joint,reference))
+                    d.camera_correction=
+                        inverse_affine(mat4{reference})*config().correction;
             }
-            animation::matrix reference{};
-            const bool camera_joint_valid=
-                d.camera_joint!=UINT32_MAX &&
-                animation::joint_transform(d.skin,d.camera_joint,reference);
-            d.camera_correction=camera_joint_valid?
-                inverse_affine(mat4{reference})*config().correction:
-                config().correction;
             d.presented_aim = false;
             d.ads = 0;
             camera::aim(0);
@@ -275,8 +283,9 @@ namespace clt::weapon
         bool finished(double now)
         {
             const auto& d = get();
-            return !d.loop &&
-                   (now - d.clip_started) * d.speed >= animation::duration(d.skin, d.clip);
+            return !d.skin ||
+                   (!d.loop &&
+                    (now-d.clip_started)*d.speed>=animation::duration(d.skin,d.clip));
         }
 
         mat4 socket(std::uint32_t index)
@@ -483,11 +492,11 @@ namespace clt::weapon
         // Only idle is mandatory. Additional clips inherit a compatible
         // motion, so a gun with one fire clip does not need 15 identical
         // animation declarations.
-        if (!value.animations.count(motion::idle))
-            throw std::invalid_argument("Weapon requires an idle animation");
+        if(!value.animations.empty() && !value.animations.count(motion::idle))
+            throw std::invalid_argument("Animated gun requires an idle clip");
         auto inherit=[&](motion target,motion source,bool loop)
         {
-            if(value.animations.count(target))return;
+            if(value.animations.empty() || value.animations.count(target))return;
             auto clip=value.animations.at(source);
             clip.loop=loop;
             value.animations.emplace(target,std::move(clip));
@@ -609,9 +618,10 @@ namespace clt::weapon
             item.model = load(item.settings.model);
             if(!item.settings.casing_model.empty())
                 item.casing=load(item.settings.casing_model);
-            if(!item.model.skin || item.casing.skin)
+            if(item.casing.skin || (item.model.skin && item.settings.animations.empty()) ||
+               (!item.model.skin && !item.settings.animations.empty()))
                 throw std::runtime_error(
-                    "Weapon requires one skinned viewmodel; casing, if supplied, must be static");
+                    "Skinned guns need animation clips; static guns omit them; casing must be static");
             const auto skin = std::find_if(
                 d.asset.skins.begin(),
                 d.asset.skins.end(),
