@@ -40,6 +40,13 @@ namespace game_fluid
         bool started=false;
         std::atomic<int> color_mode{0}; // 0 green, 1 red, 2 clear
 
+        // Expensive fluid optics run at 50% resolution; final composite,
+        // scene geometry and first-person gun remain full resolution.
+        constexpr float fluid_render_scale=.50f;
+        constexpr const char* bvh_stages[8]={
+            "KEYS","SORT","CLEAR","TOPOLOGY","LEAVES","REFIT",
+            "OVERLAP","RAY"
+        };
         constexpr const char* particle_stages[11]={
             "CLEAR","PREDICT","BUILD","LAMBDA","DELTA","APPLY",
             "FINALIZE","NORMAL","CAPILLARY","VISCOSITY","VISCOSITY_APPLY"
@@ -68,6 +75,9 @@ namespace game_fluid
         options.pressure_iterations=4;
         options.substeps=2;
         options.floor_height=0.f;
+        for(std::uint32_t i=0;i<options.bvh_shaders.size();++i)
+            options.bvh_shaders[i]=std::string("build/shaders/bvh_")+
+                                  bvh_stages[i]+".comp.spv";
         // World collision bounds come exclusively from server.cpp::add().
         options.colliders.reserve(scene.collision_boxes.size());
         for (const auto& box : scene.collision_boxes)
@@ -89,8 +99,9 @@ namespace game_fluid
         fld::render::init({
             "build/shaders/fluid_tile_clear.comp.spv",
             "build/shaders/fluid_tile_build.comp.spv",
-            "build/shaders/fluid_surface.comp.spv"
-        },frames,extent.width,extent.height);
+            "build/shaders/fluid_surface.comp.spv",
+            "build/shaders/fluid_upscale.comp.spv"
+        },frames,extent.width,extent.height,fluid_render_scale);
     }
 
     void create()
