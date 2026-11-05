@@ -5,11 +5,11 @@
 
 namespace game_weapons
 {
-    std::vector<clt::weapon::gun> all()
+    std::vector<::weapon::gun> all()
     {
-        using motion=clt::weapon::motion;
+        using motion=::weapon::motion;
 
-        clt::weapon::gun glock{};
+        ::weapon::gun glock{};
         glock.rules.id=1;
         glock.rules.magazine_capacity=15;
         glock.rules.initial_reserve=90;
