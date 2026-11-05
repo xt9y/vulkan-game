@@ -32,6 +32,9 @@ namespace scene
         std::uint32_t emissive_texture = 0;
         std::uint32_t alpha_mode = 0; // opaque, mask, blend
         bool double_sided = false;
+        // 0 = ordinary material, 1 = world-space magenta/black checker.
+        // Generated per fragment; no texture allocation or filtering.
+        std::uint32_t procedural_pattern = 0;
     };
 
     inline bool same_material(const material& a, const material& b)
@@ -48,6 +51,7 @@ namespace scene
             a.occlusion_texture == b.occlusion_texture &&
             a.emissive_texture == b.emissive_texture &&
             a.alpha_mode == b.alpha_mode &&
-            a.double_sided == b.double_sided;
+            a.double_sided == b.double_sided &&
+            a.procedural_pattern == b.procedural_pattern;
     }
 } // namespace scene
