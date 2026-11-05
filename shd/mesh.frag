@@ -37,6 +37,14 @@ void main()
         vec4 texel = texture(base_texture, uv);
         base *= vec4(linear_color(texel.rgb), texel.a);
     }
+    if ((flags & 128) != 0)
+    {
+        // World-space shader checker: sharp 0.5 m squares, no texture upload
+        // or bilinear texture blur. Works at any floor geometry resolution.
+        ivec2 tile = ivec2(floor(world_position.xz * 2.0));
+        bool magenta = ((tile.x + tile.y) & 1) != 0;
+        base.rgb = magenta ? vec3(1.0, 0.0, 1.0) : vec3(0.0);
+    }
     int alpha = (flags >> 5) & 3;
     if (alpha == 1 && base.a < pc.surface.w) discard;
     // The opaque G-buffer cannot alpha blend. Use stable clipping for
