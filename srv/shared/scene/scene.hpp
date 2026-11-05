@@ -45,11 +45,11 @@ namespace scene
     };
 
     struct state {
-        std::vector<collision_box> collision_boxes;
         std::vector<mesh> meshes;
         std::vector<texture> textures;
         std::vector<skin> skins;
         std::vector<instance> instances;
+        std::vector<collision_box> collision_boxes;
     };
 
     inline bool same_instance(const instance& a, const instance& b)
