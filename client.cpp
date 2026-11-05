@@ -44,6 +44,17 @@ namespace game_fluid
             "CLEAR","PREDICT","BUILD","LAMBDA","DELTA","APPLY",
             "FINALIZE","NORMAL","CAPILLARY","VISCOSITY","VISCOSITY_APPLY"
         };
+        constexpr const char* bvh_stages[8]={
+            "KEYS","SORT","CLEAR","TOPOLOGY",
+            "LEAVES","REFIT","OVERLAP","RAY"
+        };
+        // User-facing quality profile: physics resolution is independent of
+        // optical resolution. Raise these values for quality after profiling.
+        constexpr float particle_spacing=.064f;
+        constexpr std::uint32_t pressure_iterations=3;
+        constexpr std::uint32_t substeps=1;
+        constexpr float fluid_render_scale=.5f;
+        constexpr std::uint32_t fluid_render_stride=4;
     }
 
     void release();
@@ -59,14 +70,13 @@ namespace game_fluid
         const auto extent=vk::swapchain::get()->extent;
         const auto frames=std::uint32_t(vk::swapchain::get()->images.size());
         fld::options options{};
-        // Double the drop radius at fixed physical particle spacing:
-        // eight times the volume and 17,845 SPH particles (was 2,205).
-        // Maintain resolution rather than inflating the particle radius.
-        options.max_particles=20000;
-        options.spacing=.042f;
-        options.smoothing_radius=.112f;
-        options.pressure_iterations=4;
-        options.substeps=2;
+        // M2-friendly default: same drop dimensions, fewer GPU neighbors and
+        // passes. Increase particle resolution when GPU timings permit.
+        options.max_particles=8192;
+        options.spacing=particle_spacing;
+        options.smoothing_radius=particle_spacing*2.67f;
+        options.pressure_iterations=pressure_iterations;
+        options.substeps=substeps;
         options.floor_height=0.f;
         // World collision bounds come exclusively from server.cpp::add().
         options.colliders.reserve(scene.collision_boxes.size());
@@ -82,15 +92,23 @@ namespace game_fluid
         initial.center={.9f,2.75f,.75f};
         initial.radius=.68f;
         fld::shader_paths paths{};
-        for(std::uint32_t i=0;i<paths.size();++i)
+        for(std::uint32_t i=0;i<11;++i)
             paths[i]=std::string("build/shaders/fluid_")+
                       particle_stages[i]+".comp.spv";
+        paths[11]="build/shaders/fluid_PREDICT_bvh.comp.spv";
+        paths[12]="build/shaders/fluid_APPLY_bvh.comp.spv";
+        paths[13]="build/shaders/fluid_FINALIZE_bvh.comp.spv";
+        for(std::uint32_t i=0;i<options.bvh_shaders.size();++i)
+            options.bvh_shaders[i]=std::string("build/shaders/bvh_")+
+                                   bvh_stages[i]+".comp.spv";
         fld::system::init(options,initial,paths);
         fld::render::init({
             "build/shaders/fluid_tile_clear.comp.spv",
             "build/shaders/fluid_tile_build.comp.spv",
-            "build/shaders/fluid_surface.comp.spv"
-        },frames,extent.width,extent.height);
+            "build/shaders/fluid_surface.comp.spv",
+            "build/shaders/fluid_upscale.comp.spv"
+        },frames,extent.width,extent.height,
+          fluid_render_scale,fluid_render_stride);
     }
 
     void create()
