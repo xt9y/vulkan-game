@@ -1,6 +1,6 @@
 #pragma once
 
-#include "clt/weapon/weapon.hpp"
+#include "srv/shared/weapon/gun.hpp"
 #include <vector>
 
 // Game-owned gun catalog. Both server and client consume the same complete
@@ -8,5 +8,5 @@
 // animation clips, controls, ADS behavior, recoil and effects.
 namespace game_weapons
 {
-    std::vector<clt::weapon::gun> all();
+    std::vector<::weapon::gun> all();
 }
