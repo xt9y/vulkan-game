@@ -5,6 +5,8 @@ on:
       - "clt/**"
       - "srv/**"
       - "shd/**"
+      - "client.cpp"
+      - "server.cpp"
       - "build.c"
       - ".github/workflows/fluid-demo.yml"
 jobs:
@@ -27,3 +29,16 @@ jobs:
             echo "Legacy blood code remains in the active game"
             exit 1
           fi
+      - name: Verify game-owned fluid and authoritative collisions
+        run: |
+          set -eu
+          test ! -e clt/render/fluid.cpp
+          test ! -e clt/render/fluid.hpp
+          if git grep -n -E '(fld::|clt::fluid|fluid.hpp)' -- clt srv; then
+            echo "Fluid implementation leaked outside user client.cpp"
+            exit 1
+          fi
+          grep -q 'game_fluid::create' client.cpp
+          grep -q 'scene.collision_boxes' client.cpp
+          grep -q 'initial_scene.collision_boxes.push_back(bounds)' server.cpp
+          grep -q "bytes{'S', 'C', 'N', '8'}" srv/shared/net/scene_stream.cpp

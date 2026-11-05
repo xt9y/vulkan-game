@@ -107,12 +107,13 @@ namespace net::scene_stream
             throw std::runtime_error("Scene snapshot exceeds maximum batch size");
         }
 
-        std::vector<std::uint8_t> bytes{'S', 'C', 'N', '7'};
+        std::vector<std::uint8_t> bytes{'S', 'C', 'N', '8'};
 
         add(bytes, std::uint32_t(scene.meshes.size()));
         add(bytes, std::uint32_t(scene.instances.size()));
         add(bytes, std::uint32_t(scene.textures.size()));
         add(bytes, std::uint32_t(scene.skins.size()));
+        add(bytes, std::uint32_t(scene.collision_boxes.size()));
 
         for (const auto& texture : scene.textures)
         {
@@ -235,6 +236,19 @@ namespace net::scene_stream
             add_float(bytes, instance.pose.rotation.w);
         }
 
+        for (const auto& box : scene.collision_boxes)
+        {
+            const auto& a = box.minimum;
+            const auto& b = box.maximum;
+            if (!std::isfinite(a.x) || !std::isfinite(a.y) ||
+                !std::isfinite(a.z) || !std::isfinite(b.x) ||
+                !std::isfinite(b.y) || !std::isfinite(b.z) ||
+                a.x >= b.x || a.y >= b.y || a.z >= b.z)
+                throw std::runtime_error("Invalid scene collision bounds");
+            add_vec3(bytes, a);
+            add_vec3(bytes, b);
+        }
+
         if (bytes.size() > max_scene_bytes)
         {
             throw std::runtime_error("Scene snapshot exceeds maximum batch size");
@@ -248,12 +262,12 @@ namespace net::scene_stream
         ::scene::state& scene
     )
     {
-        if (bytes.size() < 20 ||
+        if (bytes.size() < 24 ||
             bytes.size() > max_scene_bytes ||
             bytes[0] != 'S' ||
             bytes[1] != 'C' ||
             bytes[2] != 'N' ||
-            bytes[3] != '7')
+            bytes[3] != '8')
         {
             return false;
         }
@@ -264,11 +278,14 @@ namespace net::scene_stream
         std::uint32_t instance_count = 0;
         std::uint32_t texture_count = 0;
         std::uint32_t skin_count = 0;
+        std::uint32_t collider_count = 0;
 
         if (!input.take(mesh_count) ||
             !input.take(instance_count) ||
             !input.take(texture_count) ||
             !input.take(skin_count) ||
+            !input.take(collider_count) ||
+            collider_count > input.remaining() / 24 ||
             texture_count > input.remaining() / 20 ||
             skin_count > input.remaining() / 16 ||
             mesh_count > input.remaining() / 12 ||
@@ -282,6 +299,7 @@ namespace net::scene_stream
         result.instances.reserve(instance_count);
         result.textures.reserve(texture_count);
         result.skins.reserve(skin_count);
+        result.collision_boxes.reserve(collider_count);
 
         for (std::uint32_t i = 0; i < texture_count; ++i)
         {
@@ -458,6 +476,22 @@ namespace net::scene_stream
             }
 
             result.instances.push_back(instance);
+        }
+
+        for (std::uint32_t i = 0; i < collider_count; ++i)
+        {
+            ::scene::collision_box box{};
+            if (!take_vec3(input, box.minimum) ||
+                !take_vec3(input, box.maximum))
+                return false;
+            const auto& a = box.minimum;
+            const auto& b = box.maximum;
+            if (!std::isfinite(a.x) || !std::isfinite(a.y) ||
+                !std::isfinite(a.z) || !std::isfinite(b.x) ||
+                !std::isfinite(b.y) || !std::isfinite(b.z) ||
+                a.x >= b.x || a.y >= b.y || a.z >= b.z)
+                return false;
+            result.collision_boxes.push_back(box);
         }
 
         if (input.remaining() != 0)

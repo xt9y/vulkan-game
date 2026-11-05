@@ -1,7 +1,7 @@
 #include "passes.hpp"
 #include "postprocess.hpp"
 #include "scene_renderer.hpp"
-#include "fluid.hpp"
+#include "renderer.hpp"
 
 #include <stdexcept>
 #include <vector>
@@ -60,10 +60,10 @@ namespace clt::passes
                 resource::gbuffer, scene_renderer::draw},
             {"lighting", vk::PipelineBindPoint::eCompute, resource::gbuffer,
                 resource::hdr, postprocess::lighting},
-            {"fluid", vk::PipelineBindPoint::eCompute,
-                resource::gbuffer | resource::hdr, resource::liquid, fluid::record},
+            {"effect", vk::PipelineBindPoint::eCompute,
+                resource::gbuffer | resource::hdr, resource::effect_color, renderer::effect_record},
             {"tonemapping", vk::PipelineBindPoint::eCompute,
-                resource::hdr | resource::liquid, resource::ldr,
+                resource::hdr | resource::effect_color, resource::ldr,
                 postprocess::tonemap},
             {"presentation", vk::PipelineBindPoint::eGraphics, resource::ldr,
                 resource::swapchain, postprocess::present}

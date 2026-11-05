@@ -1,7 +1,7 @@
 #include "postprocess.hpp"
 #include "srv/game/options.hpp"
 #include "scene_renderer.hpp"
-#include "fluid.hpp"
+#include "renderer.hpp"
 #include "clt/view/camera.hpp"
 
 #include <algorithm>
@@ -30,7 +30,7 @@ namespace clt::postprocess
             vk::Framebuffer framebuffer{};
             vk::DescriptorSet lighting{};
             vk::DescriptorSet tone{};
-            bool tone_uses_fluid=false;
+            bool tone_uses_effect=false;
             vk::DescriptorSet presentation{};
         };
 
@@ -505,12 +505,12 @@ namespace clt::postprocess
     void tonemap(vk::CommandBuffer command, std::uint32_t image)
     {
         auto& current = get().frames.at(image);
-        const bool liquid = fluid::active();
-        if(current.tone_uses_fluid != liquid)
+        const bool has_effect = renderer::effect_active();
+        if(current.tone_uses_effect != has_effect)
         {
             vk::DescriptorImageInfo input{};
             input.sampler=get().sampler;
-            input.imageView=liquid?fluid::output(image):current.hdr.view;
+            input.imageView=has_effect?renderer::effect_output(image):current.hdr.view;
             input.imageLayout=vk::ImageLayout::eGeneral;
             vk::WriteDescriptorSet write{};
             write.dstSet=current.tone;
@@ -519,7 +519,7 @@ namespace clt::postprocess
             write.descriptorType=vk::DescriptorType::eCombinedImageSampler;
             write.pImageInfo=&input;
             vk::device::get()->handle.updateDescriptorSets({write},{});
-            current.tone_uses_fluid=liquid;
+            current.tone_uses_effect=has_effect;
         }
         compute(command,get().tone_pipeline,get().tone_layout,
                 current.tone,enabled(effect::tonemapping));

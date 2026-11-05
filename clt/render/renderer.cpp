@@ -2,7 +2,6 @@
 #include "srv/game/options.hpp"
 
 #include "scene_renderer.hpp"
-#include "fluid.hpp"
 #include "postprocess.hpp"
 #include "passes.hpp"
 #include "upload.hpp"
@@ -51,6 +50,31 @@ namespace clt::renderer
     {
         static state data;
         return &data;
+    }
+
+    void set_effect(effect_callbacks value)
+    {
+        if (get()->initialized)
+            throw std::logic_error("Set render effect before initialization");
+        get()->effect = value;
+    }
+
+    bool effect_active()
+    {
+        const auto& effect = get()->effect;
+        return effect.active && effect.active();
+    }
+
+    vk::ImageView effect_output(std::uint32_t image)
+    {
+        const auto& effect = get()->effect;
+        return effect.output ? effect.output(image) : vk::ImageView{};
+    }
+
+    void effect_record(vk::CommandBuffer command, std::uint32_t image)
+    {
+        const auto& effect = get()->effect;
+        if (effect.record) effect.record(command, image);
     }
 
     void init(const char* vertex_path, const char* fragment_path)
@@ -252,7 +276,7 @@ namespace clt::renderer
         upload::retire(true);
 
         passes::release();
-        fluid::release();
+        if (get()->effect.release) get()->effect.release();
         postprocess::release();
         scene_renderer::release_frame_resources();
         scene_renderer::reset_scene();
@@ -319,7 +343,7 @@ namespace clt::renderer
         vk::swapchain::init(info);
         scene_renderer::create_frame_resources();
         postprocess::create();
-        fluid::create();
+        if (get()->effect.create) get()->effect.create();
         passes::create();
 
         for (uint32_t i = 0; i < vk::swapchain::get()->size; ++i)
@@ -475,7 +499,7 @@ namespace clt::renderer
             }
 
             passes::release();
-            fluid::release();
+            if (get()->effect.release) get()->effect.release();
             postprocess::release();
             scene_renderer::shutdown();
 

@@ -14,8 +14,20 @@ namespace clt::renderer
         vk::Fence fence{};
     };
 
+    // Generic game-authored compute/compositing pass. Game-specific
+    // simulation code stays in client.cpp, not in the renderer.
+    struct effect_callbacks
+    {
+        void (*create)() = nullptr;
+        void (*release)() = nullptr;
+        bool (*active)() = nullptr;
+        vk::ImageView (*output)(std::uint32_t) = nullptr;
+        void (*record)(vk::CommandBuffer, std::uint32_t) = nullptr;
+    };
+
     struct state
     {
+        effect_callbacks effect{};
         std::array<frame_context, 2> frames{};
         std::uint32_t next_frame = 0;
         std::vector<vk::Fence> image_in_flight;
@@ -25,6 +37,10 @@ namespace clt::renderer
     };
 
     state* get();
+    void set_effect(effect_callbacks value);
+    bool effect_active();
+    vk::ImageView effect_output(std::uint32_t image);
+    void effect_record(vk::CommandBuffer command, std::uint32_t image);
     void init(const char* vertex_path, const char* fragment_path);
     void resize();
     void draw_frame();

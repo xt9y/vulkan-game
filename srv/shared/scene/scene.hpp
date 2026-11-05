@@ -37,11 +37,19 @@ namespace scene
         transform pose;
     };
 
+    // Game-authored world-space AABBs, usable by physics systems without
+    // repeating mesh dimensions and object positions in the client.
+    struct collision_box {
+        vk::util::math::vec3 minimum{};
+        vk::util::math::vec3 maximum{};
+    };
+
     struct state {
         std::vector<mesh> meshes;
         std::vector<texture> textures;
         std::vector<skin> skins;
         std::vector<instance> instances;
+        std::vector<collision_box> collision_boxes;
     };
 
     inline bool same_instance(const instance& a, const instance& b)
