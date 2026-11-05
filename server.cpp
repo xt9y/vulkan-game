@@ -118,8 +118,8 @@ int main(int argc, char** argv)
         // and join four solid walls around the edge of the floor, open above.
         auto floor = make_rect(1, 10.0f, 0.1f, 10.0f);
         auto cube = make_rect(2, 0.5f, 0.5f, 0.5f);
-        auto rect1 = make_rect(3, 0.34f, 0.34f, 5.0f);
-        auto rect2 = make_rect(4, 5.0f, 0.34f, 0.34f);
+        auto rect1 = make_rect(3, 0.34f, 2.0f, 5.0f);
+        auto rect2 = make_rect(4, 5.0f, 2.0f, 0.34f);
         initial_scene.meshes.push_back(std::move(floor));
         initial_scene.meshes.push_back(std::move(cube));
         initial_scene.meshes.push_back(std::move(rect1));
@@ -137,10 +137,10 @@ int main(int argc, char** argv)
         add(2, 2, {-2.f, .5f, 0});
         add(3, 2, {0, .5f, 0});
         add(4, 2, {2.f, .5f, 0});
-        add(5, 3, {5.0f, 0.34f, 0});
-        add(6, 3, {-5.0f, 0.34f, 0});
-        add(7, 4, {0, 0.34f, 5.0f});
-        add(8, 4, {0, 0.34f, -5.0f});
+        add(5, 3, {5.0f, 2.0f, 0});
+        add(6, 3, {-5.0f, 2.0f, 0});
+        add(7, 4, {0, 2.0f, 5.0f});
+        add(8, 4, {0, 2.0f, -5.0f});
         // Restore the original seated mermaid above the middle cube.
         const auto& center_cube = initial_scene.instances.at(2);
         ::scene::transform mermaid = center_cube.pose;
