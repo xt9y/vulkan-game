@@ -252,6 +252,10 @@ namespace srv::application
         {
             data.scene.instances.push_back(std::move(instance));
         }
+        for (auto& box : patch.collision_boxes)
+        {
+            data.scene.collision_boxes.push_back(std::move(box));
+        }
         data.colliders.insert(
             data.colliders.end(), added_colliders.begin(), added_colliders.end()
         );
