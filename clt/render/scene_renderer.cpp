@@ -1406,7 +1406,8 @@ namespace clt::scene_renderer
                     (m.normal_texture ? 4u : 0u) |
                     (m.occlusion_texture ? 8u : 0u) |
                     (m.emissive_texture ? 16u : 0u) |
-                    (m.alpha_mode << 5);
+                    (m.alpha_mode << 5) |
+                    (m.procedural_pattern == 1u ? 128u : 0u);
                 draw_parameters params{
                     view_projection,
                     m.base_color,
@@ -1479,7 +1480,8 @@ namespace clt::scene_renderer
                 const auto flags = (m.base_color_texture ? 1u : 0u) |
                                    (m.metallic_roughness_texture ? 2u : 0u) |
                                    (m.normal_texture ? 4u : 0u) | (m.occlusion_texture ? 8u : 0u) |
-                                   (m.emissive_texture ? 16u : 0u) | (m.alpha_mode << 5);
+                                   (m.emissive_texture ? 16u : 0u) | (m.alpha_mode << 5) |
+                                   (m.procedural_pattern == 1u ? 128u : 0u);
                 draw_parameters params{
                     viewmodel ? weapon_view_projection : view_projection,
                     m.base_color,
