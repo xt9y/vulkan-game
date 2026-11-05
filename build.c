@@ -177,6 +177,8 @@ void build(C_Build* b)
     FLD_STAGE(FINALIZE);
     FLD_STAGE(NORMAL);
     FLD_STAGE(CAPILLARY);
+    FLD_STAGE(VISCOSITY);
+    FLD_STAGE(VISCOSITY_APPLY);
 #undef FLD_STAGE
 #define FLD_RENDER(NAME) \
     c_generate(client, "build/shaders/fluid_" #NAME "_stamp.cpp", \
