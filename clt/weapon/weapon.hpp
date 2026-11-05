@@ -37,9 +37,21 @@ namespace clt::weapon
         bool loop = false;
     };
 
+    // GLFW button/key IDs are supplied by the game. The engine only
+    // forwards these bindings; no pistol-specific keys are hardcoded.
+    struct bindings
+    {
+        int trigger_button=0, aim_button=1;
+        int reload_key=82, equip_key=-1;
+        bool automatic=false;
+        float sensitivity=.0025f;
+        float ads_sensitivity_multiplier=.60f;
+    };
+
     struct definition
     {
         ::weapon::definition rules;
+        bindings input{};
         std::filesystem::path model;
         std::filesystem::path casing_model;
         std::map<motion, clip> animations;
@@ -58,6 +70,18 @@ namespace clt::weapon
         float impact_radius = .009f, impact_offset = .0008f, impact_lifetime = 120;
         std::uint32_t max_impacts = 192;
     };
+
+    // Complete game-facing gun profile: authoritative rules, controls,
+    // camera/ADS, models, attachment joints, animations and effects.
+    using gun=definition;
+
+    struct equip_binding
+    {
+        std::uint32_t id=0;
+        int key=-1;
+    };
+    bindings active_bindings();
+    std::vector<equip_binding> equip_bindings();
 
     // Game-owned declarations, registered before renderer initialization.
     void register_weapon(definition value);
