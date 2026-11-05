@@ -14,7 +14,8 @@ namespace clt::camera
     namespace
     {
         std::mutex camera_mutex;
-        float recoil = 0, aim_fraction = 0;
+        float recoil = 0, aim_fraction = 0, ads_blend = 0;
+        float ads_sensitivity_multiplier=1.f;
         std::chrono::steady_clock::time_point recoil_time{};
 
         float current_recoil()
@@ -44,24 +45,40 @@ namespace clt::camera
     {
         std::lock_guard<std::mutex> lock(camera_mutex);
         *get() = {};
-        recoil = aim_fraction = 0;
+        recoil = aim_fraction = ads_blend = 0;
+        ads_sensitivity_multiplier=1.f;
         recoil_time = std::chrono::steady_clock::now();
         get()->fov = 1.04719755f;
         get()->sensitivity = 0.0025f;
+    }
+
+    void set_look_sensitivity(float base,float ads_multiplier)
+    {
+        std::lock_guard<std::mutex> lock(camera_mutex);
+        get()->sensitivity=std::clamp(base,.00001f,.1f);
+        ads_sensitivity_multiplier=std::clamp(ads_multiplier,.05f,1.f);
+    }
+
+    void set_ads_fraction(float fraction)
+    {
+        std::lock_guard<std::mutex> lock(camera_mutex);
+        ads_blend=std::clamp(fraction,0.f,1.f);
     }
 
     void look(float dx, float dy)
     {
         std::lock_guard<std::mutex> lock(camera_mutex);
         auto& camera = *get();
+        const float sensitivity=camera.sensitivity*
+            (1.f-ads_blend*(1.f-ads_sensitivity_multiplier));
 
         camera.yaw = std::remainder(
-            camera.yaw + dx * camera.sensitivity,
+            camera.yaw + dx * sensitivity,
             6.283185307f
         );
 
         camera.pitch = std::clamp(
-            camera.pitch - dy * camera.sensitivity,
+            camera.pitch - dy * sensitivity,
             -1.55f,
             1.55f
         );

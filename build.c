@@ -66,7 +66,7 @@ void build(C_Build* b)
 
     C_Dependency* fluid =
         c_git(b, "VulkanFluid", "https://github.com/xt9y/vulkan-systems.git",
-              "vulkan-fluids-gpu-v3");
+              "vulkan-fluids-gpu-v4");
     c_dep_subdir(fluid, "fluid");
     c_dep_cbuild(fluid, "VulkanFluid", C_TARGET_STATIC_LIBRARY);
     c_dep_include(fluid, ".");
@@ -118,6 +118,7 @@ void build(C_Build* b)
     // Dedicated server: no window system or graphics dependency.
     C_Target* server = c_executable(b, "vulkan-server");
     c_sources(server, "server.cpp");
+    c_sources(server, "weapons.cpp");
     c_sources(server, "srv/jobs/worker.cpp");
     c_sources(server, "srv/assets/*.cpp");
     c_sources(server, "srv/app/*.cpp");
@@ -138,6 +139,7 @@ void build(C_Build* b)
     // Dedicated client: no server world generation or server application.
     C_Target* client = c_executable(b, "vulkan-client");
     c_sources(client, "client.cpp");
+    c_sources(client, "weapons.cpp");
     c_sources(client, "clt/app/*.cpp");
     c_sources(client, "clt/network/*.cpp");
     c_sources(client, "clt/platform/*.cpp");

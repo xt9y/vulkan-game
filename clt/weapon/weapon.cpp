@@ -6,6 +6,7 @@
 #include "srv/assets/model.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <deque>
@@ -38,6 +39,10 @@ namespace clt::weapon
         std::deque<intent> intents;
         bool trigger_held = false, reload_held = false, aim = false;
         std::uint32_t movement = 0;
+        bindings selected_input{};
+        double selected_fire_interval=.15;
+        clock::time_point next_automatic_fire{};
+        std::vector<equip_binding> registered_equips;
 
         struct casing
         {
@@ -215,16 +220,23 @@ namespace clt::weapon
 
         std::uint32_t clip_index(motion name)
         {
-            return current().clips.at(name);
+            return get().skin?current().clips.at(name):0u;
         }
 
         void play(motion name, double now)
         {
             auto& d = get();
-            d.clip = clip_index(name);
-            d.clip_started = now;
-            d.speed = config().animations.at(name).speed;
-            d.loop = config().animations.at(name).loop;
+            d.clip_started=now;
+            if(!d.skin)
+            {
+                d.clip=0;
+                d.speed=1;
+                d.loop=false;
+                return;
+            }
+            d.clip=clip_index(name);
+            d.speed=config().animations.at(name).speed;
+            d.loop=config().animations.at(name).loop;
         }
 
         void select(std::size_t index, double now)
@@ -233,26 +245,37 @@ namespace clt::weapon
             current().predicted = d.predicted;
             d.active = index;
             d.predicted = current().predicted;
-            d.skin = current().model.skin;
-            d.camera_joint = animation::joint(d.skin, config().camera_joint);
-            d.muzzle = animation::joint(d.skin, config().muzzle_joint);
-            d.ejection = animation::joint(d.skin, config().ejection_joint);
-            d.slide = animation::joint(d.skin, config().slide_joint);
-            std::vector<animation::matrix> palette;
-            if (!animation::sample(d.skin, clip_index(motion::idle), 0, palette))
             {
-                throw std::runtime_error("Cannot sample weapon reference pose");
+                std::lock_guard<std::mutex> lock(input_mutex);
+                selected_input=config().input;
+                selected_fire_interval=config().rules.fire_interval;
+                next_automatic_fire={};
+                trigger_held=false;
             }
-            animation::matrix reference{};
-            if (!animation::joint_transform(d.skin, d.camera_joint, reference) ||
-                d.muzzle == UINT32_MAX || d.ejection == UINT32_MAX)
+            camera::set_look_sensitivity(config().input.sensitivity,
+                                         config().input.ads_sensitivity_multiplier);
+            d.skin=current().model.skin;
+            d.camera_joint=d.muzzle=d.ejection=d.slide=UINT32_MAX;
+            d.camera_correction=config().correction;
+            if(d.skin)
             {
-                throw std::runtime_error("Weapon is missing configured attachment joints");
+                d.camera_joint=animation::joint(d.skin,config().camera_joint);
+                d.muzzle=animation::joint(d.skin,config().muzzle_joint);
+                d.ejection=animation::joint(d.skin,config().ejection_joint);
+                d.slide=animation::joint(d.skin,config().slide_joint);
+                std::vector<animation::matrix> palette;
+                if(!animation::sample(d.skin,clip_index(motion::idle),0,palette))
+                    throw std::runtime_error("Cannot sample weapon reference pose");
+                animation::matrix reference{};
+                if(d.camera_joint!=UINT32_MAX &&
+                   animation::joint_transform(d.skin,d.camera_joint,reference))
+                    d.camera_correction=
+                        inverse_affine(mat4{reference})*config().correction;
             }
-            d.camera_correction = inverse_affine(mat4{reference}) * config().correction;
             d.presented_aim = false;
             d.ads = 0;
             camera::aim(0);
+            camera::set_ads_fraction(0);
             d.recoil = 0;
             d.flash_until = 0;
             play(motion::draw, now);
@@ -261,8 +284,9 @@ namespace clt::weapon
         bool finished(double now)
         {
             const auto& d = get();
-            return !d.loop &&
-                   (now - d.clip_started) * d.speed >= animation::duration(d.skin, d.clip);
+            return !d.skin ||
+                   (!d.loop &&
+                    (now-d.clip_started)*d.speed>=animation::duration(d.skin,d.clip));
         }
 
         mat4 socket(std::uint32_t index)
@@ -409,19 +433,38 @@ namespace clt::weapon
         }
     } // namespace
 
+    bindings active_bindings()
+    {
+        std::lock_guard<std::mutex> lock(input_mutex);
+        return selected_input;
+    }
+
+    std::vector<equip_binding> equip_bindings()
+    {
+        std::lock_guard<std::mutex> lock(input_mutex);
+        return registered_equips;
+    }
+
     void controls(bool trigger, bool ads, bool reload, std::uint32_t buttons)
     {
         const auto camera = camera::snapshot();
         std::lock_guard<std::mutex> lock(input_mutex);
-        if (trigger && !trigger_held && intents.size() < 64)
+        const auto now=clock::now();
+        if (trigger && intents.size() < 64 &&
+            (!trigger_held ||
+             (selected_input.automatic && now>=next_automatic_fire)))
         {
             intents.push_back({::weapon::action::fire, camera.yaw, camera.pitch});
+            next_automatic_fire=now+
+                std::chrono::duration_cast<clock::duration>(
+                    std::chrono::duration<double>(selected_fire_interval));
         }
         if (reload && !reload_held && intents.size() < 64)
         {
             intents.push_back({::weapon::action::reload, camera.yaw, camera.pitch});
         }
         trigger_held = trigger;
+        if(!trigger)next_automatic_fire={};
         reload_held = reload;
         aim = ads;
         movement = buttons;
@@ -435,27 +478,67 @@ namespace clt::weapon
             throw std::logic_error("Register weapons before renderer initialization");
         }
         ::weapon::validate(value.rules);
-        if (value.model.empty() || value.casing_model.empty() ||
+        if (value.model.empty() ||
             find_weapon(value.rules.id) != d.weapons.end() || value.max_casings > 192 ||
             value.max_casings == 0 || value.max_impacts == 0 || value.max_impacts > 192 ||
             value.near_plane <= 0 || value.far_plane <= value.near_plane || value.fov <= 0 ||
-            value.fov >= 3.14159265f || value.ads_fov <= 0 || value.ads_fov >= 3.14159265f)
+            value.fov >= 3.14159265f || value.ads_fov <= 0 || value.ads_fov >= 3.14159265f ||
+            !std::isfinite(value.input.sensitivity) || value.input.sensitivity<=0.f ||
+            value.input.sensitivity>.1f || !std::isfinite(value.input.ads_sensitivity_multiplier) ||
+            value.input.ads_sensitivity_multiplier<=0.f ||
+            value.input.ads_sensitivity_multiplier>1.f)
         {
             throw std::invalid_argument("Invalid client weapon definition");
         }
-        for (int index = 0; index <= int(motion::ads_fire3); ++index)
+        // Only idle is mandatory. Additional clips inherit a compatible
+        // motion, so a gun with one fire clip does not need 15 identical
+        // animation declarations.
+        if(!value.animations.empty() && !value.animations.count(motion::idle))
+            throw std::invalid_argument("Animated gun requires an idle clip");
+        auto inherit=[&](motion target,motion source,bool loop)
         {
-            const auto found = value.animations.find(motion(index));
-            if (found == value.animations.end() || found->second.name.empty() ||
-                !std::isfinite(found->second.speed) || found->second.speed <= 0)
-            {
-                throw std::invalid_argument("Missing client weapon animation mapping");
-            }
+            if(value.animations.empty() || value.animations.count(target))return;
+            auto clip=value.animations.at(source);
+            clip.loop=loop;
+            value.animations.emplace(target,std::move(clip));
+        };
+        inherit(motion::walk,motion::idle,true);
+        inherit(motion::draw,motion::idle,false);
+        inherit(motion::reload,motion::idle,false);
+        inherit(motion::reload_empty,motion::reload,false);
+        inherit(motion::ads_idle,motion::idle,true);
+        inherit(motion::ads_walk,motion::walk,true);
+        inherit(motion::ads_in,motion::ads_idle,false);
+        inherit(motion::ads_out,motion::idle,false);
+        inherit(motion::fire1,motion::idle,false);
+        inherit(motion::fire2,motion::fire1,false);
+        inherit(motion::fire3,motion::fire1,false);
+        inherit(motion::ads_fire1,motion::fire1,false);
+        inherit(motion::ads_fire2,motion::ads_fire1,false);
+        inherit(motion::ads_fire3,motion::ads_fire1,false);
+        for(const auto& [motion,clip] : value.animations)
+        {
+            if(clip.name.empty() || !std::isfinite(clip.speed) || clip.speed<=0)
+                throw std::invalid_argument("Invalid weapon animation clip");
+        }
+        const auto id=value.rules.id;
+        const auto key=value.input.equip_key;
+        if(key>=0)
+        {
+            std::lock_guard<std::mutex> lock(input_mutex);
+            for(const auto& registered:registered_equips)
+                if(registered.key==key)
+                    throw std::invalid_argument("Duplicate weapon equip key");
         }
         slot item;
-        item.settings = std::move(value);
-        item.authority = item.predicted = ::weapon::make_state(item.settings.rules);
+        item.settings=std::move(value);
+        item.authority=item.predicted=::weapon::make_state(item.settings.rules);
         d.weapons.push_back(std::move(item));
+        if(key>=0)
+        {
+            std::lock_guard<std::mutex> lock(input_mutex);
+            registered_equips.push_back({id,key});
+        }
     }
 
     void equip(std::uint32_t id)
@@ -538,11 +621,12 @@ namespace clt::weapon
         for (auto& item : d.weapons)
         {
             item.model = load(item.settings.model);
-            item.casing = load(item.settings.casing_model);
-            if (!item.model.skin || item.casing.skin)
-            {
-                throw std::runtime_error("Weapon requires a skinned viewmodel and static casing");
-            }
+            if(!item.settings.casing_model.empty())
+                item.casing=load(item.settings.casing_model);
+            if(item.casing.skin || (item.model.skin && item.settings.animations.empty()) ||
+               (!item.model.skin && !item.settings.animations.empty()))
+                throw std::runtime_error(
+                    "Skinned guns need animation clips; static guns omit them; casing must be static");
             const auto skin = std::find_if(
                 d.asset.skins.begin(),
                 d.asset.skins.end(),
@@ -833,8 +917,9 @@ namespace clt::weapon
         d.ads += (float(aiming) - d.ads) * (1 - std::exp(-config().ads_speed * dt));
         d.recoil *= std::exp(-config().recoil_decay * dt);
         camera::aim(d.ads * config().ads_zoom);
+        camera::set_ads_fraction(d.ads);
         std::vector<animation::matrix> palette;
-        if (!animation::sample(
+        if (d.skin && !animation::sample(
                 d.skin,
                 d.clip,
                 float(now - d.clip_started) * d.speed,
@@ -847,7 +932,9 @@ namespace clt::weapon
         {
             throw std::runtime_error("Cannot sample weapon animation");
         }
-        if (d.predicted.magazine == 0 && d.predicted.reload == ::weapon::reload_phase::none)
+        if (d.skin && d.slide != UINT32_MAX &&
+            d.predicted.magazine == 0 &&
+            d.predicted.reload == ::weapon::reload_phase::none)
         {
             // Keep the last round's authored fire pose during its recoil, then hold the slide open.
             const bool firing =
@@ -867,10 +954,14 @@ namespace clt::weapon
         auto local = translate({0, 0, d.recoil}) * rotation(angle_axis(d.recoil, {1, 0, 0})) *
                      d.camera_correction;
         const auto model = camera_world * local;
-        d.muzzle_matrix = model * socket(d.muzzle);
-        if (fired)
+        d.muzzle_matrix = model *
+            (d.muzzle==UINT32_MAX?
+             translate(config().muzzle_offset):socket(d.muzzle));
+        if (fired && !config().casing_model.empty())
         {
-            auto port = model * socket(d.ejection);
+            auto port = model *
+                (d.ejection==UINT32_MAX?
+                 translate(config().ejection_offset):socket(d.ejection));
             const auto position = port * vec4{0, 0, 0, 1};
             const auto impulse = config().casing_impulse;
             const auto velocity = camera_world * vec4{impulse.x, impulse.y, impulse.z, 0};
@@ -1081,6 +1172,9 @@ namespace clt::weapon
         std::lock_guard<std::mutex> lock(input_mutex);
         intents.clear();
         trigger_held = reload_held = aim = false;
+        selected_input={};
+        registered_equips.clear();
+        next_automatic_fire={};
         movement = 0;
     }
 } // namespace clt::weapon

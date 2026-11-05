@@ -4,14 +4,15 @@
 #include "clt/render/renderer.hpp"
 #include "clt/render/scene_renderer.hpp"
 #include "clt/weapon/weapon.hpp"
+#include "weapons.hpp"
 #include "srv/game/application.hpp"
 #include "srv/game/options.hpp"
 #include "srv/shared/net/socket.hpp"
-#include "srv/shared/weapon/metadata.hpp"
 
 #include <fld/fld.hpp>
 #include <GLFW/glfw3.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -37,6 +38,7 @@ namespace game_fluid
         clock::time_point previous{},report_started{};
         std::uint32_t submitted=0;
         bool started=false;
+        std::atomic<int> color_mode{0}; // 0 green, 1 red, 2 clear
 
         constexpr const char* particle_stages[11]={
             "CLEAR","PREDICT","BUILD","LAMBDA","DELTA","APPLY",
@@ -45,6 +47,12 @@ namespace game_fluid
     }
 
     void release();
+
+    void cycle_color()
+    {
+        const int current=color_mode.load(std::memory_order_relaxed);
+        color_mode.store((current+1)%3,std::memory_order_relaxed);
+    }
 
     void initialize(const ::scene::state& scene)
     {
@@ -191,6 +199,12 @@ namespace game_fluid
         input.output=target.view;
         input.sampler=clt::postprocess::sampler();
         input.color_layout=vk::ImageLayout::eGeneral;
+        // Debug appearance only: edit RGB and opacity here without
+        // changing liquid density, volume, viscosity or capillary forces.
+        const int tint=color_mode.load(std::memory_order_relaxed);
+        input.debug_color=tint==1?
+            fld::vec3{1.f,.035f,.035f}:fld::vec3{.04f,1.f,.06f};
+        input.debug_opacity=tint==2?0.f:.85f;
         fld::render::record(command,image,input);
 #ifndef NDEBUG
         ++submitted;
@@ -224,78 +238,32 @@ namespace
 {
     void load_weapons()
     {
-        // Client-only resources and presentation. IDs must match server.cpp.
-        using motion = clt::weapon::motion;
-        clt::weapon::definition glock;
-        glock.rules.id = 1;
-        glock.rules.magazine_capacity = 15;
-        glock.rules.initial_reserve = 90;
-        glock.rules.fire_interval = .15;
-        glock.rules.range = 200;
-        glock.rules.reload = weapon::load_timing(
-            "assets/glock/metadata.json", "Glock_Reload", "Glock_ReloadEmpty", 20, 20
-        );
-        glock.model = "assets/glock/glock.glb";
-        glock.casing_model = "assets/props/casing.glb";
-        glock.camera_joint = "camera";
-        glock.muzzle_joint = "Muzzle";
-        glock.ejection_joint = "EjectionPort";
-        glock.slide_joint = "Slide";
-        glock.animations = {
-            {motion::idle, {"Glock_Idle", 1, true}},
-            {motion::walk, {"Glock_Walk", 1, true}},
-            {motion::draw, {"Glock_Draw", 1, false}},
-            {motion::reload, {"Glock_Reload", 1, false}},
-            {motion::reload_empty, {"Glock_ReloadEmpty", 1, false}},
-            {motion::ads_idle, {"Glock_ADS_Idle", 1, true}},
-            {motion::ads_walk, {"Glock_ADS_Walk", 1, true}},
-            {motion::ads_in, {"Glock_ADS_In", 3, false}},
-            {motion::ads_out, {"Glock_ADS_Out", 3, false}},
-            {motion::fire1, {"Glock_Fire1", 1.5f, false}},
-            {motion::fire2, {"Glock_Fire2", 1.5f, false}},
-            {motion::fire3, {"Glock_Fire3", 1.5f, false}},
-            {motion::ads_fire1, {"Glock_ADS_Fire1", 1.5f, false}},
-            {motion::ads_fire2, {"Glock_ADS_Fire2", 1.5f, false}},
-            {motion::ads_fire3, {"Glock_ADS_Fire3", 1.5f, false}}
-        };
-        glock.fov = 1.22173048f;
-        glock.ads_fov = glock.fov - .08f;
-        glock.ads_zoom = .08f;
-        glock.slide_offset = .025f;
-        glock.recoil = .022f;
-        glock.hip_kick = .015f;
-        glock.ads_kick = .009f;
-        glock.casing_impulse = {1.6f, 1.5f, .35f};
-        glock.casing_lifetime = 9;
-        glock.max_casings = 48;
-        glock.flash_duration = .035f;
-        glock.flash_scale = {.035f, .045f, .035f};
-        glock.impact_radius = .009f;
-        glock.impact_lifetime = 120;
-        glock.max_impacts = 192;
-        // Register more IDs here; models/materials are cached and uploaded once.
-        clt::weapon::register_weapon(std::move(glock));
+        for(auto&& gun:game_weapons::all())
+            clt::weapon::register_weapon(std::move(gun));
     }
 
     void on_input(const clt::input::frame& frame)
     {
-        static bool equipment_held[9]{};
-        for (int slot = 0; slot < 9; ++slot)
-        {
-            const bool down = clt::input::key_down(GLFW_KEY_1 + slot);
-            if (down && !equipment_held[slot])
-            {
-                clt::weapon::equip(static_cast<std::uint32_t>(slot + 1));
-            }
-            equipment_held[slot] = down;
-        }
+        static bool color_held=false;
+        const bool color_key=clt::input::key_down(GLFW_KEY_F8);
+        if(color_key && !color_held)game_fluid::cycle_color();
+        color_held=color_key;
 
+        // Each gun chooses its own equip key, trigger, ADS and reload input.
+        static std::array<bool,GLFW_KEY_LAST+1> equip_held{};
+        for(const auto& item:clt::weapon::equip_bindings())
+        {
+            if(item.key<0 || item.key>GLFW_KEY_LAST)continue;
+            const bool down=clt::input::key_down(item.key);
+            if(down && !equip_held[item.key])
+                clt::weapon::equip(item.id);
+            equip_held[item.key]=down;
+        }
+        const auto keys=clt::weapon::active_bindings();
         clt::weapon::controls(
-            clt::input::mouse_down(GLFW_MOUSE_BUTTON_LEFT),
-            clt::input::mouse_down(GLFW_MOUSE_BUTTON_RIGHT),
-            clt::input::key_down(GLFW_KEY_R),
-            frame.buttons
-        );
+            clt::input::mouse_down(keys.trigger_button),
+            clt::input::mouse_down(keys.aim_button),
+            clt::input::key_down(keys.reload_key),frame.buttons);
     }
 
     void stop(int)
