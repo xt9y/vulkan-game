@@ -43,6 +43,9 @@ namespace game_fluid
         // Expensive fluid optics run at 50% resolution; final composite,
         // scene geometry and first-person gun remain full resolution.
         constexpr float fluid_render_scale=.50f;
+        // One optical sample per two simulated particles; set to 1 for
+        // maximum droplet detail. Simulation always keeps all particles.
+        constexpr std::uint32_t fluid_render_stride=2u;
         constexpr const char* bvh_stages[8]={
             "KEYS","SORT","CLEAR","TOPOLOGY","LEAVES","REFIT",
             "OVERLAP","RAY"
@@ -104,7 +107,8 @@ namespace game_fluid
             "build/shaders/fluid_tile_build.comp.spv",
             "build/shaders/fluid_surface.comp.spv",
             "build/shaders/fluid_upscale.comp.spv"
-        },frames,extent.width,extent.height,fluid_render_scale);
+        },frames,extent.width,extent.height,
+            fluid_render_scale,fluid_render_stride);
     }
 
     void create()
