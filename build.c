@@ -192,7 +192,27 @@ void build(C_Build* b)
     FLD_RENDER(tile_clear);
     FLD_RENDER(tile_build);
     FLD_RENDER(surface);
+    FLD_RENDER(upscale);
 #undef FLD_RENDER
+    // Generic BVH compute stages for large static collision scenes.
+    // No additional BVH dependency: VulkanFluid builds this sibling module.
+#define BVH_STAGE(NAME) \
+    c_generate(client, "build/shaders/bvh_" #NAME "_stamp.cpp", \
+               "@VulkanFluid@/../bvh/bvh/shaders/bvh.comp", \
+               "glslangValidator -V -DBVH_" #NAME \
+               " @VulkanFluid@/../bvh/bvh/shaders/bvh.comp" \
+               " -o build/shaders/bvh_" #NAME ".comp.spv && " \
+               "printf 'namespace bvh_" #NAME "_stamp {}\\n'" \
+               " > build/shaders/bvh_" #NAME "_stamp.cpp")
+    BVH_STAGE(KEYS);
+    BVH_STAGE(SORT);
+    BVH_STAGE(CLEAR);
+    BVH_STAGE(TOPOLOGY);
+    BVH_STAGE(LEAVES);
+    BVH_STAGE(REFIT);
+    BVH_STAGE(OVERLAP);
+    BVH_STAGE(RAY);
+#undef BVH_STAGE
     c_use(client, glfw);
     c_use(client, fastgltf);
     c_use(client, ozz);
