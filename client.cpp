@@ -3,7 +3,7 @@
 #include "weapons.hpp"
 #include "srv/game/application.hpp"
 #include "srv/game/options.hpp"
-#include "srv/shared/net/socket.hpp"
+#include <network/socket.hpp>
 
 #include <GLFW/glfw3.h>
 #include <algorithm>

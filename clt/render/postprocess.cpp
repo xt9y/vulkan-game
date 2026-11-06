@@ -3,6 +3,9 @@
 #include "scene_renderer.hpp"
 #include "clt/view/camera.hpp"
 #include <render/renderer.hpp>
+#include <render/pipeline.hpp>
+#include <gpu/compute.hpp>
+#include <memory>
 
 #include <algorithm>
 #include <atomic>
@@ -40,12 +43,10 @@ namespace clt::postprocess
             vk::DescriptorSetLayout tone_set{};
             vk::DescriptorSetLayout present_set{};
             vk::DescriptorPool pool{};
-            vk::PipelineLayout lighting_layout{};
-            vk::PipelineLayout tone_layout{};
             vk::PipelineLayout present_layout{};
-            vk::Pipeline lighting_pipeline{};
-            vk::Pipeline tone_pipeline{};
-            vk::Pipeline present_pipeline{};
+            std::unique_ptr<gpu::compute> lighting_program;
+            std::unique_ptr<gpu::compute> tone_program;
+            std::unique_ptr<::render::pipeline> present_program;
             vk::RenderPass render_pass{};
         };
 
@@ -68,11 +69,6 @@ namespace clt::postprocess
             std::array<float, 4> ambient{};
             std::array<float, 4> sky{};
         };
-
-        vk::ShaderModule shader(const char* filename)
-        {
-            return vk::shader::create(vk::shader::read(filename));
-        }
 
         vk::DescriptorSetLayout layout(
             std::uint32_t sampled, std::uint32_t storage, vk::ShaderStageFlags stages
@@ -110,27 +106,6 @@ namespace clt::postprocess
                 info.pPushConstantRanges = &constants;
             }
             return vk::device::get()->handle.createPipelineLayout(info);
-        }
-
-        vk::Pipeline compute_pipeline(const char* name, vk::PipelineLayout layout)
-        {
-            auto module = shader(name);
-            try
-            {
-                vk::ComputePipelineCreateInfo info{};
-                info.stage.stage = vk::ShaderStageFlagBits::eCompute;
-                info.stage.module = module;
-                info.stage.pName = "main";
-                info.layout = layout;
-                auto result = vk::pipeline::compute(info);
-                vk::shader::destroy(module);
-                return result;
-            }
-            catch (...)
-            {
-                vk::shader::destroy(module);
-                throw;
-            }
         }
 
         image_target make_target(vk::Format format)
@@ -190,77 +165,8 @@ namespace clt::postprocess
             vk::device::get()->handle.updateDescriptorSets(writes, {});
         }
 
-        vk::Pipeline presentation_pipeline()
-        {
-            const auto& data = get();
-            const auto vertex = shader(game::options::get()->graphics.fullscreen_shader.c_str());
-            const auto fragment = shader(game::options::get()->graphics.presentation_shader.c_str());
-            try
-            {
-                std::array<vk::PipelineShaderStageCreateInfo, 2> stages{};
-                stages[0].stage = vk::ShaderStageFlagBits::eVertex;
-                stages[0].module = vertex;
-                stages[0].pName = "main";
-                stages[1].stage = vk::ShaderStageFlagBits::eFragment;
-                stages[1].module = fragment;
-                stages[1].pName = "main";
-
-                vk::PipelineVertexInputStateCreateInfo input{};
-                vk::PipelineInputAssemblyStateCreateInfo assembly{};
-                assembly.topology = vk::PrimitiveTopology::eTriangleList;
-                vk::PipelineViewportStateCreateInfo viewport{};
-                viewport.viewportCount = 1;
-                viewport.scissorCount = 1;
-                vk::PipelineRasterizationStateCreateInfo raster{};
-                raster.polygonMode = vk::PolygonMode::eFill;
-                raster.cullMode = vk::CullModeFlagBits::eNone;
-                raster.frontFace = vk::FrontFace::eCounterClockwise;
-                raster.lineWidth = 1;
-                vk::PipelineMultisampleStateCreateInfo multi{};
-                multi.rasterizationSamples = vk::SampleCountFlagBits::e1;
-                vk::PipelineColorBlendAttachmentState blend{};
-                blend.colorWriteMask = vk::ColorComponentFlagBits::eR |
-                    vk::ColorComponentFlagBits::eG |
-                    vk::ColorComponentFlagBits::eB |
-                    vk::ColorComponentFlagBits::eA;
-                vk::PipelineColorBlendStateCreateInfo blending{};
-                blending.attachmentCount = 1;
-                blending.pAttachments = &blend;
-                std::array<vk::DynamicState, 2> dynamics{
-                    vk::DynamicState::eViewport, vk::DynamicState::eScissor
-                };
-                vk::PipelineDynamicStateCreateInfo dynamic{};
-                dynamic.dynamicStateCount = dynamics.size();
-                dynamic.pDynamicStates = dynamics.data();
-
-                vk::GraphicsPipelineCreateInfo info{};
-                info.stageCount = stages.size();
-                info.pStages = stages.data();
-                info.pVertexInputState = &input;
-                info.pInputAssemblyState = &assembly;
-                info.pViewportState = &viewport;
-                info.pRasterizationState = &raster;
-                info.pMultisampleState = &multi;
-                info.pColorBlendState = &blending;
-                info.pDynamicState = &dynamic;
-                info.layout = data.present_layout;
-                info.renderPass = data.render_pass;
-                const auto pipeline = vk::pipeline::graphics(info);
-                vk::shader::destroy(vertex);
-                vk::shader::destroy(fragment);
-                return pipeline;
-            }
-            catch (...)
-            {
-                vk::shader::destroy(vertex);
-                vk::shader::destroy(fragment);
-                throw;
-            }
-        }
-
-        void compute(vk::CommandBuffer command, vk::Pipeline pipeline,
-                     vk::PipelineLayout layout, vk::DescriptorSet set,
-                     bool enabled)
+        void compute(vk::CommandBuffer command, const gpu::compute& program,
+                     vk::DescriptorSet set, bool enabled)
         {
             const auto extent = vk::swapchain::get()->extent;
             const auto view = camera::snapshot();
@@ -276,13 +182,9 @@ namespace clt::postprocess
                 {0.08f, 0.02f, 0, 0},
                 {0.035f, 0.045f, 0.065f, 1}
             };
-            command.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline);
-            command.bindDescriptorSets(vk::PipelineBindPoint::eCompute, layout, 0, {set}, {});
-            command.pushConstants(
-                layout, vk::ShaderStageFlagBits::eCompute, 0,
-                sizeof(controls), &controls
-            );
-            command.dispatch((extent.width + 7) / 8, (extent.height + 7) / 8, 1);
+            program.dispatch(
+                command, (extent.width + 7) / 8, (extent.height + 7) / 8, 1,
+                {set}, &controls, sizeof(controls));
         }
     }
 
@@ -336,12 +238,15 @@ namespace clt::postprocess
             data.lighting_set = layout(4, 1, vk::ShaderStageFlagBits::eCompute);
             data.tone_set = layout(1, 1, vk::ShaderStageFlagBits::eCompute);
             data.present_set = layout(1, 0, vk::ShaderStageFlagBits::eFragment);
-            data.lighting_layout = pipeline_layout(data.lighting_set, true);
-            data.tone_layout = pipeline_layout(data.tone_set, true);
             data.present_layout = pipeline_layout(data.present_set, false);
-
-            data.lighting_pipeline = compute_pipeline(game::options::get()->graphics.lighting_shader.c_str(), data.lighting_layout);
-            data.tone_pipeline = compute_pipeline(game::options::get()->graphics.tonemap_shader.c_str(), data.tone_layout);
+            data.lighting_program = std::make_unique<gpu::compute>();
+            data.lighting_program->create(
+                game::options::get()->graphics.lighting_shader,
+                {data.lighting_set}, sizeof(push));
+            data.tone_program = std::make_unique<gpu::compute>();
+            data.tone_program->create(
+                game::options::get()->graphics.tonemap_shader,
+                {data.tone_set}, sizeof(push));
 
             vk::AttachmentDescription attachment{};
             attachment.format = vk::swapchain::get()->format;
@@ -361,7 +266,19 @@ namespace clt::postprocess
             info.subpassCount = 1;
             info.pSubpasses = &subpass;
             data.render_pass = vk::render_pass::create(info);
-            data.present_pipeline = presentation_pipeline();
+            data.present_program = std::make_unique<::render::pipeline>();
+            ::render::raster_state raster{};
+            raster.pass = data.render_pass;
+            raster.layout = data.present_layout;
+            raster.cull = vk::CullModeFlagBits::eNone;
+            raster.depth_test = false;
+            raster.depth_write = false;
+            data.present_program->create(raster, {
+                {vk::ShaderStageFlagBits::eVertex,
+                 game::options::get()->graphics.fullscreen_shader},
+                {vk::ShaderStageFlagBits::eFragment,
+                 game::options::get()->graphics.presentation_shader}
+            });
 
             const auto count = static_cast<std::uint32_t>(
                 vk::swapchain::get()->images.size()
@@ -462,12 +379,10 @@ namespace clt::postprocess
         }
         data.frames.clear();
 
-        vk::pipeline::destroy(data.lighting_pipeline);
-        vk::pipeline::destroy(data.tone_pipeline);
-        vk::pipeline::destroy(data.present_pipeline);
+        data.lighting_program.reset();
+        data.tone_program.reset();
+        data.present_program.reset();
         if (data.render_pass) vk::render_pass::destroy(data.render_pass);
-        if (data.lighting_layout) device.destroyPipelineLayout(data.lighting_layout);
-        if (data.tone_layout) device.destroyPipelineLayout(data.tone_layout);
         if (data.present_layout) device.destroyPipelineLayout(data.present_layout);
         if (data.pool) device.destroyDescriptorPool(data.pool);
         if (data.lighting_set) device.destroyDescriptorSetLayout(data.lighting_set);
@@ -497,15 +412,15 @@ namespace clt::postprocess
     void lighting(vk::CommandBuffer command, std::uint32_t image)
     {
         const auto& current = get().frames.at(image);
-        compute(command, get().lighting_pipeline, get().lighting_layout,
+        compute(command, *get().lighting_program,
                 current.lighting, enabled(effect::lighting));
     }
 
     void tonemap(vk::CommandBuffer command, std::uint32_t image)
     {
         const auto& current = get().frames.at(image);
-        compute(command,get().tone_pipeline,get().tone_layout,
-                current.tone,enabled(effect::tonemapping));
+        compute(command, *get().tone_program,
+                current.tone, enabled(effect::tonemapping));
     }
 
     void present(vk::CommandBuffer command, std::uint32_t image)
@@ -528,7 +443,7 @@ namespace clt::postprocess
         ::render::mesh triangle{};
         triangle.vertex_count = 3;
         ::render::material surface{};
-        surface.pipeline = get().present_pipeline;
+        surface.pipeline = get().present_program->handle();
         surface.layout = get().present_layout;
         surface.sets = {get().frames.at(image).presentation};
         graphics.draw(triangle, surface);

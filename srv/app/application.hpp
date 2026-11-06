@@ -3,7 +3,7 @@
 #include "srv/game/options.hpp"
 #include "srv/shared/net/animation.hpp"
 #include "srv/shared/net/message.hpp"
-#include "srv/shared/net/socket.hpp"
+#include <network/socket.hpp>
 #include "srv/shared/net/weapon.hpp"
 #include "srv/shared/player/movement.hpp"
 #include "srv/shared/scene/scene.hpp"

@@ -4,8 +4,9 @@
 #include "clt/network/connection.hpp"
 #include "clt/render/texture.hpp"
 #include <gpu/upload.hpp>
-#include <gpu/transfer.hpp>
+#include <gpu/culler.hpp>
 #include <render/renderer.hpp>
+#include <render/pipeline.hpp>
 #include "clt/view/camera.hpp"
 #include "clt/weapon/weapon.hpp"
 #include "srv/game/options.hpp"
@@ -87,8 +88,7 @@ namespace clt::scene_renderer
             vk::DescriptorPool local_pool{};
             vk::DescriptorSetLayout instance_layout{};
             vk::DescriptorPool instance_pool{};
-            vk::PipelineLayout cull_layout{};
-            vk::Pipeline cull_pipeline{};
+            gpu::culler cull;
             std::array<vec4, 6> last_gpu_planes{};
             bool gpu_planes_valid = false;
             std::uint32_t last_image = 0;
@@ -97,7 +97,7 @@ namespace clt::scene_renderer
 
             vk::RenderPass render_pass{};
             vk::PipelineLayout layout{};
-            vk::Pipeline pipeline{};
+            ::render::pipeline pipeline;
 
             struct target {
                 std::array<vk::image::resource, 3> color;
@@ -135,11 +135,11 @@ namespace clt::scene_renderer
             geometry.index_count = mesh.index_count;
 
             ::render::material surface{};
-            surface.pipeline = get().pipeline;
+            surface.pipeline = get().pipeline.handle();
             surface.layout = get().layout;
             surface.sets = {frame.set};
-            const auto* bytes = reinterpret_cast<const std::uint8_t*>(&params);
-            surface.push_constants.assign(bytes, bytes + sizeof(params));
+            surface.push_data = &params;
+            surface.push_size = sizeof(params);
             surface.push_stages = vk::ShaderStageFlagBits::eVertex |
                                   vk::ShaderStageFlagBits::eFragment;
 
@@ -208,146 +208,52 @@ namespace clt::scene_renderer
         void create_pipeline()
         {
             auto& data = get();
+            vk::PushConstantRange range{};
+            range.stageFlags = vk::ShaderStageFlagBits::eVertex |
+                               vk::ShaderStageFlagBits::eFragment;
+            range.size = sizeof(draw_parameters);
+            vk::PipelineLayoutCreateInfo layout_info{};
+            layout_info.pushConstantRangeCount = 1;
+            layout_info.pPushConstantRanges = &range;
+            layout_info.setLayoutCount = 1;
+            layout_info.pSetLayouts = &data.instance_layout;
+            data.layout = vk::pipeline_layout::create(layout_info);
 
-            const auto vertex_code = vk::shader::read(data.shaders[0]);
-            const auto fragment_code = vk::shader::read(data.shaders[1]);
+            ::render::raster_state raster{};
+            raster.pass = data.render_pass;
+            raster.layout = data.layout;
+            raster.cull = vk::CullModeFlagBits::eNone;
+            raster.front = vk::FrontFace::eCounterClockwise;
+            raster.depth_compare = vk::CompareOp::eLess;
+            raster.bindings = {
+                {0, sizeof(::scene::vertex), vk::VertexInputRate::eVertex},
+                {1, sizeof(std::uint32_t), vk::VertexInputRate::eInstance}
+            };
+            raster.attributes = {
+                {0, 0, vk::Format::eR32G32B32Sfloat,
+                 offsetof(::scene::vertex, position)},
+                {1, 0, vk::Format::eR32G32B32Sfloat,
+                 offsetof(::scene::vertex, normal)},
+                {2, 0, vk::Format::eR32G32Sfloat,
+                 offsetof(::scene::vertex, u)},
+                {3, 1, vk::Format::eR32Uint, 0},
+                {4, 0, vk::Format::eR32G32B32A32Uint,
+                 offsetof(::scene::vertex, joints)},
+                {5, 0, vk::Format::eR32G32B32A32Sfloat,
+                 offsetof(::scene::vertex, weights)}
+            };
+            raster.blend_attachments.resize(3);
+            for (auto& blend : raster.blend_attachments)
+                blend.colorWriteMask = vk::ColorComponentFlagBits::eR |
+                                       vk::ColorComponentFlagBits::eG |
+                                       vk::ColorComponentFlagBits::eB |
+                                       vk::ColorComponentFlagBits::eA;
 
-            vk::ShaderModule vertex_shader{};
-            vk::ShaderModule fragment_shader{};
-
-            try
-            {
-                vertex_shader = vk::shader::create(vertex_code);
-                fragment_shader = vk::shader::create(fragment_code);
-
-                vk::PushConstantRange range{};
-                range.stageFlags = vk::ShaderStageFlagBits::eVertex |
-                    vk::ShaderStageFlagBits::eFragment;
-                range.offset = 0;
-                range.size = sizeof(draw_parameters);
-
-                vk::PipelineLayoutCreateInfo layout_info{};
-                layout_info.pushConstantRangeCount = 1;
-                layout_info.pPushConstantRanges = &range;
-                layout_info.setLayoutCount = 1;
-                layout_info.pSetLayouts = &data.instance_layout;
-
-                data.layout = vk::pipeline_layout::create(layout_info);
-
-                std::array<vk::PipelineShaderStageCreateInfo, 2> stages{};
-
-                stages[0].stage = vk::ShaderStageFlagBits::eVertex;
-                stages[0].module = vertex_shader;
-                stages[0].pName = "main";
-
-                stages[1].stage = vk::ShaderStageFlagBits::eFragment;
-                stages[1].module = fragment_shader;
-                stages[1].pName = "main";
-
-                std::array<vk::VertexInputBindingDescription, 2> bindings{};
-                bindings[0] = vk::VertexInputBindingDescription{0, sizeof(::scene::vertex), vk::VertexInputRate::eVertex};
-                bindings[1] = vk::VertexInputBindingDescription{
-                    1, sizeof(std::uint32_t), vk::VertexInputRate::eInstance
-                };
-
-                std::array<vk::VertexInputAttributeDescription, 6> attributes{};
-                attributes[0] = vk::VertexInputAttributeDescription{0, 0, vk::Format::eR32G32B32Sfloat,
-                                 offsetof(::scene::vertex, position)};
-                attributes[1] = vk::VertexInputAttributeDescription{1, 0, vk::Format::eR32G32B32Sfloat,
-                                 offsetof(::scene::vertex, normal)};
-                attributes[2] = vk::VertexInputAttributeDescription{
-                    2, 0, vk::Format::eR32G32Sfloat, offsetof(::scene::vertex, u)
-                };
-                attributes[3] = vk::VertexInputAttributeDescription{
-                    3, 1, vk::Format::eR32Uint, 0
-                };
-                attributes[4] = vk::VertexInputAttributeDescription{
-                    4, 0, vk::Format::eR32G32B32A32Uint,
-                    offsetof(::scene::vertex, joints)
-                };
-                attributes[5] = vk::VertexInputAttributeDescription{
-                    5, 0, vk::Format::eR32G32B32A32Sfloat,
-                    offsetof(::scene::vertex, weights)
-                };
-
-                vk::PipelineVertexInputStateCreateInfo vertex_input{};
-                vertex_input.vertexBindingDescriptionCount = bindings.size();
-                vertex_input.pVertexBindingDescriptions = bindings.data();
-                vertex_input.vertexAttributeDescriptionCount = attributes.size();
-                vertex_input.pVertexAttributeDescriptions = attributes.data();
-
-                vk::PipelineInputAssemblyStateCreateInfo assembly{};
-                assembly.topology = vk::PrimitiveTopology::eTriangleList;
-
-                vk::PipelineViewportStateCreateInfo viewport{};
-                viewport.viewportCount = 1;
-                viewport.scissorCount = 1;
-
-                vk::PipelineRasterizationStateCreateInfo rasterization{};
-                rasterization.polygonMode = vk::PolygonMode::eFill;
-                rasterization.cullMode = vk::CullModeFlagBits::eNone;
-                rasterization.frontFace = vk::FrontFace::eCounterClockwise;
-                rasterization.lineWidth = 1.0f;
-
-                vk::PipelineMultisampleStateCreateInfo multisample{};
-                multisample.rasterizationSamples = vk::SampleCountFlagBits::e1;
-
-                vk::PipelineDepthStencilStateCreateInfo depth{};
-                depth.depthTestEnable = VK_TRUE;
-                depth.depthWriteEnable = VK_TRUE;
-                depth.depthCompareOp = vk::CompareOp::eLess;
-
-                vk::PipelineColorBlendAttachmentState blend{};
-                blend.colorWriteMask =
-                    vk::ColorComponentFlagBits::eR |
-                    vk::ColorComponentFlagBits::eG |
-                    vk::ColorComponentFlagBits::eB |
-                    vk::ColorComponentFlagBits::eA;
-
-                std::array<vk::PipelineColorBlendAttachmentState, 3> attachments{
-                    blend, blend, blend
-                };
-                vk::PipelineColorBlendStateCreateInfo blending{};
-                blending.attachmentCount = attachments.size();
-                blending.pAttachments = attachments.data();
-
-                std::array<vk::DynamicState, 2> dynamic_states{
-                    vk::DynamicState::eViewport,
-                    vk::DynamicState::eScissor
-                };
-
-                vk::PipelineDynamicStateCreateInfo dynamic{};
-                dynamic.dynamicStateCount = dynamic_states.size();
-                dynamic.pDynamicStates = dynamic_states.data();
-
-                vk::GraphicsPipelineCreateInfo info{};
-                info.stageCount = stages.size();
-                info.pStages = stages.data();
-                info.pVertexInputState = &vertex_input;
-                info.pInputAssemblyState = &assembly;
-                info.pViewportState = &viewport;
-                info.pRasterizationState = &rasterization;
-                info.pMultisampleState = &multisample;
-                info.pDepthStencilState = &depth;
-                info.pColorBlendState = &blending;
-                info.pDynamicState = &dynamic;
-                info.layout = data.layout;
-                info.renderPass = data.render_pass;
-                info.subpass = 0;
-
-                data.pipeline = vk::pipeline::graphics(info);
-            }
-            catch (...)
-            {
-                vk::shader::destroy(vertex_shader);
-                vk::shader::destroy(fragment_shader);
-                throw;
-            }
-
-            vk::shader::destroy(vertex_shader);
-            vk::shader::destroy(fragment_shader);
+            data.pipeline.create(raster, {
+                {vk::ShaderStageFlagBits::eVertex, data.shaders[0]},
+                {vk::ShaderStageFlagBits::eFragment, data.shaders[1]}
+            });
         }
-
 
         std::array<vk::Format, 3> color_formats()
         {
@@ -553,35 +459,8 @@ namespace clt::scene_renderer
         texture::pin(weapon::assets());
         texture::synchronize(::scene::state{});
 
-        vk::PushConstantRange range{};
-        range.stageFlags = vk::ShaderStageFlagBits::eCompute;
-        range.offset = 0;
-        range.size = sizeof(cull_parameters);
-
-        vk::PipelineLayoutCreateInfo layout{};
-        layout.setLayoutCount = 1;
-        layout.pSetLayouts = &data.instance_layout;
-        layout.pushConstantRangeCount = 1;
-        layout.pPushConstantRanges = &range;
-        data.cull_layout = device.createPipelineLayout(layout);
-
-        const auto code = vk::shader::read(game::options::get()->graphics.culling_shader.c_str());
-        auto module = vk::shader::create(code);
-        try
-        {
-            vk::ComputePipelineCreateInfo pipeline{};
-            pipeline.stage.stage = vk::ShaderStageFlagBits::eCompute;
-            pipeline.stage.module = module;
-            pipeline.stage.pName = "main";
-            pipeline.layout = data.cull_layout;
-            data.cull_pipeline = vk::pipeline::compute(pipeline);
-        }
-        catch (...)
-        {
-            vk::shader::destroy(module);
-            throw;
-        }
-        vk::shader::destroy(module);
+        data.cull.create(game::options::get()->graphics.culling_shader,
+                         data.instance_layout);
     }
 
     culling_readback culling_data()
@@ -749,8 +628,7 @@ namespace clt::scene_renderer
     {
         auto& data = get();
         release_local_frames();
-        vk::pipeline::destroy(data.pipeline);
-        data.pipeline = nullptr;
+        data.pipeline.reset();
         vk::pipeline_layout::destroy(data.layout);
         data.layout = nullptr;
 
@@ -1284,58 +1162,23 @@ namespace clt::scene_renderer
             data.last_gpu_planes = params.planes;
             data.gpu_planes_valid = true;
 
+            std::vector<vk::Buffer> indirects;
+            indirects.reserve(data.meshes.size());
             for (const auto& mesh : data.meshes)
-            {
                 if (!mesh.transforms.empty())
-                {
-                    gpu::transfer::fill(command,
-                        mesh.frames.at(image).indirect.handle,
-                        offsetof(vk::DrawIndexedIndirectCommand, instanceCount),
-                        sizeof(std::uint32_t), 0);
-                }
-            }
-
-            vk::MemoryBarrier transfer{};
-            transfer.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-            transfer.dstAccessMask = vk::AccessFlagBits::eShaderRead |
-                vk::AccessFlagBits::eShaderWrite;
-            command.pipelineBarrier(
-                vk::PipelineStageFlagBits::eTransfer,
-                vk::PipelineStageFlagBits::eComputeShader,
-                {}, {transfer}, {}, {}
-            );
-
-            command.bindPipeline(vk::PipelineBindPoint::eCompute, data.cull_pipeline);
+                    indirects.push_back(mesh.frames.at(image).indirect.handle);
+            data.cull.begin(command, indirects);
             for (const auto& mesh : data.meshes)
             {
-                if (mesh.transforms.empty())
-                {
-                    continue;
-                }
-
-                params.count = static_cast<std::uint32_t>(mesh.transforms.size());
-                params.index_count = mesh.index_count;
-                command.bindDescriptorSets(
-                    vk::PipelineBindPoint::eCompute,
-                    data.cull_layout, 0, {mesh.frames.at(image).set}, {}
+                if (mesh.transforms.empty()) continue;
+                data.cull.dispatch(
+                    command, mesh.frames.at(image).set, params.planes,
+                    static_cast<std::uint32_t>(mesh.transforms.size()),
+                    mesh.index_count
                 );
-                command.pushConstants(
-                    data.cull_layout, vk::ShaderStageFlagBits::eCompute,
-                    0, sizeof(params), &params
-                );
-                command.dispatch((params.count + 127u) / 128u, 1, 1);
             }
+            data.cull.end(command);
 
-            vk::MemoryBarrier finished{};
-            finished.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
-            finished.dstAccessMask = vk::AccessFlagBits::eVertexAttributeRead |
-                vk::AccessFlagBits::eIndirectCommandRead;
-            command.pipelineBarrier(
-                vk::PipelineStageFlagBits::eComputeShader,
-                vk::PipelineStageFlagBits::eVertexInput |
-                vk::PipelineStageFlagBits::eDrawIndirect,
-                {}, {finished}, {}, {}
-            );
 
         }
 
@@ -1513,16 +1356,7 @@ namespace clt::scene_renderer
 
         release_frame_resources();
 
-        if (data.cull_pipeline)
-        {
-            vk::pipeline::destroy(data.cull_pipeline);
-            data.cull_pipeline = nullptr;
-        }
-        if (data.cull_layout)
-        {
-            vk::device::get()->handle.destroyPipelineLayout(data.cull_layout);
-            data.cull_layout = nullptr;
-        }
+        data.cull.reset();
         texture::shutdown();
         if (data.instance_layout)
         {

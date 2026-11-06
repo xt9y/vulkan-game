@@ -1,7 +1,7 @@
 #pragma once
 
 #include "srv/shared/scene/scene.hpp"
-#include "srv/shared/spatial/index.hpp"
+#include <spatial/index.hpp>
 
 #include <cstdint>
 #include <vector>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "srv/shared/net/endpoint.hpp"
+#include <network/endpoint.hpp>
 #include "srv/shared/net/weapon.hpp"
 #include "srv/shared/player/movement.hpp"
 
