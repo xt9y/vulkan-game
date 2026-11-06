@@ -29,7 +29,7 @@ namespace weapon
     struct bindings
     {
         int trigger_button=0,aim_button=1;
-        int reload_key='R',equip_key=-1;
+        int reload_key='R',inspect_key='M',equip_key=-1;
         bool automatic=false;
         float sensitivity=.0025f;
         float ads_sensitivity_multiplier=.60f;

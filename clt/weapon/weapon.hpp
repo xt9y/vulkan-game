@@ -29,6 +29,8 @@ namespace clt::weapon
     void register_weapon(definition value);
     // Queued from the input thread; server validates the requested weapon ID.
     void equip(std::uint32_t id);
+    // Requests a read-only magazine/reserve inspection on the render thread.
+    void check_magazine();
 
     struct instance_data
     {

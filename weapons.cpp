@@ -13,7 +13,7 @@ namespace game_weapons
         glock.rules.id=1;
         glock.rules.magazine_capacity=15;
         glock.rules.initial_reserve=90;
-        glock.rules.fire_interval=.15;
+        glock.rules.fire_interval=.055; // fastest legal in-game interval: ~18 shots/s
         glock.rules.range=200;
         glock.rules.reload=weapon::load_timing(
             "assets/glock/metadata.json",
@@ -23,8 +23,9 @@ namespace game_weapons
         glock.input.trigger_button=0;       // left mouse button
         glock.input.aim_button=1;           // right mouse button
         glock.input.reload_key='R';
+        glock.input.inspect_key='M'; // print magazine/reserve without reloading
         glock.input.equip_key='1';
-        glock.input.automatic=false;
+        glock.input.automatic=true; // hold to fire at the server-validated interval
         glock.input.sensitivity=.0025f;
         glock.input.ads_sensitivity_multiplier=.60f;
 

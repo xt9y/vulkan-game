@@ -38,6 +38,7 @@ namespace clt::weapon
         std::mutex input_mutex;
         std::deque<intent> intents;
         bool trigger_held = false, reload_held = false, aim = false;
+        bool magazine_check_requested = false;
         std::uint32_t movement = 0;
         bindings selected_input{};
         double selected_fire_interval=.15;
@@ -550,6 +551,12 @@ namespace clt::weapon
         }
     }
 
+    void check_magazine()
+    {
+        std::lock_guard<std::mutex> lock(input_mutex);
+        magazine_check_requested = true;
+    }
+
     void initialize()
     {
         auto& d = get();
@@ -682,11 +689,14 @@ namespace clt::weapon
         bool aiming;
         std::uint32_t moving;
         std::deque<intent> input;
+        bool inspect_magazine=false;
         {
             std::lock_guard<std::mutex> lock(input_mutex);
             aiming = aim;
             moving = movement;
             input.swap(intents);
+            inspect_magazine=magazine_check_requested;
+            magazine_check_requested=false;
         }
         const bool connected = connection::get()->connected.load(std::memory_order_relaxed);
         current().predicted = d.predicted;
@@ -831,6 +841,16 @@ namespace clt::weapon
             d.confirmed.clear();
         }
         ::weapon::advance(d.predicted, now, config().rules);
+        if(inspect_magazine)
+        {
+            std::cout << "magazine: " << d.predicted.magazine << "/"
+                      << config().rules.magazine_capacity
+                      << " | reserve: " << d.predicted.reserve;
+            if(d.predicted.reload != ::weapon::reload_phase::none)
+                std::cout << " | reloading: "
+                          << std::max(0.,d.predicted.reload_finishes-now) << "s";
+            std::cout << std::endl;
+        }
         bool fired = false;
         for (const auto& event : input)
         {
@@ -846,6 +866,17 @@ namespace clt::weapon
             {
                 continue;
             }
+            // Do not flood the network with fire attempts during an empty
+            // magazine or reload. Keep authoritative checks on the server.
+            if(event.action == ::weapon::action::fire &&
+               (d.predicted.magazine == 0 ||
+                d.predicted.reload != ::weapon::reload_phase::none))
+                continue;
+            if(event.action == ::weapon::action::reload &&
+               (d.predicted.magazine >= config().rules.magazine_capacity ||
+                d.predicted.reserve == 0 ||
+                d.predicted.reload != ::weapon::reload_phase::none))
+                continue;
             net::weapon::command command;
             command.sequence = d.sequence + 1;
             if (!command.sequence)
