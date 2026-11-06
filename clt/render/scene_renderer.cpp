@@ -3,7 +3,9 @@
 #include "clt/animation/animation.hpp"
 #include "clt/network/connection.hpp"
 #include "clt/render/texture.hpp"
-#include "clt/render/upload.hpp"
+#include <gpu/upload.hpp>
+#include <gpu/transfer.hpp>
+#include <render/renderer.hpp>
 #include "clt/view/camera.hpp"
 #include "clt/weapon/weapon.hpp"
 #include "srv/game/options.hpp"
@@ -115,6 +117,36 @@ namespace clt::scene_renderer
         {
             static state data;
             return data;
+        }
+
+
+        // Shared render-system binding for streamed and local meshes.
+        void draw_mesh(::render::renderer& graphics, const gpu_mesh& mesh,
+                       const gpu_mesh::per_image& frame,
+                       const draw_parameters& params, bool indirect,
+                       std::uint32_t instances)
+        {
+            ::render::mesh geometry{};
+            geometry.streams = {
+                {0, mesh.vertices.handle, 0},
+                {1, frame.visible.handle, 0}
+            };
+            geometry.index_buffer = mesh.indices.handle;
+            geometry.index_count = mesh.index_count;
+
+            ::render::material surface{};
+            surface.pipeline = get().pipeline;
+            surface.layout = get().layout;
+            surface.sets = {frame.set};
+            const auto* bytes = reinterpret_cast<const std::uint8_t*>(&params);
+            surface.push_constants.assign(bytes, bytes + sizeof(params));
+            surface.push_stages = vk::ShaderStageFlagBits::eVertex |
+                                  vk::ShaderStageFlagBits::eFragment;
+
+            if (indirect)
+                graphics.draw_indirect(geometry, surface, frame.indirect.handle, 0);
+            else
+                graphics.draw(geometry, surface, instances);
         }
 
         void destroy_meshes(std::vector<gpu_mesh>& meshes)
@@ -627,7 +659,7 @@ namespace clt::scene_renderer
         }
         if (data.local_meshes.empty())
         {
-            upload::batch transfers;
+            gpu::upload::batch transfers;
             for (const auto& mesh : source.meshes)
             {
                 gpu_mesh output;
@@ -840,7 +872,7 @@ namespace clt::scene_renderer
             return;
         }
 
-        upload::batch transfers;
+        gpu::upload::batch transfers;
         const auto transform_bytes = mesh.transforms.size() * sizeof(instance_data);
         if (!mesh.instance_buffer.handle || mesh.instance_buffer.size < transform_bytes)
         {
@@ -1045,7 +1077,7 @@ namespace clt::scene_renderer
         {
             meshes.reserve(source->meshes.size());
 
-            upload::batch transfers;
+            gpu::upload::batch transfers;
             try
             {
                 for (const auto& mesh : source->meshes)
@@ -1256,11 +1288,10 @@ namespace clt::scene_renderer
             {
                 if (!mesh.transforms.empty())
                 {
-                    command.fillBuffer(
+                    gpu::transfer::fill(command,
                         mesh.frames.at(image).indirect.handle,
                         offsetof(vk::DrawIndexedIndirectCommand, instanceCount),
-                        sizeof(std::uint32_t), 0
-                    );
+                        sizeof(std::uint32_t), 0);
                 }
             }
 
@@ -1377,18 +1408,11 @@ namespace clt::scene_renderer
                 );
             }
         }
-        command.beginRenderPass(begin, vk::SubpassContents::eInline);
-
-        command.bindPipeline(
-            vk::PipelineBindPoint::eGraphics,
-            data.pipeline
-        );
-
-        command.setViewport(
-            0, vk::Viewport{0.0f, 0.0f, float(extent.width), float(extent.height), 0.1f, 1.0f}
-        );
-
-        command.setScissor(0, vk::Rect2D{{0, 0}, extent});
+        ::render::renderer graphics(command);
+        graphics.begin_pass(begin);
+        graphics.viewport(
+            vk::Viewport{0.0f, 0.0f, float(extent.width), float(extent.height), 0.1f, 1.0f},
+            vk::Rect2D{{0, 0}, extent});
 
         if (data.snapshot)
         {
@@ -1416,27 +1440,7 @@ namespace clt::scene_renderer
                      m.emissive[2], float(flags)},
                     mesh.joint_count
                 };
-                command.pushConstants(
-                    data.layout, vk::ShaderStageFlagBits::eVertex |
-                    vk::ShaderStageFlagBits::eFragment,
-                    0, sizeof(params), &params
-                );
-                const std::array<vk::Buffer, 2> buffers{
-                    mesh.vertices.handle, mesh.frames.at(image).visible.handle
-                };
-                const std::array<vk::DeviceSize, 2> offsets{0, 0};
-                command.bindDescriptorSets(
-                    vk::PipelineBindPoint::eGraphics,
-                    data.layout, 0, {mesh.frames.at(image).set}, {}
-                );
-                command.bindVertexBuffers(0, buffers, offsets);
-                command.bindIndexBuffer(
-                    mesh.indices.handle, 0, vk::IndexType::eUint32
-                );
-                command.drawIndexedIndirect(
-                    mesh.frames.at(image).indirect.handle, 0, 1,
-                    sizeof(vk::DrawIndexedIndirectCommand)
-                );
+                draw_mesh(graphics, mesh, mesh.frames.at(image), params, true, 1);
             }
         }
 
@@ -1445,17 +1449,12 @@ namespace clt::scene_renderer
         // Draw both world-attached weapons and the first-person viewmodel.
         for (bool viewmodel : {false, true})
         {
-            command.setViewport(
-                0,
+            graphics.viewport(
                 vk::Viewport{
-                    0,
-                    0,
-                    float(extent.width),
-                    float(extent.height),
-                    viewmodel ? 0.f : .1f,
-                    viewmodel ? .099f : 1.f
-                }
-            );
+                    0, 0, float(extent.width), float(extent.height),
+                    viewmodel ? 0.f : .1f, viewmodel ? .099f : 1.f
+                },
+                vk::Rect2D{{0, 0}, extent});
             for (const auto& item : weapon_draws)
             {
                 if (item.viewmodel != viewmodel)
@@ -1489,27 +1488,12 @@ namespace clt::scene_renderer
                     {m.emissive[0], m.emissive[1], m.emissive[2], float(flags)},
                     mesh.joint_count
                 };
-                command.pushConstants(
-                    data.layout,
-                    vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-                    0,
-                    sizeof(params),
-                    &params
-                );
-                command.bindDescriptorSets(
-                    vk::PipelineBindPoint::eGraphics, data.layout, 0, {frame.set}, {}
-                );
-                command.bindVertexBuffers(
-                    0,
-                    std::array<vk::Buffer, 2>{mesh.vertices.handle, frame.visible.handle},
-                    std::array<vk::DeviceSize, 2>{0, 0}
-                );
-                command.bindIndexBuffer(mesh.indices.handle, 0, vk::IndexType::eUint32);
-                command.drawIndexed(mesh.index_count, item.instances.size(), 0, 0, 0);
+                draw_mesh(graphics, mesh, frame, params, false,
+                          static_cast<std::uint32_t>(item.instances.size()));
             }
         }
 
-        command.endRenderPass();
+        graphics.end_pass();
     }
 
     void shutdown()

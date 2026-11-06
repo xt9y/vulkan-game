@@ -2,6 +2,7 @@
 #include "srv/game/options.hpp"
 #include "scene_renderer.hpp"
 #include "clt/view/camera.hpp"
+#include <render/renderer.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -519,17 +520,18 @@ namespace clt::postprocess
         info.clearValueCount = 1;
         info.pClearValues = &clear;
 
-        command.beginRenderPass(info, vk::SubpassContents::eInline);
-        command.bindPipeline(vk::PipelineBindPoint::eGraphics, get().present_pipeline);
-        command.setViewport(0, vk::Viewport{
-            0, 0, float(extent.width), float(extent.height), 0, 1
-        });
-        command.setScissor(0, vk::Rect2D{{0, 0}, extent});
-        command.bindDescriptorSets(
-            vk::PipelineBindPoint::eGraphics, get().present_layout,
-            0, {get().frames.at(image).presentation}, {}
-        );
-        command.draw(3, 1, 0, 0);
-        command.endRenderPass();
+        ::render::renderer graphics(command);
+        graphics.begin_pass(info);
+        graphics.viewport(
+            vk::Viewport{0, 0, float(extent.width), float(extent.height), 0, 1},
+            vk::Rect2D{{0, 0}, extent});
+        ::render::mesh triangle{};
+        triangle.vertex_count = 3;
+        ::render::material surface{};
+        surface.pipeline = get().present_pipeline;
+        surface.layout = get().present_layout;
+        surface.sets = {get().frames.at(image).presentation};
+        graphics.draw(triangle, surface);
+        graphics.end_pass();
     }
 }

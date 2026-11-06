@@ -1,6 +1,6 @@
 #include "texture.hpp"
 #define STBI_NO_STDIO
-#include "upload.hpp"
+#include <gpu/upload.hpp>
 
 #include <algorithm>
 #include <array>
@@ -51,7 +51,7 @@ namespace clt::texture
             texture = {};
         }
 
-        resource create(const ::scene::texture& source, upload::batch& batch)
+        resource create(const ::scene::texture& source, gpu::upload::batch& batch)
         {
             resource result;
             result.id = source.id;
@@ -128,7 +128,7 @@ namespace clt::texture
 
         try
         {
-            upload::batch batch;
+            gpu::upload::batch batch;
             ::scene::texture white;
             white.id = 0;
             white.width = white.height = 1;
@@ -156,7 +156,7 @@ namespace clt::texture
     void synchronize(const ::scene::state& source)
     {
         auto& data = get();
-        upload::batch batch;
+        gpu::upload::batch batch;
         std::vector<resource> replacement;
         replacement.reserve(source.textures.size() + pinned.size());
         std::vector<const ::scene::texture*> incoming;

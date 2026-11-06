@@ -4,7 +4,7 @@
 #include "scene_renderer.hpp"
 #include "postprocess.hpp"
 #include "passes.hpp"
-#include "upload.hpp"
+#include <gpu/upload.hpp>
 
 #include "clt/platform/vulkan_loader.hpp"
 #include "clt/platform/window.hpp"
@@ -248,7 +248,7 @@ namespace clt::renderer
 
         auto device = vk::device::get()->handle;
         vk::device::idle();
-        upload::retire(true);
+        gpu::upload::retire(true);
 
         passes::release();
         postprocess::release();
@@ -355,10 +355,10 @@ namespace clt::renderer
 
         // Resource replacements are only applied once all older submissions
         // have finished. Never block the render thread waiting on every frame.
-        upload::retire();
+        gpu::upload::retire();
         if (scene_renderer::needs_sync())
         {
-            bool safe = upload::ready();
+            bool safe = gpu::upload::ready();
             for (const auto& context : data.frames)
             {
                 if (device.getFenceStatus(context.fence) != vk::Result::eSuccess)
@@ -453,7 +453,7 @@ namespace clt::renderer
             try
             {
                 vk::device::idle();
-                upload::retire(true);
+                gpu::upload::retire(true);
             }
             catch (...)
             {
