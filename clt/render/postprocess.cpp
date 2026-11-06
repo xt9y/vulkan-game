@@ -1,7 +1,6 @@
 #include "postprocess.hpp"
 #include "srv/game/options.hpp"
 #include "scene_renderer.hpp"
-#include "renderer.hpp"
 #include "clt/view/camera.hpp"
 
 #include <algorithm>
@@ -30,7 +29,6 @@ namespace clt::postprocess
             vk::Framebuffer framebuffer{};
             vk::DescriptorSet lighting{};
             vk::DescriptorSet tone{};
-            bool tone_uses_effect=false;
             vk::DescriptorSet presentation{};
         };
 
@@ -504,23 +502,7 @@ namespace clt::postprocess
 
     void tonemap(vk::CommandBuffer command, std::uint32_t image)
     {
-        auto& current = get().frames.at(image);
-        const bool has_effect = renderer::effect_active();
-        if(current.tone_uses_effect != has_effect)
-        {
-            vk::DescriptorImageInfo input{};
-            input.sampler=get().sampler;
-            input.imageView=has_effect?renderer::effect_output(image):current.hdr.view;
-            input.imageLayout=vk::ImageLayout::eGeneral;
-            vk::WriteDescriptorSet write{};
-            write.dstSet=current.tone;
-            write.dstBinding=0;
-            write.descriptorCount=1;
-            write.descriptorType=vk::DescriptorType::eCombinedImageSampler;
-            write.pImageInfo=&input;
-            vk::device::get()->handle.updateDescriptorSets({write},{});
-            current.tone_uses_effect=has_effect;
-        }
+        const auto& current = get().frames.at(image);
         compute(command,get().tone_pipeline,get().tone_layout,
                 current.tone,enabled(effect::tonemapping));
     }

@@ -5,10 +5,10 @@
 
 namespace clt::passes
 {
-    enum class stage : std::uint32_t { geometry, lighting, effect, tonemapping, presentation, count };
+    enum class stage : std::uint32_t { geometry, lighting, tonemapping, presentation, count };
 
     enum resource : std::uint32_t {
-        scene = 1, gbuffer = 2, hdr = 4, effect_color = 8, ldr = 16, swapchain = 32
+        scene = 1, gbuffer = 2, hdr = 4, ldr = 8, swapchain = 16
     };
 
     struct description {
@@ -19,7 +19,7 @@ namespace clt::passes
         void (*record)(vk::CommandBuffer, std::uint32_t);
     };
 
-    const std::array<description, 5>& ordered();
+    const std::array<description, 4>& ordered();
     void create();
     void release();
     void record(vk::CommandBuffer command, std::uint32_t image);

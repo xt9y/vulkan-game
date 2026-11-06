@@ -1,7 +1,6 @@
 #include "passes.hpp"
 #include "postprocess.hpp"
 #include "scene_renderer.hpp"
-#include "renderer.hpp"
 
 #include <stdexcept>
 #include <vector>
@@ -53,17 +52,15 @@ namespace clt::passes
         }
     }
 
-    const std::array<description, 5>& ordered()
+    const std::array<description, 4>& ordered()
     {
-        static const std::array<description, 5> list{{
+        static const std::array<description, 4> list{{
             {"geometry", vk::PipelineBindPoint::eGraphics, resource::scene,
                 resource::gbuffer, scene_renderer::draw},
             {"lighting", vk::PipelineBindPoint::eCompute, resource::gbuffer,
                 resource::hdr, postprocess::lighting},
-            {"effect", vk::PipelineBindPoint::eCompute,
-                resource::gbuffer | resource::hdr, resource::effect_color, renderer::effect_record},
             {"tonemapping", vk::PipelineBindPoint::eCompute,
-                resource::hdr | resource::effect_color, resource::ldr,
+                resource::hdr, resource::ldr,
                 postprocess::tonemap},
             {"presentation", vk::PipelineBindPoint::eGraphics, resource::ldr,
                 resource::swapchain, postprocess::present}
@@ -101,7 +98,7 @@ namespace clt::passes
             }
             // Geometry supplies its external attachment-to-compute dependency.
         }
-        else if (index == 2 || index == 3)
+        else if (index == 2)
         {
             dependency(command,
                 vk::PipelineStageFlagBits::eComputeShader,
@@ -109,7 +106,7 @@ namespace clt::passes
                 vk::AccessFlagBits::eShaderWrite,
                 vk::AccessFlagBits::eShaderRead);
         }
-        else if (index == 4)
+        else if (index == 3)
         {
             dependency(command,
                 vk::PipelineStageFlagBits::eComputeShader,

@@ -64,13 +64,6 @@ void build(C_Build* b)
     c_dep_header_only(headers);
     c_dep_include(headers, "include");
 
-    C_Dependency* fluid =
-        c_git(b, "VulkanFluid", "https://github.com/xt9y/vulkan-systems.git",
-              "51b5cc704b87d1387129a0822e9d4a12ead9420d");
-    c_dep_subdir(fluid, "fluid");
-    c_dep_cbuild(fluid, "VulkanFluid", C_TARGET_STATIC_LIBRARY);
-    c_dep_include(fluid, ".");
-
     C_Dependency* fastgltf =
         c_git(b, "fastgltf", "https://github.com/spnda/fastgltf.git", "0b800b4a584704f9e9add67c79c4c8732e552787");
     c_dep_cmake(fastgltf);
@@ -158,40 +151,7 @@ void build(C_Build* b)
     c_warnings_strict(client);
     c_flag(client, "-std=c++20");
     c_use(client, engine);
-    c_use(client, fluid);
     c_use(client, headers);
-    // Grid and volume-surface shaders come from the shared fluid library.
-    // No SPH/BVH shader variants are compiled into the game.
-#define CONT_GRID(NAME) \
-    c_generate(client, "build/shaders/continuum_" #NAME "_stamp.cpp", \
-               "@VulkanFluid@/fld/continuum/shaders/grid.comp", \
-               "glslangValidator -V -DCONT_" #NAME \
-               " @VulkanFluid@/fld/continuum/shaders/grid.comp" \
-               " -o build/shaders/continuum_" #NAME ".comp.spv && " \
-               "printf 'namespace continuum_" #NAME "_stamp {}\\n'" \
-               " > build/shaders/continuum_" #NAME "_stamp.cpp")
-    CONT_GRID(SEED);
-    CONT_GRID(ADVECT_VELOCITY);
-    CONT_GRID(CURVATURE);
-    CONT_GRID(DIVERGENCE);
-    CONT_GRID(PRESSURE);
-    CONT_GRID(PROJECT);
-    CONT_GRID(ADVECT_VOLUME);
-#undef CONT_GRID
-#define CONT_RENDER(NAME,DEFINE,EXTRA) \
-    c_generate(client, "build/shaders/continuum_" #NAME "_stamp.cpp", \
-               "@VulkanFluid@/fld/continuum/shaders/surface.comp", \
-               "glslangValidator -V -DCONT_" #DEFINE " " EXTRA \
-               " @VulkanFluid@/fld/continuum/shaders/surface.comp" \
-               " -o build/shaders/continuum_" #NAME ".comp.spv && " \
-               "printf 'namespace continuum_" #NAME "_stamp {}\\n'" \
-               " > build/shaders/continuum_" #NAME "_stamp.cpp")
-    // Previous clear-water surface stage intentionally disabled for the
-    // blood demo. Both materials still reuse the same VOF/MAC solver.
-    // CONT_RENDER(surface,RENDER,"");
-    CONT_RENDER(blood_surface,RENDER,"-DFLD_BLOOD");
-    CONT_RENDER(upscale,UPSCALE,"-DFLD_BLOOD");
-#undef CONT_RENDER
     c_use(client, glfw);
     c_use(client, fastgltf);
     c_use(client, ozz);
