@@ -3,7 +3,10 @@
 #include "clt/animation/animation.hpp"
 #include "clt/network/connection.hpp"
 #include "clt/render/texture.hpp"
-#include "clt/render/upload.hpp"
+#include <gpu/upload.hpp>
+#include <gpu/culler.hpp>
+#include <render/renderer.hpp>
+#include <render/pipeline.hpp>
 #include "clt/view/camera.hpp"
 #include "clt/weapon/weapon.hpp"
 #include "srv/game/options.hpp"
@@ -85,8 +88,7 @@ namespace clt::scene_renderer
             vk::DescriptorPool local_pool{};
             vk::DescriptorSetLayout instance_layout{};
             vk::DescriptorPool instance_pool{};
-            vk::PipelineLayout cull_layout{};
-            vk::Pipeline cull_pipeline{};
+            gpu::culler cull;
             std::array<vec4, 6> last_gpu_planes{};
             bool gpu_planes_valid = false;
             std::uint32_t last_image = 0;
@@ -95,7 +97,7 @@ namespace clt::scene_renderer
 
             vk::RenderPass render_pass{};
             vk::PipelineLayout layout{};
-            vk::Pipeline pipeline{};
+            ::render::pipeline pipeline;
 
             struct target {
                 std::array<vk::image::resource, 3> color;
@@ -115,6 +117,36 @@ namespace clt::scene_renderer
         {
             static state data;
             return data;
+        }
+
+
+        // Shared render-system binding for streamed and local meshes.
+        void draw_mesh(::render::renderer& graphics, const gpu_mesh& mesh,
+                       const gpu_mesh::per_image& frame,
+                       const draw_parameters& params, bool indirect,
+                       std::uint32_t instances)
+        {
+            ::render::mesh geometry{};
+            geometry.streams = {
+                {0, mesh.vertices.handle, 0},
+                {1, frame.visible.handle, 0}
+            };
+            geometry.index_buffer = mesh.indices.handle;
+            geometry.index_count = mesh.index_count;
+
+            ::render::material surface{};
+            surface.pipeline = get().pipeline.handle();
+            surface.layout = get().layout;
+            surface.sets = {frame.set};
+            surface.push_data = &params;
+            surface.push_size = sizeof(params);
+            surface.push_stages = vk::ShaderStageFlagBits::eVertex |
+                                  vk::ShaderStageFlagBits::eFragment;
+
+            if (indirect)
+                graphics.draw_indirect(geometry, surface, frame.indirect.handle, 0);
+            else
+                graphics.draw(geometry, surface, instances);
         }
 
         void destroy_meshes(std::vector<gpu_mesh>& meshes)
@@ -176,146 +208,52 @@ namespace clt::scene_renderer
         void create_pipeline()
         {
             auto& data = get();
+            vk::PushConstantRange range{};
+            range.stageFlags = vk::ShaderStageFlagBits::eVertex |
+                               vk::ShaderStageFlagBits::eFragment;
+            range.size = sizeof(draw_parameters);
+            vk::PipelineLayoutCreateInfo layout_info{};
+            layout_info.pushConstantRangeCount = 1;
+            layout_info.pPushConstantRanges = &range;
+            layout_info.setLayoutCount = 1;
+            layout_info.pSetLayouts = &data.instance_layout;
+            data.layout = vk::pipeline_layout::create(layout_info);
 
-            const auto vertex_code = vk::shader::read(data.shaders[0]);
-            const auto fragment_code = vk::shader::read(data.shaders[1]);
+            ::render::raster_state raster{};
+            raster.pass = data.render_pass;
+            raster.layout = data.layout;
+            raster.cull = vk::CullModeFlagBits::eNone;
+            raster.front = vk::FrontFace::eCounterClockwise;
+            raster.depth_compare = vk::CompareOp::eLess;
+            raster.bindings = {
+                {0, sizeof(::scene::vertex), vk::VertexInputRate::eVertex},
+                {1, sizeof(std::uint32_t), vk::VertexInputRate::eInstance}
+            };
+            raster.attributes = {
+                {0, 0, vk::Format::eR32G32B32Sfloat,
+                 offsetof(::scene::vertex, position)},
+                {1, 0, vk::Format::eR32G32B32Sfloat,
+                 offsetof(::scene::vertex, normal)},
+                {2, 0, vk::Format::eR32G32Sfloat,
+                 offsetof(::scene::vertex, u)},
+                {3, 1, vk::Format::eR32Uint, 0},
+                {4, 0, vk::Format::eR32G32B32A32Uint,
+                 offsetof(::scene::vertex, joints)},
+                {5, 0, vk::Format::eR32G32B32A32Sfloat,
+                 offsetof(::scene::vertex, weights)}
+            };
+            raster.blend_attachments.resize(3);
+            for (auto& blend : raster.blend_attachments)
+                blend.colorWriteMask = vk::ColorComponentFlagBits::eR |
+                                       vk::ColorComponentFlagBits::eG |
+                                       vk::ColorComponentFlagBits::eB |
+                                       vk::ColorComponentFlagBits::eA;
 
-            vk::ShaderModule vertex_shader{};
-            vk::ShaderModule fragment_shader{};
-
-            try
-            {
-                vertex_shader = vk::shader::create(vertex_code);
-                fragment_shader = vk::shader::create(fragment_code);
-
-                vk::PushConstantRange range{};
-                range.stageFlags = vk::ShaderStageFlagBits::eVertex |
-                    vk::ShaderStageFlagBits::eFragment;
-                range.offset = 0;
-                range.size = sizeof(draw_parameters);
-
-                vk::PipelineLayoutCreateInfo layout_info{};
-                layout_info.pushConstantRangeCount = 1;
-                layout_info.pPushConstantRanges = &range;
-                layout_info.setLayoutCount = 1;
-                layout_info.pSetLayouts = &data.instance_layout;
-
-                data.layout = vk::pipeline_layout::create(layout_info);
-
-                std::array<vk::PipelineShaderStageCreateInfo, 2> stages{};
-
-                stages[0].stage = vk::ShaderStageFlagBits::eVertex;
-                stages[0].module = vertex_shader;
-                stages[0].pName = "main";
-
-                stages[1].stage = vk::ShaderStageFlagBits::eFragment;
-                stages[1].module = fragment_shader;
-                stages[1].pName = "main";
-
-                std::array<vk::VertexInputBindingDescription, 2> bindings{};
-                bindings[0] = vk::VertexInputBindingDescription{0, sizeof(::scene::vertex), vk::VertexInputRate::eVertex};
-                bindings[1] = vk::VertexInputBindingDescription{
-                    1, sizeof(std::uint32_t), vk::VertexInputRate::eInstance
-                };
-
-                std::array<vk::VertexInputAttributeDescription, 6> attributes{};
-                attributes[0] = vk::VertexInputAttributeDescription{0, 0, vk::Format::eR32G32B32Sfloat,
-                                 offsetof(::scene::vertex, position)};
-                attributes[1] = vk::VertexInputAttributeDescription{1, 0, vk::Format::eR32G32B32Sfloat,
-                                 offsetof(::scene::vertex, normal)};
-                attributes[2] = vk::VertexInputAttributeDescription{
-                    2, 0, vk::Format::eR32G32Sfloat, offsetof(::scene::vertex, u)
-                };
-                attributes[3] = vk::VertexInputAttributeDescription{
-                    3, 1, vk::Format::eR32Uint, 0
-                };
-                attributes[4] = vk::VertexInputAttributeDescription{
-                    4, 0, vk::Format::eR32G32B32A32Uint,
-                    offsetof(::scene::vertex, joints)
-                };
-                attributes[5] = vk::VertexInputAttributeDescription{
-                    5, 0, vk::Format::eR32G32B32A32Sfloat,
-                    offsetof(::scene::vertex, weights)
-                };
-
-                vk::PipelineVertexInputStateCreateInfo vertex_input{};
-                vertex_input.vertexBindingDescriptionCount = bindings.size();
-                vertex_input.pVertexBindingDescriptions = bindings.data();
-                vertex_input.vertexAttributeDescriptionCount = attributes.size();
-                vertex_input.pVertexAttributeDescriptions = attributes.data();
-
-                vk::PipelineInputAssemblyStateCreateInfo assembly{};
-                assembly.topology = vk::PrimitiveTopology::eTriangleList;
-
-                vk::PipelineViewportStateCreateInfo viewport{};
-                viewport.viewportCount = 1;
-                viewport.scissorCount = 1;
-
-                vk::PipelineRasterizationStateCreateInfo rasterization{};
-                rasterization.polygonMode = vk::PolygonMode::eFill;
-                rasterization.cullMode = vk::CullModeFlagBits::eNone;
-                rasterization.frontFace = vk::FrontFace::eCounterClockwise;
-                rasterization.lineWidth = 1.0f;
-
-                vk::PipelineMultisampleStateCreateInfo multisample{};
-                multisample.rasterizationSamples = vk::SampleCountFlagBits::e1;
-
-                vk::PipelineDepthStencilStateCreateInfo depth{};
-                depth.depthTestEnable = VK_TRUE;
-                depth.depthWriteEnable = VK_TRUE;
-                depth.depthCompareOp = vk::CompareOp::eLess;
-
-                vk::PipelineColorBlendAttachmentState blend{};
-                blend.colorWriteMask =
-                    vk::ColorComponentFlagBits::eR |
-                    vk::ColorComponentFlagBits::eG |
-                    vk::ColorComponentFlagBits::eB |
-                    vk::ColorComponentFlagBits::eA;
-
-                std::array<vk::PipelineColorBlendAttachmentState, 3> attachments{
-                    blend, blend, blend
-                };
-                vk::PipelineColorBlendStateCreateInfo blending{};
-                blending.attachmentCount = attachments.size();
-                blending.pAttachments = attachments.data();
-
-                std::array<vk::DynamicState, 2> dynamic_states{
-                    vk::DynamicState::eViewport,
-                    vk::DynamicState::eScissor
-                };
-
-                vk::PipelineDynamicStateCreateInfo dynamic{};
-                dynamic.dynamicStateCount = dynamic_states.size();
-                dynamic.pDynamicStates = dynamic_states.data();
-
-                vk::GraphicsPipelineCreateInfo info{};
-                info.stageCount = stages.size();
-                info.pStages = stages.data();
-                info.pVertexInputState = &vertex_input;
-                info.pInputAssemblyState = &assembly;
-                info.pViewportState = &viewport;
-                info.pRasterizationState = &rasterization;
-                info.pMultisampleState = &multisample;
-                info.pDepthStencilState = &depth;
-                info.pColorBlendState = &blending;
-                info.pDynamicState = &dynamic;
-                info.layout = data.layout;
-                info.renderPass = data.render_pass;
-                info.subpass = 0;
-
-                data.pipeline = vk::pipeline::graphics(info);
-            }
-            catch (...)
-            {
-                vk::shader::destroy(vertex_shader);
-                vk::shader::destroy(fragment_shader);
-                throw;
-            }
-
-            vk::shader::destroy(vertex_shader);
-            vk::shader::destroy(fragment_shader);
+            data.pipeline.create(raster, {
+                {vk::ShaderStageFlagBits::eVertex, data.shaders[0]},
+                {vk::ShaderStageFlagBits::eFragment, data.shaders[1]}
+            });
         }
-
 
         std::array<vk::Format, 3> color_formats()
         {
@@ -521,35 +459,8 @@ namespace clt::scene_renderer
         texture::pin(weapon::assets());
         texture::synchronize(::scene::state{});
 
-        vk::PushConstantRange range{};
-        range.stageFlags = vk::ShaderStageFlagBits::eCompute;
-        range.offset = 0;
-        range.size = sizeof(cull_parameters);
-
-        vk::PipelineLayoutCreateInfo layout{};
-        layout.setLayoutCount = 1;
-        layout.pSetLayouts = &data.instance_layout;
-        layout.pushConstantRangeCount = 1;
-        layout.pPushConstantRanges = &range;
-        data.cull_layout = device.createPipelineLayout(layout);
-
-        const auto code = vk::shader::read(game::options::get()->graphics.culling_shader.c_str());
-        auto module = vk::shader::create(code);
-        try
-        {
-            vk::ComputePipelineCreateInfo pipeline{};
-            pipeline.stage.stage = vk::ShaderStageFlagBits::eCompute;
-            pipeline.stage.module = module;
-            pipeline.stage.pName = "main";
-            pipeline.layout = data.cull_layout;
-            data.cull_pipeline = vk::pipeline::compute(pipeline);
-        }
-        catch (...)
-        {
-            vk::shader::destroy(module);
-            throw;
-        }
-        vk::shader::destroy(module);
+        data.cull.create(game::options::get()->graphics.culling_shader,
+                         data.instance_layout);
     }
 
     culling_readback culling_data()
@@ -627,7 +538,7 @@ namespace clt::scene_renderer
         }
         if (data.local_meshes.empty())
         {
-            upload::batch transfers;
+            gpu::upload::batch transfers;
             for (const auto& mesh : source.meshes)
             {
                 gpu_mesh output;
@@ -717,8 +628,7 @@ namespace clt::scene_renderer
     {
         auto& data = get();
         release_local_frames();
-        vk::pipeline::destroy(data.pipeline);
-        data.pipeline = nullptr;
+        data.pipeline.reset();
         vk::pipeline_layout::destroy(data.layout);
         data.layout = nullptr;
 
@@ -840,7 +750,7 @@ namespace clt::scene_renderer
             return;
         }
 
-        upload::batch transfers;
+        gpu::upload::batch transfers;
         const auto transform_bytes = mesh.transforms.size() * sizeof(instance_data);
         if (!mesh.instance_buffer.handle || mesh.instance_buffer.size < transform_bytes)
         {
@@ -1045,7 +955,7 @@ namespace clt::scene_renderer
         {
             meshes.reserve(source->meshes.size());
 
-            upload::batch transfers;
+            gpu::upload::batch transfers;
             try
             {
                 for (const auto& mesh : source->meshes)
@@ -1252,59 +1162,23 @@ namespace clt::scene_renderer
             data.last_gpu_planes = params.planes;
             data.gpu_planes_valid = true;
 
+            std::vector<vk::Buffer> indirects;
+            indirects.reserve(data.meshes.size());
             for (const auto& mesh : data.meshes)
-            {
                 if (!mesh.transforms.empty())
-                {
-                    command.fillBuffer(
-                        mesh.frames.at(image).indirect.handle,
-                        offsetof(vk::DrawIndexedIndirectCommand, instanceCount),
-                        sizeof(std::uint32_t), 0
-                    );
-                }
-            }
-
-            vk::MemoryBarrier transfer{};
-            transfer.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-            transfer.dstAccessMask = vk::AccessFlagBits::eShaderRead |
-                vk::AccessFlagBits::eShaderWrite;
-            command.pipelineBarrier(
-                vk::PipelineStageFlagBits::eTransfer,
-                vk::PipelineStageFlagBits::eComputeShader,
-                {}, {transfer}, {}, {}
-            );
-
-            command.bindPipeline(vk::PipelineBindPoint::eCompute, data.cull_pipeline);
+                    indirects.push_back(mesh.frames.at(image).indirect.handle);
+            data.cull.begin(command, indirects);
             for (const auto& mesh : data.meshes)
             {
-                if (mesh.transforms.empty())
-                {
-                    continue;
-                }
-
-                params.count = static_cast<std::uint32_t>(mesh.transforms.size());
-                params.index_count = mesh.index_count;
-                command.bindDescriptorSets(
-                    vk::PipelineBindPoint::eCompute,
-                    data.cull_layout, 0, {mesh.frames.at(image).set}, {}
+                if (mesh.transforms.empty()) continue;
+                data.cull.dispatch(
+                    command, mesh.frames.at(image).set, params.planes,
+                    static_cast<std::uint32_t>(mesh.transforms.size()),
+                    mesh.index_count
                 );
-                command.pushConstants(
-                    data.cull_layout, vk::ShaderStageFlagBits::eCompute,
-                    0, sizeof(params), &params
-                );
-                command.dispatch((params.count + 127u) / 128u, 1, 1);
             }
+            data.cull.end(command);
 
-            vk::MemoryBarrier finished{};
-            finished.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
-            finished.dstAccessMask = vk::AccessFlagBits::eVertexAttributeRead |
-                vk::AccessFlagBits::eIndirectCommandRead;
-            command.pipelineBarrier(
-                vk::PipelineStageFlagBits::eComputeShader,
-                vk::PipelineStageFlagBits::eVertexInput |
-                vk::PipelineStageFlagBits::eDrawIndirect,
-                {}, {finished}, {}, {}
-            );
 
         }
 
@@ -1377,18 +1251,11 @@ namespace clt::scene_renderer
                 );
             }
         }
-        command.beginRenderPass(begin, vk::SubpassContents::eInline);
-
-        command.bindPipeline(
-            vk::PipelineBindPoint::eGraphics,
-            data.pipeline
-        );
-
-        command.setViewport(
-            0, vk::Viewport{0.0f, 0.0f, float(extent.width), float(extent.height), 0.1f, 1.0f}
-        );
-
-        command.setScissor(0, vk::Rect2D{{0, 0}, extent});
+        ::render::renderer graphics(command);
+        graphics.begin_pass(begin);
+        graphics.viewport(
+            vk::Viewport{0.0f, 0.0f, float(extent.width), float(extent.height), 0.1f, 1.0f},
+            vk::Rect2D{{0, 0}, extent});
 
         if (data.snapshot)
         {
@@ -1416,27 +1283,7 @@ namespace clt::scene_renderer
                      m.emissive[2], float(flags)},
                     mesh.joint_count
                 };
-                command.pushConstants(
-                    data.layout, vk::ShaderStageFlagBits::eVertex |
-                    vk::ShaderStageFlagBits::eFragment,
-                    0, sizeof(params), &params
-                );
-                const std::array<vk::Buffer, 2> buffers{
-                    mesh.vertices.handle, mesh.frames.at(image).visible.handle
-                };
-                const std::array<vk::DeviceSize, 2> offsets{0, 0};
-                command.bindDescriptorSets(
-                    vk::PipelineBindPoint::eGraphics,
-                    data.layout, 0, {mesh.frames.at(image).set}, {}
-                );
-                command.bindVertexBuffers(0, buffers, offsets);
-                command.bindIndexBuffer(
-                    mesh.indices.handle, 0, vk::IndexType::eUint32
-                );
-                command.drawIndexedIndirect(
-                    mesh.frames.at(image).indirect.handle, 0, 1,
-                    sizeof(vk::DrawIndexedIndirectCommand)
-                );
+                draw_mesh(graphics, mesh, mesh.frames.at(image), params, true, 1);
             }
         }
 
@@ -1445,17 +1292,12 @@ namespace clt::scene_renderer
         // Draw both world-attached weapons and the first-person viewmodel.
         for (bool viewmodel : {false, true})
         {
-            command.setViewport(
-                0,
+            graphics.viewport(
                 vk::Viewport{
-                    0,
-                    0,
-                    float(extent.width),
-                    float(extent.height),
-                    viewmodel ? 0.f : .1f,
-                    viewmodel ? .099f : 1.f
-                }
-            );
+                    0, 0, float(extent.width), float(extent.height),
+                    viewmodel ? 0.f : .1f, viewmodel ? .099f : 1.f
+                },
+                vk::Rect2D{{0, 0}, extent});
             for (const auto& item : weapon_draws)
             {
                 if (item.viewmodel != viewmodel)
@@ -1489,27 +1331,12 @@ namespace clt::scene_renderer
                     {m.emissive[0], m.emissive[1], m.emissive[2], float(flags)},
                     mesh.joint_count
                 };
-                command.pushConstants(
-                    data.layout,
-                    vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-                    0,
-                    sizeof(params),
-                    &params
-                );
-                command.bindDescriptorSets(
-                    vk::PipelineBindPoint::eGraphics, data.layout, 0, {frame.set}, {}
-                );
-                command.bindVertexBuffers(
-                    0,
-                    std::array<vk::Buffer, 2>{mesh.vertices.handle, frame.visible.handle},
-                    std::array<vk::DeviceSize, 2>{0, 0}
-                );
-                command.bindIndexBuffer(mesh.indices.handle, 0, vk::IndexType::eUint32);
-                command.drawIndexed(mesh.index_count, item.instances.size(), 0, 0, 0);
+                draw_mesh(graphics, mesh, frame, params, false,
+                          static_cast<std::uint32_t>(item.instances.size()));
             }
         }
 
-        command.endRenderPass();
+        graphics.end_pass();
     }
 
     void shutdown()
@@ -1529,16 +1356,7 @@ namespace clt::scene_renderer
 
         release_frame_resources();
 
-        if (data.cull_pipeline)
-        {
-            vk::pipeline::destroy(data.cull_pipeline);
-            data.cull_pipeline = nullptr;
-        }
-        if (data.cull_layout)
-        {
-            vk::device::get()->handle.destroyPipelineLayout(data.cull_layout);
-            data.cull_layout = nullptr;
-        }
+        data.cull.reset();
         texture::shutdown();
         if (data.instance_layout)
         {

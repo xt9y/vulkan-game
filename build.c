@@ -59,6 +59,26 @@ void build(C_Build* b)
     c_dep_cbuild(engine, "VulkanEngine", C_TARGET_STATIC_LIBRARY);
     c_dep_include(engine, ".");
 
+    C_Dependency* systems =
+        c_git(b, "VulkanSystems", "https://github.com/xt9y/vulkan-systems.git", "62fee6debeecdc8614f3115c20beedd062189ec6");
+    c_dep_cbuild(systems, "VulkanSystems", C_TARGET_STATIC_LIBRARY);
+    c_dep_include(systems, "gpu");
+    c_dep_include(systems, "render");
+
+    // Independent CPU/network libraries: server does not use a graphics device.
+    C_Dependency* network =
+        c_git(b, "VulkanNetwork", "https://github.com/xt9y/vulkan-systems.git", "62fee6debeecdc8614f3115c20beedd062189ec6");
+    c_dep_cbuild(network, "VulkanNetwork", C_TARGET_STATIC_LIBRARY);
+    c_dep_include(network, "network");
+    C_Dependency* spatial =
+        c_git(b, "VulkanSpatial", "https://github.com/xt9y/vulkan-systems.git", "62fee6debeecdc8614f3115c20beedd062189ec6");
+    c_dep_cbuild(spatial, "VulkanSpatial", C_TARGET_STATIC_LIBRARY);
+    c_dep_include(spatial, "spatial");
+    C_Dependency* jobs =
+        c_git(b, "VulkanJobs", "https://github.com/xt9y/vulkan-systems.git", "62fee6debeecdc8614f3115c20beedd062189ec6");
+    c_dep_cbuild(jobs, "VulkanJobs", C_TARGET_STATIC_LIBRARY);
+    c_dep_include(jobs, "jobs");
+
     C_Dependency* headers =
         c_git(b, "VulkanHeaders", "https://github.com/KhronosGroup/Vulkan-Headers.git", "9fbc2a782ee3f8a4db64e7d991e23da75e893f44");
     c_dep_header_only(headers);
@@ -124,6 +144,9 @@ void build(C_Build* b)
     c_warnings_strict(server);
     c_flag(server, "-std=c++20");
     c_use(server, engine);
+    c_use(server, network);
+    c_use(server, spatial);
+    c_use(server, jobs);
     c_use(server, headers);
     c_use(server, fastgltf);
     c_use(server, ozz);
@@ -151,6 +174,9 @@ void build(C_Build* b)
     c_warnings_strict(client);
     c_flag(client, "-std=c++20");
     c_use(client, engine);
+    c_use(client, systems);
+    c_use(client, network);
+    c_use(client, spatial);
     c_use(client, headers);
     c_use(client, glfw);
     c_use(client, fastgltf);

@@ -1,7 +1,7 @@
 #include "srv/app/application.hpp"
 #include "srv/game/application.hpp"
 #include "srv/game/options.hpp"
-#include "srv/shared/net/socket.hpp"
+#include <network/socket.hpp>
 #include "srv/shared/player/movement.hpp"
 #include "srv/shared/scene/scene.hpp"
 #include "weapons.hpp"

@@ -2,7 +2,7 @@
 
 #include "srv/shared/net/message.hpp"
 #include "srv/shared/scene/scene.hpp"
-#include "srv/shared/spatial/index.hpp"
+#include <spatial/index.hpp>
 
 #include <algorithm>
 #include <cmath>

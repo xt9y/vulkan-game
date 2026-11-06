@@ -2,10 +2,10 @@
 #include "srv/shared/net/limits.hpp"
 #include <iostream>
 
-#include "srv/shared/net/endpoint.hpp"
+#include <network/endpoint.hpp>
 #include "srv/shared/net/message.hpp"
 #include "srv/shared/net/movement.hpp"
-#include "srv/shared/net/socket.hpp"
+#include <network/socket.hpp>
 
 #include "srv/shared/net/scene_stream.hpp"
 

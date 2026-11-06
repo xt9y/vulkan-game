@@ -2,7 +2,7 @@
 
 #include "srv/shared/net/animation.hpp"
 #include "srv/shared/net/movement.hpp"
-#include "srv/shared/net/socket.hpp"
+#include <network/socket.hpp>
 #include "srv/shared/net/weapon.hpp"
 #include "srv/shared/scene/scene.hpp"
 

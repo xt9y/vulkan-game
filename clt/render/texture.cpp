@@ -1,6 +1,7 @@
 #include "texture.hpp"
 #define STBI_NO_STDIO
-#include "upload.hpp"
+#include <gpu/upload.hpp>
+#include <gpu/texture_cache.hpp>
 
 #include <algorithm>
 #include <array>
@@ -20,7 +21,6 @@ namespace clt::texture
         {
             std::uint32_t id = 0;
             std::uint32_t hash = 0;
-            vk::image::resource image{};
             vk::ImageView view{};
         };
 
@@ -29,6 +29,7 @@ namespace clt::texture
             vk::Sampler sampler{};
             resource fallback;
             std::vector<resource> textures;
+            gpu::texture_cache cache;
         };
 
         state& get()
@@ -46,12 +47,10 @@ namespace clt::texture
 
         void destroy(resource& texture)
         {
-            if (texture.view) vk::image_view::destroy(texture.view);
-            if (texture.image.handle) vk::image::destroy(texture.image);
             texture = {};
         }
 
-        resource create(const ::scene::texture& source, upload::batch& batch)
+        resource create(const ::scene::texture& source, gpu::upload::batch& batch)
         {
             resource result;
             result.id = source.id;
@@ -89,13 +88,10 @@ namespace clt::texture
                 {
                     throw std::runtime_error("Invalid texture pixel count");
                 }
-                result.image = batch.add_image(pixels, source.width, source.height);
-                vk::ImageViewCreateInfo info{};
-                info.image = result.image.handle;
-                info.viewType = vk::ImageViewType::e2D;
-                info.format = result.image.format;
-                info.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-                result.view = vk::image_view::create(info);
+                get().cache.upsert(
+                    result.id, result.hash, pixels, source.width, source.height, batch
+                );
+                result.view = get().cache.view(result.id);
             }
             catch (...)
             {
@@ -128,7 +124,7 @@ namespace clt::texture
 
         try
         {
-            upload::batch batch;
+            gpu::upload::batch batch;
             ::scene::texture white;
             white.id = 0;
             white.width = white.height = 1;
@@ -156,7 +152,7 @@ namespace clt::texture
     void synchronize(const ::scene::state& source)
     {
         auto& data = get();
-        upload::batch batch;
+        gpu::upload::batch batch;
         std::vector<resource> replacement;
         replacement.reserve(source.textures.size() + pinned.size());
         std::vector<const ::scene::texture*> incoming;
@@ -207,6 +203,9 @@ namespace clt::texture
         }
         for (auto& old : data.textures) destroy(old);
         data.textures = std::move(replacement);
+        std::vector<std::uint64_t> keep{0};
+        for (const auto& entry : data.textures) keep.push_back(entry.id);
+        data.cache.retain(keep);
     }
 
     void bind(vk::DescriptorSet set, const ::scene::material& surface)
@@ -238,6 +237,7 @@ namespace clt::texture
     {
         for (auto& resource : get().textures) destroy(resource);
         get().textures.clear();
+        get().cache.retain({0});
     }
 
     void shutdown()
@@ -246,6 +246,7 @@ namespace clt::texture
         pinned.clear();
         auto& data = get();
         destroy(data.fallback);
+        data.cache.clear();
         if (data.sampler) vk::device::get()->handle.destroySampler(data.sampler);
         data.sampler = nullptr;
     }
