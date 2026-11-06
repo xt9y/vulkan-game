@@ -5,6 +5,8 @@
 #include "clt/render/texture.hpp"
 #include <gpu/upload.hpp>
 #include <gpu/culler.hpp>
+#include <gpu/resource.hpp>
+#include <gpu/descriptors.hpp>
 #include <render/renderer.hpp>
 #include <render/pipeline.hpp>
 #include "clt/view/camera.hpp"
@@ -50,16 +52,16 @@ namespace clt::scene_renderer
             ::scene::material surface;
             std::uint32_t skin_id = 0;
             std::uint32_t joint_count = 0;
-            vk::buffer::resource vertices;
-            vk::buffer::resource indices;
-            vk::buffer::resource instance_buffer;
-            vk::buffer::resource bounds_buffer;
+            gpu::owned_buffer vertices;
+            gpu::owned_buffer indices;
+            gpu::owned_buffer instance_buffer;
+            gpu::owned_buffer bounds_buffer;
 
             struct per_image {
-                vk::buffer::resource visible;
-                vk::buffer::resource indirect;
-                vk::buffer::resource skin_palette;
-                vk::buffer::resource local_instances;
+                gpu::owned_buffer visible;
+                gpu::owned_buffer indirect;
+                gpu::owned_buffer skin_palette;
+                gpu::owned_buffer local_instances;
                 vk::DescriptorSet set{};
             };
             std::vector<per_image> frames;
@@ -85,9 +87,9 @@ namespace clt::scene_renderer
             std::shared_ptr<const ::scene::state> snapshot;
             std::vector<gpu_mesh> meshes;
             std::vector<gpu_mesh> local_meshes;
-            vk::DescriptorPool local_pool{};
+            std::unique_ptr<gpu::descriptors> local_sets;
             vk::DescriptorSetLayout instance_layout{};
-            vk::DescriptorPool instance_pool{};
+            std::unique_ptr<gpu::descriptors> instance_sets;
             gpu::culler cull;
             std::array<vec4, 6> last_gpu_planes{};
             bool gpu_planes_valid = false;
@@ -100,9 +102,9 @@ namespace clt::scene_renderer
             ::render::pipeline pipeline;
 
             struct target {
-                std::array<vk::image::resource, 3> color;
+                std::array<gpu::owned_image, 3> color;
                 std::array<vk::ImageView, 3> views{};
-                vk::image::resource depth;
+                gpu::owned_image depth;
                 vk::ImageView depth_view{};
                 vk::Framebuffer framebuffer{};
             };
@@ -119,6 +121,28 @@ namespace clt::scene_renderer
             return data;
         }
 
+
+        std::array<vk::DescriptorSetLayoutBinding,10> instance_bindings()
+        {
+            std::array<vk::DescriptorSetLayoutBinding, 10> bindings{};
+            for (std::uint32_t i = 0; i < bindings.size(); ++i)
+            {
+                bindings[i].binding = i;
+                bindings[i].descriptorType = (i < 4 || i == 9) ?
+                    vk::DescriptorType::eStorageBuffer :
+                    vk::DescriptorType::eCombinedImageSampler;
+                bindings[i].descriptorCount = 1;
+                bindings[i].stageFlags = i < 4 ?
+                    vk::ShaderStageFlags(vk::ShaderStageFlagBits::eCompute) :
+                    i == 9 ? vk::ShaderStageFlags(vk::ShaderStageFlagBits::eVertex) :
+                    vk::ShaderStageFlags(vk::ShaderStageFlagBits::eFragment);
+                if (i == 0)
+                    bindings[i].stageFlags |= vk::ShaderStageFlagBits::eVertex;
+            }
+
+
+            return bindings;
+        }
 
         // Shared render-system binding for streamed and local meshes.
         void draw_mesh(::render::renderer& graphics, const gpu_mesh& mesh,
@@ -153,24 +177,24 @@ namespace clt::scene_renderer
         {
             for (auto& mesh : meshes)
             {
-                vk::buffer::destroy(mesh.vertices);
-                vk::buffer::destroy(mesh.indices);
+                mesh.vertices.reset();
+                mesh.indices.reset();
                 if (mesh.instance_buffer.handle)
                 {
-                    vk::buffer::destroy(mesh.instance_buffer);
+                    mesh.instance_buffer.reset();
                 }
                 if (mesh.bounds_buffer.handle)
                 {
-                    vk::buffer::destroy(mesh.bounds_buffer);
+                    mesh.bounds_buffer.reset();
                 }
                 for (auto& frame : mesh.frames)
                 {
-                    if (frame.visible.handle) vk::buffer::destroy(frame.visible);
-                    if (frame.indirect.handle) vk::buffer::destroy(frame.indirect);
-                    if (frame.skin_palette.handle) vk::buffer::destroy(frame.skin_palette);
+                    if (frame.visible.handle) frame.visible.reset();
+                    if (frame.indirect.handle) frame.indirect.reset();
+                    if (frame.skin_palette.handle) frame.skin_palette.reset();
                     if (frame.local_instances.handle)
                     {
-                        vk::buffer::destroy(frame.local_instances);
+                        frame.local_instances.reset();
                     }
                 }
             }
@@ -364,7 +388,7 @@ namespace clt::scene_renderer
                     image.tiling = vk::ImageTiling::eOptimal;
                     image.usage = vk::ImageUsageFlagBits::eColorAttachment |
                         vk::ImageUsageFlagBits::eSampled;
-                    target.color[i] = vk::image::create(
+                    target.color[i] = gpu::create_image(
                         image, vk::MemoryPropertyFlagBits::eDeviceLocal
                     );
 
@@ -386,7 +410,7 @@ namespace clt::scene_renderer
                 depth.tiling = vk::ImageTiling::eOptimal;
                 depth.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment |
                     vk::ImageUsageFlagBits::eSampled;
-                target.depth = vk::image::create(depth, vk::MemoryPropertyFlagBits::eDeviceLocal);
+                target.depth = gpu::create_image(depth, vk::MemoryPropertyFlagBits::eDeviceLocal);
 
                 vk::ImageViewCreateInfo depth_view{};
                 depth_view.image = target.depth.handle;
@@ -412,11 +436,11 @@ namespace clt::scene_renderer
             {
                 if (target.framebuffer) vk::framebuffer::destroy(target.framebuffer);
                 if (target.depth_view) vk::image_view::destroy(target.depth_view);
-                if (target.depth.handle) vk::image::destroy(target.depth);
+                if (target.depth.handle) target.depth.reset();
                 for (std::size_t i = 0; i < target.color.size(); ++i)
                 {
                     if (target.views[i]) vk::image_view::destroy(target.views[i]);
-                    if (target.color[i].handle) vk::image::destroy(target.color[i]);
+                    if (target.color[i].handle) target.color[i].reset();
                 }
                 throw;
             }
@@ -433,22 +457,7 @@ namespace clt::scene_renderer
         auto& data = get();
         data.shaders = {vertex_path, fragment_path};
 
-        std::array<vk::DescriptorSetLayoutBinding, 10> bindings{};
-        for (std::uint32_t i = 0; i < bindings.size(); ++i)
-        {
-            bindings[i].binding = i;
-            bindings[i].descriptorType = (i < 4 || i == 9) ?
-                vk::DescriptorType::eStorageBuffer :
-                vk::DescriptorType::eCombinedImageSampler;
-            bindings[i].descriptorCount = 1;
-            bindings[i].stageFlags = i < 4 ?
-                vk::ShaderStageFlags(vk::ShaderStageFlagBits::eCompute) :
-                i == 9 ? vk::ShaderStageFlags(vk::ShaderStageFlagBits::eVertex) :
-                vk::ShaderStageFlags(vk::ShaderStageFlagBits::eFragment);
-            if (i == 0)
-                bindings[i].stageFlags |= vk::ShaderStageFlagBits::eVertex;
-        }
-
+        const auto bindings=instance_bindings();
         const auto device = vk::device::get()->handle;
         vk::DescriptorSetLayoutCreateInfo info{};
         info.bindingCount = static_cast<std::uint32_t>(bindings.size());
@@ -508,24 +517,20 @@ namespace clt::scene_renderer
             {
                 if (frame.local_instances.handle)
                 {
-                    vk::buffer::destroy(frame.local_instances);
+                    frame.local_instances.reset();
                 }
                 if (frame.visible.handle)
                 {
-                    vk::buffer::destroy(frame.visible);
+                    frame.visible.reset();
                 }
                 if (frame.skin_palette.handle)
                 {
-                    vk::buffer::destroy(frame.skin_palette);
+                    frame.skin_palette.reset();
                 }
             }
             mesh.frames.clear();
         }
-        if (data.local_pool)
-        {
-            vk::device::get()->handle.destroyDescriptorPool(data.local_pool);
-        }
-        data.local_pool = nullptr;
+        data.local_sets.reset();
     }
 
     void create_local_frames()
@@ -561,18 +566,13 @@ namespace clt::scene_renderer
             }
             transfers.finish();
         }
-        const auto count =
-            std::uint32_t(data.local_meshes.size() * vk::swapchain::get()->images.size());
-        const std::array<vk::DescriptorPoolSize, 2> sizes{
-            {{vk::DescriptorType::eStorageBuffer, count * 5},
-             {vk::DescriptorType::eCombinedImageSampler, count * 5}}
-        };
-        vk::DescriptorPoolCreateInfo pool{};
-        pool.maxSets = count;
-        pool.poolSizeCount = sizes.size();
-        pool.pPoolSizes = sizes.data();
-        const auto device = vk::device::get()->handle;
-        data.local_pool = device.createDescriptorPool(pool);
+        const auto count=std::uint32_t(
+            data.local_meshes.size()*vk::swapchain::get()->images.size());
+        const auto schema=instance_bindings();
+        const auto device=vk::device::get()->handle;
+        data.local_sets=std::make_unique<gpu::descriptors>();
+        data.local_sets->create(std::vector<vk::DescriptorSetLayoutBinding>(schema.begin(),schema.end()),count);
+        std::uint32_t descriptor_index=0;
         std::array<std::uint32_t, 192> identities{};
         for (std::uint32_t i = 0; i < identities.size(); ++i)
         {
@@ -585,26 +585,22 @@ namespace clt::scene_renderer
             {
                 const auto memory = vk::MemoryPropertyFlagBits::eHostVisible |
                                     vk::MemoryPropertyFlagBits::eHostCoherent;
-                frame.local_instances = vk::buffer::create(
+                frame.local_instances = gpu::create_buffer(
                     192 * sizeof(instance_data), vk::BufferUsageFlagBits::eStorageBuffer, memory
                 );
-                frame.visible = vk::buffer::create(
+                frame.visible = gpu::create_buffer(
                     sizeof(identities),
                     vk::BufferUsageFlagBits::eVertexBuffer |
                         vk::BufferUsageFlagBits::eStorageBuffer,
                     memory
                 );
                 vk::buffer::write(frame.visible, identities.data(), sizeof(identities));
-                frame.skin_palette = vk::buffer::create(
+                frame.skin_palette = gpu::create_buffer(
                     std::max<std::uint32_t>(1, mesh.joint_count) * sizeof(animation::matrix),
                     vk::BufferUsageFlagBits::eStorageBuffer,
                     memory
                 );
-                vk::DescriptorSetAllocateInfo allocate{};
-                allocate.descriptorPool = data.local_pool;
-                allocate.descriptorSetCount = 1;
-                allocate.pSetLayouts = &data.instance_layout;
-                frame.set = device.allocateDescriptorSets(allocate).front();
+                frame.set=data.local_sets->set(descriptor_index++);
                 std::array<vk::DescriptorBufferInfo, 5> infos{};
                 std::array<vk::WriteDescriptorSet, 5> writes{};
                 for (std::uint32_t i = 0; i < 5; ++i)
@@ -636,11 +632,11 @@ namespace clt::scene_renderer
         {
             if (target.framebuffer) vk::framebuffer::destroy(target.framebuffer);
             if (target.depth_view) vk::image_view::destroy(target.depth_view);
-            if (target.depth.handle) vk::image::destroy(target.depth);
+            if (target.depth.handle) target.depth.reset();
             for (std::size_t i = 0; i < target.color.size(); ++i)
             {
                 if (target.views[i]) vk::image_view::destroy(target.views[i]);
-                if (target.color[i].handle) vk::image::destroy(target.color[i]);
+                if (target.color[i].handle) target.color[i].reset();
             }
         }
         data.targets.clear();
@@ -759,7 +755,7 @@ namespace clt::scene_renderer
                 vk::BufferUsageFlagBits::eStorageBuffer,
                 std::max<vk::DeviceSize>(transform_bytes, mesh.instance_buffer.size * 2)
             );
-            if (mesh.instance_buffer.handle) vk::buffer::destroy(mesh.instance_buffer);
+            if (mesh.instance_buffer.handle) mesh.instance_buffer.reset();
             mesh.instance_buffer = replacement;
         }
         else if (first < mesh.transforms.size())
@@ -778,20 +774,20 @@ namespace clt::scene_renderer
         {
             if (!frame.visible.handle || frame.visible.size < visible_bytes)
             {
-                auto replacement = vk::buffer::create(
+                auto replacement = gpu::create_buffer(
                     std::max<vk::DeviceSize>(visible_bytes, frame.visible.size * 2),
                     vk::BufferUsageFlagBits::eVertexBuffer |
                     vk::BufferUsageFlagBits::eStorageBuffer |
                     vk::BufferUsageFlagBits::eTransferSrc,
                     vk::MemoryPropertyFlagBits::eDeviceLocal
                 );
-                if (frame.visible.handle) vk::buffer::destroy(frame.visible);
-                frame.visible = replacement;
+                if (frame.visible.handle) frame.visible.reset();
+                frame.visible = std::move(replacement);
             }
 
             if (!frame.indirect.handle)
             {
-                frame.indirect = vk::buffer::create(
+                frame.indirect = gpu::create_buffer(
                     sizeof(vk::DrawIndexedIndirectCommand),
                     vk::BufferUsageFlagBits::eStorageBuffer |
                     vk::BufferUsageFlagBits::eIndirectBuffer |
@@ -809,8 +805,8 @@ namespace clt::scene_renderer
         {
             if (!frame.skin_palette.handle || frame.skin_palette.size < palette_size)
             {
-                if (frame.skin_palette.handle) vk::buffer::destroy(frame.skin_palette);
-                frame.skin_palette = vk::buffer::create(
+                if (frame.skin_palette.handle) frame.skin_palette.reset();
+                frame.skin_palette = gpu::create_buffer(
                     palette_size, vk::BufferUsageFlagBits::eStorageBuffer,
                     vk::MemoryPropertyFlagBits::eHostVisible |
                     vk::MemoryPropertyFlagBits::eHostCoherent);
@@ -823,7 +819,7 @@ namespace clt::scene_renderer
                 mesh.bounds.data(), size, vk::BufferUsageFlagBits::eStorageBuffer,
                 std::max<vk::DeviceSize>(size, mesh.bounds_buffer.size * 2)
             );
-            if (mesh.bounds_buffer.handle) vk::buffer::destroy(mesh.bounds_buffer);
+            if (mesh.bounds_buffer.handle) mesh.bounds_buffer.reset();
             mesh.bounds_buffer = replacement;
         }
         else if (first < mesh.bounds.size())
@@ -852,11 +848,7 @@ namespace clt::scene_renderer
         texture::synchronize(::scene::state{});
         animation::reset();
         animation::synchronize(weapon::assets());
-        if (data.instance_pool)
-        {
-            vk::device::get()->handle.destroyDescriptorPool(data.instance_pool);
-            data.instance_pool = nullptr;
-        }
+        data.instance_sets.reset();
         data.snapshot.reset();
         data.gpu_planes_valid = false;
     }
@@ -937,7 +929,7 @@ namespace clt::scene_renderer
         }
 
         std::vector<gpu_mesh> meshes;
-        vk::DescriptorPool new_pool{};
+        std::unique_ptr<gpu::descriptors> new_sets;
 
         if (source)
         {
@@ -1002,18 +994,18 @@ namespace clt::scene_renderer
                             result.radius = length((high - low) * 0.5f);
                         }
 
-                        meshes.push_back(result);
+                        meshes.push_back(std::move(result));
                     }
                     catch (...)
                     {
                         if (result.vertices.handle)
                         {
-                            vk::buffer::destroy(result.vertices);
+                            result.vertices.reset();
                         }
 
                         if (result.indices.handle)
                         {
-                            vk::buffer::destroy(result.indices);
+                            result.indices.reset();
                         }
 
                         destroy_meshes(meshes);
@@ -1045,24 +1037,15 @@ namespace clt::scene_renderer
                     append_instance(*it, instance);
                 }
 
-                // Each mesh owns a descriptor referencing its persistent
-                // transform storage; no per-frame matrix upload is required.
-                const auto count = std::max<std::size_t>(1, meshes.size()) *
-                    std::max<std::size_t>(1, vk::swapchain::get()->images.size());
-                std::array<vk::DescriptorPoolSize, 2> pool_sizes{{
-                    {vk::DescriptorType::eStorageBuffer, std::uint32_t(count * 5)},
-                    {vk::DescriptorType::eCombinedImageSampler, std::uint32_t(count * 5)}
-                }};
-
-                vk::DescriptorPoolCreateInfo pool_info{};
-                pool_info.maxSets = static_cast<std::uint32_t>(
-                    std::max<std::size_t>(1, meshes.size()) *
-                    std::max<std::size_t>(1, vk::swapchain::get()->images.size())
-                );
-                pool_info.poolSizeCount = pool_sizes.size();
-                pool_info.pPoolSizes = pool_sizes.data();
-                const auto device = vk::device::get()->handle;
-                new_pool = device.createDescriptorPool(pool_info);
+                // Allocate each scene descriptor through the reusable GPU
+                // descriptor owner, using a layout compatible with the renderer.
+                const auto count=std::max<std::size_t>(1,meshes.size()) *
+                    std::max<std::size_t>(1,vk::swapchain::get()->images.size());
+                const auto schema=instance_bindings();
+                new_sets=std::make_unique<gpu::descriptors>();
+                new_sets->create(std::vector<vk::DescriptorSetLayoutBinding>(schema.begin(),schema.end()),
+                    static_cast<std::uint32_t>(count));
+                std::uint32_t descriptor_index=0;
 
                 for (auto& mesh : meshes)
                 {
@@ -1075,11 +1058,7 @@ namespace clt::scene_renderer
 
                     for (auto& frame : mesh.frames)
                     {
-                        vk::DescriptorSetAllocateInfo allocate{};
-                        allocate.descriptorPool = new_pool;
-                        allocate.descriptorSetCount = 1;
-                        allocate.pSetLayouts = &data.instance_layout;
-                        frame.set = device.allocateDescriptorSets(allocate).front();
+                        frame.set=new_sets->set(descriptor_index++);
                     }
                     bind_instances(mesh);
                 }
@@ -1088,20 +1067,13 @@ namespace clt::scene_renderer
         catch (...)
         {
             destroy_meshes(meshes);
-            if (new_pool)
-            {
-                vk::device::get()->handle.destroyDescriptorPool(new_pool);
-            }
+            new_sets.reset();
             throw;
         }
 
         
         destroy_meshes(data.meshes);
-        if (data.instance_pool)
-        {
-            vk::device::get()->handle.destroyDescriptorPool(data.instance_pool);
-        }
-        data.instance_pool = new_pool;
+        data.instance_sets=std::move(new_sets);
         data.meshes = std::move(meshes);
         data.snapshot = source;
         for (auto& mesh : data.local_meshes)
@@ -1348,11 +1320,7 @@ namespace clt::scene_renderer
         destroy_meshes(data.local_meshes);
         weapon::shutdown();
         data.snapshot.reset();
-        if (data.instance_pool)
-        {
-            vk::device::get()->handle.destroyDescriptorPool(data.instance_pool);
-            data.instance_pool = nullptr;
-        }
+        data.instance_sets.reset();
 
         release_frame_resources();
 

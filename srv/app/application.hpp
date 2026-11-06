@@ -4,6 +4,7 @@
 #include "srv/shared/net/animation.hpp"
 #include "srv/shared/net/message.hpp"
 #include <network/socket.hpp>
+#include <network/session.hpp>
 #include "srv/shared/net/weapon.hpp"
 #include "srv/shared/player/movement.hpp"
 #include "srv/shared/scene/scene.hpp"
@@ -41,6 +42,7 @@ namespace srv::application
     {
         game::options::state options;
         net::socket::resource socket;
+        std::unique_ptr<net::session> scene_transport;
         scene::state scene;
         std::vector<model_request> models;
         bool scene_configured = false;
@@ -58,12 +60,9 @@ namespace srv::application
         ::weapon::registry weapons;
         weapon_command_handler on_weapon_command;
         spatial::index collision_index;
-        std::vector<std::uint8_t> scene_bytes;
-        std::uint32_t scene_hash = 0;
         struct batch {
             std::vector<std::uint8_t> bytes;
-            std::uint32_t hash = 0;
-            bool final = false;
+            bool final=false;
         };
         std::vector<batch> scene_batches;
         std::uint32_t tick = 0;

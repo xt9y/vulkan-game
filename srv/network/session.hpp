@@ -44,6 +44,8 @@ namespace srv::session
         std::uint32_t processed_input = 0;
         std::uint32_t scene_request = 0;
         bool scene_pending = false;
+        std::uint32_t queued_scene_batch=UINT32_MAX;
+        std::chrono::steady_clock::time_point queued_scene_at{};
     };
 
     struct state

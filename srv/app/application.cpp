@@ -11,6 +11,7 @@
 #include "srv/shared/net/movement.hpp"
 #include "srv/shared/net/scene_stream.hpp"
 #include <network/socket.hpp>
+#include <network/session.hpp>
 #include "srv/shared/net/weapon.hpp"
 #include "srv/shared/player/movement.hpp"
 
@@ -32,7 +33,7 @@ namespace srv::application
     namespace
     {
         void receive_messages();
-        void send_scene_fragments();
+        void send_scene_batches();
         void send_animation_states();
         void send_attachment_events();
         void handle(const net::endpoint::resource& peer, const net::message::resource& message);
@@ -103,14 +104,19 @@ namespace srv::application
             throw std::runtime_error("The game must provide a scene with set_scene()");
         get()->options = *game::options::get();
         get()->socket = net::socket::create(get()->options.port, get()->options.bind_host);
+        net::session::settings transport_settings;
+        transport_settings.channel.max_message=net::scene_stream::max_scene_bytes+20;
+        transport_settings.channel.max_queued=2*(net::scene_stream::max_scene_bytes+20);
+        transport_settings.channel.window=512;
+        transport_settings.max_peers=net::limits::max_clients;
+        transport_settings.allow_unknown_peers=false;
+        get()->scene_transport=std::make_unique<net::session>(transport_settings);
         session::init();
         get()->colliders = player::build_colliders(get()->scene);
         get()->collision_index = player::build_index(get()->colliders);
         get()->weapon_world.append(get()->scene.meshes, get()->scene.instances);
         srv::generation::init();
-        get()->scene_bytes = net::scene_stream::serialize(get()->scene);
-        get()->scene_hash = net::scene_stream::checksum(get()->scene_bytes);
-        get()->scene_batches = {{get()->scene_bytes, get()->scene_hash, true}};
+        get()->scene_batches = {{net::scene_stream::serialize(get()->scene),true}};
         get()->tick = 0;
         get()->initialized = true;
 
@@ -203,9 +209,7 @@ namespace srv::application
     void begin_stream()
     {
         auto& data = *get();
-        data.scene_bytes = net::scene_stream::serialize(data.scene);
-        data.scene_hash = net::scene_stream::checksum(data.scene_bytes);
-        data.scene_batches = {{data.scene_bytes, data.scene_hash, false}};
+        data.scene_batches = {{net::scene_stream::serialize(data.scene),false}};
     }
 
     void append_scene(::scene::state patch, bool final)
@@ -223,7 +227,6 @@ namespace srv::application
         auto bytes = net::scene_stream::serialize(patch);
         if (bytes.size() > net::scene_stream::max_scene_bytes)
             throw std::runtime_error("Scene asset exceeds the network batch limit (75 MiB)");
-        auto hash = net::scene_stream::checksum(bytes);
 
         for (auto& skin : patch.skins)
             data.scene.skins.push_back(std::move(skin));
@@ -260,7 +263,7 @@ namespace srv::application
             data.colliders.end(), added_colliders.begin(), added_colliders.end()
         );
         data.collision_index.append(boxes);
-        data.scene_batches.push_back({std::move(bytes), hash, final});
+        data.scene_batches.push_back({std::move(bytes),final});
     }
 
     bool play_animation(std::uint32_t instance_id, std::uint32_t clip,
@@ -424,7 +427,8 @@ namespace srv::application
                 }
             }
 
-            send_scene_fragments();
+            send_scene_batches();
+            get()->scene_transport->pump(get()->socket,512*1200);
 
             // Streaming generation may be expensive; commit only when there is
             // room before the next tick, without blocking player simulation.
@@ -456,16 +460,15 @@ namespace srv::application
 
     void shutdown() noexcept
     {
+        get()->scene_transport.reset();
         net::socket::destroy(get()->socket);
         session::shutdown();
         generation::shutdown();
-        get()->scene_bytes.clear();
         get()->scene_batches.clear();
         get()->colliders.clear();
         get()->weapon_world = {};
         get()->weapons = {};
         get()->on_weapon_command = {};
-        get()->scene_hash = 0;
         get()->scene = {};
         get()->models.clear();
         get()->scene_configured = false;
@@ -487,7 +490,7 @@ namespace srv::application
         {
             // One extra byte ensures oversized datagrams can never look like valid packets after
             // truncation.
-            std::array<std::uint8_t, net::weapon::command_packet{}.size() + 1> buffer{};
+            std::array<std::uint8_t,1473> buffer{};
 
             const auto deadline = clock::now() +
                 std::chrono::milliseconds(net::limits::receive_ms);
@@ -503,6 +506,8 @@ namespace srv::application
                     break;
                 }
 
+                if(get()->scene_transport->accept(peer,buffer.data(),*size,clock::now()))
+                    continue;
                 if (const auto command = net::weapon::decode_command(buffer.data(), *size))
                 {
                     handle_weapon(peer, *command);
@@ -809,6 +814,7 @@ namespace srv::application
 
                 if (!client->active || client->token != message.token)
                 {
+                    get()->scene_transport->close(peer);
                     *client = session::resource{};
                     client->endpoint = peer;
                     client->token = message.token;
@@ -840,6 +846,7 @@ namespace srv::application
             if (message.type == net::message::type::goodbye)
             {
                 existing->active = false;
+                get()->scene_transport->close(peer);
             }
             else if (message.type == net::message::type::ping)
             {
@@ -857,8 +864,7 @@ namespace srv::application
             else if (message.type == net::message::type::scene_request)
             {
                 existing->last_seen = clock::now();
-                // One pending request per session; never spend physics time
-                // transmitting bulk scene packets from the receive loop.
+                // Only schedule a batch; the shared reliable channel handles delivery.
                 existing->scene_request = message.value;
                 existing->scene_pending = true;
             }
@@ -914,61 +920,30 @@ namespace srv::application
             get()->animation_cursor = (start + count) % instances.size();
         }
 
-        void send_scene_fragments()
+        void send_scene_batches()
         {
-            const auto deadline = clock::now() +
-                std::chrono::milliseconds(net::limits::fragments_ms);
-            std::uint32_t remaining = net::limits::fragments_per_tick;
-
-            for (auto& client : session::get()->clients)
+            // The application selects batches and validates its session tokens.
+            // The network module alone manages fragmentation, pacing and acks.
+            const auto now=clock::now();
+            for(auto& client:session::get()->clients)
             {
-                if (!client.active || !client.scene_pending || !remaining ||
-                    clock::now() >= deadline)
-                {
+                if(!client.active||!client.scene_pending)continue;
+                client.scene_pending=false;
+                const auto batch_id=client.scene_request>>16;
+                if(batch_id>=get()->scene_batches.size())continue;
+                if(client.queued_scene_batch==batch_id &&
+                   (get()->scene_transport->pending(client.endpoint)>0 ||
+                    now-client.queued_scene_at<2s))
                     continue;
-                }
-                client.scene_pending = false;
-
-                const auto batch_id = client.scene_request >> 16;
-                const auto fragment_id = client.scene_request & 0xffffu;
-                if (batch_id >= get()->scene_batches.size())
+                const auto& batch=get()->scene_batches[batch_id];
+                auto payload=net::scene_stream::encode_batch(
+                    batch.bytes,client.token,batch_id,batch.final);
+                if(get()->scene_transport->send(client.endpoint,std::move(payload)))
                 {
-                    continue;
+                    client.queued_scene_batch=batch_id;
+                    client.queued_scene_at=now;
                 }
-
-                const auto& batch = get()->scene_batches[batch_id];
-                const auto count = (batch.bytes.size() +
-                    net::scene_stream::fragment_size - 1) /
-                    net::scene_stream::fragment_size;
-
-                for (std::size_t i = fragment_id;
-                     i < std::min<std::size_t>(count, fragment_id + net::limits::fragments_per_tick) &&
-                     remaining && clock::now() < deadline; ++i)
-                {
-                    net::scene_stream::packet packet;
-                    const auto size = net::scene_stream::encode_fragment(
-                        batch.bytes, client.token, static_cast<std::uint32_t>(i),
-                        batch.hash, packet, batch.final
-                    );
-                    if (!size)
-                    {
-                        break;
-                    }
-
-                    const auto index = (batch_id << 16) |
-                        static_cast<std::uint32_t>(i);
-                    packet[16] = std::uint8_t(index >> 24);
-                    packet[17] = std::uint8_t(index >> 16);
-                    packet[18] = std::uint8_t(index >> 8);
-                    packet[19] = std::uint8_t(index);
-
-                    if (!net::socket::send(
-                        get()->socket, client.endpoint, packet.data(), size))
-                    {
-                        break; // The client retries from its missing index.
-                    }
-                    --remaining;
-                }
+                else client.scene_pending=true;
             }
         }
 

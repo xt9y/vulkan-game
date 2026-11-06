@@ -518,69 +518,36 @@ namespace net::scene_stream
         return hash;
     }
     
-    std::size_t encode_fragment(const std::vector<std::uint8_t>& bytes, std::uint32_t token, std::uint32_t index, std::uint32_t hash, packet& output, bool final)
+    std::vector<std::uint8_t> encode_batch(
+        const std::vector<std::uint8_t>& bytes,std::uint32_t token,
+        std::uint32_t batch,bool final)
     {
-        if (bytes.empty() || bytes.size() > max_scene_bytes ||
-            std::size_t(index) >= (bytes.size() + fragment_size - 1) / fragment_size)
-        {
-            return 0;
-        }
-
-        const std::size_t offset = std::size_t(index) * fragment_size;
-        const std::size_t count = std::min(fragment_size, bytes.size() - offset);
-
-        output = {};
-
-        output[0] = 'V';
-        output[1] = 'S';
-        output[2] = 'C';
-        output[3] = 'N';
-        output[4] = 4;
-        output[5] = final ? 1 : 0;
-
-        write(output.data() + 8, token);
-        write(output.data() + 12, std::uint32_t(bytes.size()));
-        write(output.data() + 16, index);
-        write(output.data() + 20, hash);
-
-        std::memcpy(output.data() + header_size, bytes.data() + offset, count);
-
-        return header_size + count;
+        if(bytes.empty()||bytes.size()>max_scene_bytes||!token||batch>=65535)
+            throw std::invalid_argument("invalid scene batch");
+        std::vector<std::uint8_t> result(bytes.size()+20);
+        result[0]='V'; result[1]='G'; result[2]='S'; result[3]='C';
+        result[4]=1; result[5]=final?1:0;
+        result[6]=0;result[7]=0;
+        write(result.data()+8,token);
+        write(result.data()+12,batch);
+        write(result.data()+16,checksum(bytes));
+        std::memcpy(result.data()+20,bytes.data(),bytes.size());
+        return result;
     }
 
-    bool decode_fragment(const std::uint8_t* bytes, std::size_t size, fragment& output)
+    bool decode_batch(const std::vector<std::uint8_t>& bytes,batch_payload& result)
     {
-        if (size <= header_size || size > packet_size ||
-            bytes[0] != 'V' || bytes[1] != 'S' ||
-            bytes[2] != 'C' || bytes[3] != 'N' ||
-            bytes[4] != 4 || bytes[5] > 1 ||
-            bytes[6] || bytes[7])
-        {
+        if(bytes.size()<=20||bytes.size()>max_scene_bytes+20 ||
+           bytes[0]!='V'||bytes[1]!='G'||bytes[2]!='S'||bytes[3]!='C'||
+           bytes[4]!=1||bytes[5]>1||bytes[6]||bytes[7])
             return false;
-        }
-
-        const auto total = read(bytes + 12);
-        const auto index = read(bytes + 16);
-        const std::size_t part = index & 0xffffu;
-
-        if (total == 0 || total > max_scene_bytes ||
-            part >= (std::size_t(total) + fragment_size - 1) / fragment_size ||
-            size - header_size != std::min(fragment_size, std::size_t(total) - part * fragment_size))
-        {
-            return false;
-        }
-
-        output = {
-            read(bytes + 8),
-            total,
-            index,
-            read(bytes + 20),
-            bytes[5] != 0,
-            bytes + header_size,
-            size - header_size
-        };
-
+        const auto token=read(bytes.data()+8);
+        const auto batch=read(bytes.data()+12);
+        if(!token||batch>=65535)return false;
+        std::vector<std::uint8_t> scene(bytes.begin()+20,bytes.end());
+        if(checksum(scene)!=read(bytes.data()+16))return false;
+        result={token,batch,bytes[5]!=0,std::move(scene)};
         return true;
     }
-    
+
 } // namespace net::scene_stream

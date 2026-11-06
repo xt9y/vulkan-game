@@ -219,17 +219,7 @@ namespace clt::renderer
             vk::queue::init(family);
             vk::command::init(family);
 
-            auto device = vk::device::get()->handle;
-            auto commands = vk::command::allocate(2);
-            for (std::size_t i = 0; i < get()->frames.size(); ++i)
-            {
-                auto& frame = get()->frames[i];
-                frame.command = commands[i];
-                frame.image_ready = device.createSemaphore({});
-                frame.fence = device.createFence(
-                    vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled)
-                );
-            }
+            get()->frames.create(2);
                 
             scene_renderer::init(vertex_path, fragment_path);
 
@@ -246,7 +236,7 @@ namespace clt::renderer
     {
         auto& data = *get();
 
-        auto device = vk::device::get()->handle;
+
         vk::device::idle();
         gpu::upload::retire(true);
 
@@ -254,15 +244,6 @@ namespace clt::renderer
         postprocess::release();
         scene_renderer::release_frame_resources();
         scene_renderer::reset_scene();
-        data.image_in_flight.clear();
-
-        for (auto semaphore : data.render_ready)
-        {
-            device.destroySemaphore(semaphore);
-        }
-
-        data.render_ready.clear();
-
         const auto caps = vk::surface::capabilities();
 
         if (!(caps.supportedUsageFlags & vk::ImageUsageFlagBits::eColorAttachment))
@@ -312,25 +293,20 @@ namespace clt::renderer
         if (std::find(modes.begin(), modes.end(), info.presentMode) == modes.end())
             throw std::runtime_error("Configured presentation mode unsupported");
 
-        data.present_mode = info.presentMode;
         info.clipped = true;
         vk::swapchain::init(info);
         scene_renderer::create_frame_resources();
         postprocess::create();
         passes::create();
 
-        for (uint32_t i = 0; i < vk::swapchain::get()->size; ++i)
-        {
-            data.render_ready.push_back(device.createSemaphore({}));
-        }
-        data.image_in_flight.assign(vk::swapchain::get()->size, vk::Fence{});
+        data.frames.resize(vk::swapchain::get()->size);
     }
 
     void draw_frame()
     {
         auto& data = *get();
 
-        auto device = vk::device::get()->handle;
+
         int width, height;
         window::framebuffer_size(width, height);
 
@@ -347,25 +323,14 @@ namespace clt::renderer
             return;
         }
 
-        auto& frame = data.frames[data.next_frame];
-        if (device.waitForFences(frame.fence, true, UINT64_MAX) != vk::Result::eSuccess)
-        {
-            throw std::runtime_error("Frame fence wait failed");
-        }
+        data.frames.wait();
 
         // Resource replacements are only applied once all older submissions
         // have finished. Never block the render thread waiting on every frame.
         gpu::upload::retire();
         if (scene_renderer::needs_sync())
         {
-            bool safe = gpu::upload::ready();
-            for (const auto& context : data.frames)
-            {
-                if (device.getFenceStatus(context.fence) != vk::Result::eSuccess)
-                {
-                    safe = false;
-                }
-            }
+            const bool safe = gpu::upload::ready() && data.frames.idle();
             if (!safe)
             {
                 std::this_thread::yield();
@@ -374,10 +339,10 @@ namespace clt::renderer
             scene_renderer::synchronize();
         }
 
-        uint32_t image = 0;
+        ::render::frame_scheduler::ticket active{};
         try
         {
-            image = vk::swapchain::acquire(UINT64_MAX, frame.image_ready).value;
+            active = data.frames.begin();
         }
         catch (const vk::OutOfDateKHRError&)
         {
@@ -385,48 +350,11 @@ namespace clt::renderer
             return;
         }
 
-        if (data.image_in_flight[image] &&
-            device.waitForFences(data.image_in_flight[image], true, UINT64_MAX) !=
-                vk::Result::eSuccess)
-        {
-            throw std::runtime_error("Swapchain image fence failed");
-        }
-
-        for (auto& pending : data.image_in_flight)
-        {
-            if (pending == frame.fence) pending = nullptr;
-        }
-        data.image_in_flight[image] = frame.fence;
-
-        device.resetFences(frame.fence);
-        frame.command.reset();
-        frame.command.begin(vk::CommandBufferBeginInfo{});
-        passes::record(frame.command, image);
-        frame.command.end();
-
-        vk::PipelineStageFlags wait_stage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-        vk::SubmitInfo submit{};
-        submit.waitSemaphoreCount = 1;
-        submit.pWaitSemaphores = &frame.image_ready;
-        submit.pWaitDstStageMask = &wait_stage;
-        submit.commandBufferCount = 1;
-        submit.pCommandBuffers = &frame.command;
-        submit.signalSemaphoreCount = 1;
-        submit.pSignalSemaphores = &data.render_ready[image];
-        vk::submit::queue(vk::queue::get()->graphics, {submit}, frame.fence);
-
-        vk::PresentInfoKHR present{};
-        present.waitSemaphoreCount = 1;
-        present.pWaitSemaphores = &data.render_ready[image];
-        present.swapchainCount = 1;
-        present.pSwapchains = &vk::swapchain::get()->handle;
-        present.pImageIndices = &image;
-
-        data.next_frame = (data.next_frame + 1) % data.frames.size();
+        passes::record(active.command, active.image);
 
         try
         {
-            auto result = vk::submit::present(vk::queue::get()->present, present);
+            auto result = data.frames.submit(active);
 
             if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR)
             {
@@ -460,19 +388,9 @@ namespace clt::renderer
                 // Device loss must not prevent resource cleanup.
             }
 
-            for (auto semaphore : get()->render_ready)
-            {
-                device.destroySemaphore(semaphore);
-            }
-
-            for (const auto& frame : get()->frames)
-            {
-                if (frame.fence) device.destroyFence(frame.fence);
-                if (frame.image_ready) device.destroySemaphore(frame.image_ready);
-            }
-
+            get()->frames.reset();
             passes::release();
-                postprocess::release();
+            postprocess::release();
             scene_renderer::shutdown();
 
             vk::command::shutdown();
@@ -485,6 +403,6 @@ namespace clt::renderer
         vk::surface::shutdown();
         vk::instance::shutdown();
         vk::loader::shutdown();
-        *get() = {};
+        get()->initialized = false;
     }
 } // namespace clt::renderer

@@ -5,6 +5,8 @@
 #include <render/renderer.hpp>
 #include <render/pipeline.hpp>
 #include <gpu/compute.hpp>
+#include <gpu/descriptors.hpp>
+#include <render/postprocess.hpp>
 #include <memory>
 
 #include <algorithm>
@@ -22,15 +24,13 @@ namespace clt::postprocess
     namespace
     {
         struct image_target {
-            vk::image::resource image;
+            vk::Image image{};
             vk::ImageView view{};
         };
 
         struct frame {
             image_target hdr;
             image_target ldr;
-            vk::ImageView swap_view{};
-            vk::Framebuffer framebuffer{};
             vk::DescriptorSet lighting{};
             vk::DescriptorSet tone{};
             vk::DescriptorSet presentation{};
@@ -39,15 +39,15 @@ namespace clt::postprocess
         struct state {
             std::vector<frame> frames;
             vk::Sampler sampler{};
-            vk::DescriptorSetLayout lighting_set{};
-            vk::DescriptorSetLayout tone_set{};
-            vk::DescriptorSetLayout present_set{};
-            vk::DescriptorPool pool{};
+            std::unique_ptr<gpu::descriptors> lighting_sets;
+            std::unique_ptr<gpu::descriptors> tone_sets;
+            std::unique_ptr<gpu::descriptors> present_sets;
+            std::unique_ptr<::render::postprocess_targets> targets;
+            std::unique_ptr<::render::presentation_targets> presentation;
             vk::PipelineLayout present_layout{};
             std::unique_ptr<gpu::compute> lighting_program;
             std::unique_ptr<gpu::compute> tone_program;
             std::unique_ptr<::render::pipeline> present_program;
-            vk::RenderPass render_pass{};
         };
 
         state& get()
@@ -70,25 +70,20 @@ namespace clt::postprocess
             std::array<float, 4> sky{};
         };
 
-        vk::DescriptorSetLayout layout(
-            std::uint32_t sampled, std::uint32_t storage, vk::ShaderStageFlags stages
-        )
+        std::vector<vk::DescriptorSetLayoutBinding> bindings(
+            std::uint32_t sampled,std::uint32_t storage,vk::ShaderStageFlags stages)
         {
-            std::vector<vk::DescriptorSetLayoutBinding> bindings(sampled + storage);
-            for (std::uint32_t i = 0; i < bindings.size(); ++i)
-            {
-                auto& b = bindings[i];
-                b.binding = i;
-                b.descriptorCount = 1;
-                b.stageFlags = stages;
-                b.descriptorType = i < sampled
-                    ? vk::DescriptorType::eCombinedImageSampler
-                    : vk::DescriptorType::eStorageImage;
+            std::vector<vk::DescriptorSetLayoutBinding> result(sampled+storage);
+            for(std::uint32_t i=0;i<result.size();++i) {
+                auto& b=result[i];
+                b.binding=i;
+                b.descriptorCount=1;
+                b.stageFlags=stages;
+                b.descriptorType=i<sampled?
+                    vk::DescriptorType::eCombinedImageSampler:
+                    vk::DescriptorType::eStorageImage;
             }
-            vk::DescriptorSetLayoutCreateInfo info{};
-            info.bindingCount = static_cast<std::uint32_t>(bindings.size());
-            info.pBindings = bindings.data();
-            return vk::device::get()->handle.createDescriptorSetLayout(info);
+            return result;
         }
 
         vk::PipelineLayout pipeline_layout(vk::DescriptorSetLayout set, bool compute)
@@ -106,63 +101,6 @@ namespace clt::postprocess
                 info.pPushConstantRanges = &constants;
             }
             return vk::device::get()->handle.createPipelineLayout(info);
-        }
-
-        image_target make_target(vk::Format format)
-        {
-            const auto extent = vk::swapchain::get()->extent;
-            image_target result;
-            vk::ImageCreateInfo info{};
-            info.imageType = vk::ImageType::e2D;
-            info.format = format;
-            info.extent = vk::Extent3D{extent.width, extent.height, 1};
-            info.mipLevels = 1;
-            info.arrayLayers = 1;
-            info.samples = vk::SampleCountFlagBits::e1;
-            info.tiling = vk::ImageTiling::eOptimal;
-            info.usage = vk::ImageUsageFlagBits::eStorage |
-                vk::ImageUsageFlagBits::eSampled;
-            result.image = vk::image::create(info, vk::MemoryPropertyFlagBits::eDeviceLocal);
-
-            try
-            {
-                vk::ImageViewCreateInfo view{};
-                view.image = result.image.handle;
-                view.viewType = vk::ImageViewType::e2D;
-                view.format = format;
-                view.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-                result.view = vk::image_view::create(view);
-            }
-            catch (...)
-            {
-                vk::image::destroy(result.image);
-                throw;
-            }
-            return result;
-        }
-
-        void destroy_target(image_target& target)
-        {
-            if (target.view) vk::image_view::destroy(target.view);
-            if (target.image.handle) vk::image::destroy(target.image);
-            target = {};
-        }
-
-        void update(vk::DescriptorSet set, std::vector<vk::DescriptorImageInfo> images,
-                    std::size_t sampled)
-        {
-            std::vector<vk::WriteDescriptorSet> writes(images.size());
-            for (std::uint32_t i = 0; i < writes.size(); ++i)
-            {
-                writes[i].dstSet = set;
-                writes[i].dstBinding = i;
-                writes[i].descriptorCount = 1;
-                writes[i].descriptorType = i < sampled
-                    ? vk::DescriptorType::eCombinedImageSampler
-                    : vk::DescriptorType::eStorageImage;
-                writes[i].pImageInfo = &images[i];
-            }
-            vk::device::get()->handle.updateDescriptorSets(writes, {});
         }
 
         void compute(vk::CommandBuffer command, const gpu::compute& program,
@@ -214,16 +152,6 @@ namespace clt::postprocess
     {
         auto& data = get();
         const auto device = vk::device::get()->handle;
-        const auto gpu = vk::physical_device::get()->handle;
-        const auto required = vk::FormatFeatureFlagBits::eStorageImage |
-            vk::FormatFeatureFlagBits::eSampledImage;
-        for (auto format : {vk::Format::eR16G16B16A16Sfloat, vk::Format::eR8G8B8A8Unorm})
-        {
-            const auto support = gpu.getFormatProperties(format).optimalTilingFeatures;
-            if ((support & required) != required)
-                throw std::runtime_error("Required offscreen storage image format unsupported");
-        }
-
         try
         {
             vk::SamplerCreateInfo sampler{};
@@ -235,40 +163,31 @@ namespace clt::postprocess
             sampler.addressModeW = vk::SamplerAddressMode::eClampToEdge;
             data.sampler = device.createSampler(sampler);
 
-            data.lighting_set = layout(4, 1, vk::ShaderStageFlagBits::eCompute);
-            data.tone_set = layout(1, 1, vk::ShaderStageFlagBits::eCompute);
-            data.present_set = layout(1, 0, vk::ShaderStageFlagBits::eFragment);
-            data.present_layout = pipeline_layout(data.present_set, false);
+            const auto count=static_cast<std::uint32_t>(vk::swapchain::get()->images.size());
+            data.targets=std::make_unique<::render::postprocess_targets>();
+            data.targets->create(count,vk::swapchain::get()->extent);
+            data.presentation=std::make_unique<::render::presentation_targets>();
+            data.presentation->create(vk::swapchain::get()->images,
+                vk::swapchain::get()->format,vk::swapchain::get()->extent);
+            data.lighting_sets=std::make_unique<gpu::descriptors>();
+            data.lighting_sets->create(bindings(4,1,vk::ShaderStageFlagBits::eCompute),count);
+            data.tone_sets=std::make_unique<gpu::descriptors>();
+            data.tone_sets->create(bindings(1,1,vk::ShaderStageFlagBits::eCompute),count);
+            data.present_sets=std::make_unique<gpu::descriptors>();
+            data.present_sets->create(bindings(1,0,vk::ShaderStageFlagBits::eFragment),count);
+            data.present_layout=pipeline_layout(data.present_sets->layout(),false);
             data.lighting_program = std::make_unique<gpu::compute>();
             data.lighting_program->create(
                 game::options::get()->graphics.lighting_shader,
-                {data.lighting_set}, sizeof(push));
+                {data.lighting_sets->layout()}, sizeof(push));
             data.tone_program = std::make_unique<gpu::compute>();
             data.tone_program->create(
                 game::options::get()->graphics.tonemap_shader,
-                {data.tone_set}, sizeof(push));
+                {data.tone_sets->layout()}, sizeof(push));
 
-            vk::AttachmentDescription attachment{};
-            attachment.format = vk::swapchain::get()->format;
-            attachment.samples = vk::SampleCountFlagBits::e1;
-            attachment.loadOp = vk::AttachmentLoadOp::eClear;
-            attachment.storeOp = vk::AttachmentStoreOp::eStore;
-            attachment.initialLayout = vk::ImageLayout::eUndefined;
-            attachment.finalLayout = vk::ImageLayout::ePresentSrcKHR;
-            vk::AttachmentReference color{0, vk::ImageLayout::eColorAttachmentOptimal};
-            vk::SubpassDescription subpass{};
-            subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
-            subpass.colorAttachmentCount = 1;
-            subpass.pColorAttachments = &color;
-            vk::RenderPassCreateInfo info{};
-            info.attachmentCount = 1;
-            info.pAttachments = &attachment;
-            info.subpassCount = 1;
-            info.pSubpasses = &subpass;
-            data.render_pass = vk::render_pass::create(info);
             data.present_program = std::make_unique<::render::pipeline>();
             ::render::raster_state raster{};
-            raster.pass = data.render_pass;
+            raster.pass = data.presentation->pass();
             raster.layout = data.present_layout;
             raster.cull = vk::CullModeFlagBits::eNone;
             raster.depth_test = false;
@@ -280,18 +199,6 @@ namespace clt::postprocess
                  game::options::get()->graphics.presentation_shader}
             });
 
-            const auto count = static_cast<std::uint32_t>(
-                vk::swapchain::get()->images.size()
-            );
-            std::array<vk::DescriptorPoolSize, 2> pool_sizes{{
-                {vk::DescriptorType::eCombinedImageSampler, 6 * count},
-                {vk::DescriptorType::eStorageImage, 2 * count}
-            }};
-            vk::DescriptorPoolCreateInfo pool{};
-            pool.maxSets = 3 * count;
-            pool.poolSizeCount = pool_sizes.size();
-            pool.pPoolSizes = pool_sizes.data();
-            data.pool = device.createDescriptorPool(pool);
             data.frames.reserve(count);
 
             for (std::uint32_t i = 0; i < count; ++i)
@@ -299,38 +206,13 @@ namespace clt::postprocess
                 frame item;
                 data.frames.push_back(item);
                 auto& current = data.frames.back();
-                current.hdr = make_target(vk::Format::eR16G16B16A16Sfloat);
-                current.ldr = make_target(vk::Format::eR8G8B8A8Unorm);
+                const auto attachments=data.targets->at(i);
+                current.hdr={attachments.hdr,attachments.hdr_view};
+                current.ldr={attachments.ldr,attachments.ldr_view};
 
-                vk::ImageViewCreateInfo swap_view{};
-                swap_view.image = vk::swapchain::get()->images[i];
-                swap_view.viewType = vk::ImageViewType::e2D;
-                swap_view.format = vk::swapchain::get()->format;
-                swap_view.subresourceRange = {
-                    vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1
-                };
-                current.swap_view = vk::image_view::create(swap_view);
-
-                vk::FramebufferCreateInfo framebuffer{};
-                framebuffer.renderPass = data.render_pass;
-                framebuffer.attachmentCount = 1;
-                framebuffer.pAttachments = &current.swap_view;
-                framebuffer.width = vk::swapchain::get()->extent.width;
-                framebuffer.height = vk::swapchain::get()->extent.height;
-                framebuffer.layers = 1;
-                current.framebuffer = vk::framebuffer::create(framebuffer);
-
-                const std::array<vk::DescriptorSetLayout, 3> sets{
-                    data.lighting_set, data.tone_set, data.present_set
-                };
-                vk::DescriptorSetAllocateInfo allocation{};
-                allocation.descriptorPool = data.pool;
-                allocation.descriptorSetCount = sets.size();
-                allocation.pSetLayouts = sets.data();
-                auto allocated = device.allocateDescriptorSets(allocation);
-                current.lighting = allocated[0];
-                current.tone = allocated[1];
-                current.presentation = allocated[2];
+                current.lighting=data.lighting_sets->set(i);
+                current.tone=data.tone_sets->set(i);
+                current.presentation=data.present_sets->set(i);
 
                 const auto g = scene_renderer::outputs(i);
                 std::vector<vk::DescriptorImageInfo> lighting(5);
@@ -344,19 +226,21 @@ namespace clt::postprocess
                 }
                 lighting[4].imageView = current.hdr.view;
                 lighting[4].imageLayout = vk::ImageLayout::eGeneral;
-                update(current.lighting, lighting, 4);
+                for(std::uint32_t j=0;j<lighting.size();++j)
+                    data.lighting_sets->write_image(i,j,lighting[j]);
                 std::vector<vk::DescriptorImageInfo> tone(2);
                 tone[0].sampler = data.sampler;
                 tone[0].imageView = current.hdr.view;
                 tone[0].imageLayout = vk::ImageLayout::eGeneral;
                 tone[1].imageView = current.ldr.view;
                 tone[1].imageLayout = vk::ImageLayout::eGeneral;
-                update(current.tone, tone, 1);
+                for(std::uint32_t j=0;j<tone.size();++j)
+                    data.tone_sets->write_image(i,j,tone[j]);
                 std::vector<vk::DescriptorImageInfo> presented(1);
                 presented[0].sampler = data.sampler;
                 presented[0].imageView = current.ldr.view;
                 presented[0].imageLayout = vk::ImageLayout::eGeneral;
-                update(current.presentation, presented, 1);
+                data.present_sets->write_image(i,0,presented[0]);
             }
         }
         catch (...)
@@ -372,22 +256,19 @@ namespace clt::postprocess
         const auto device = vk::device::get()->handle;
         for (auto& frame : data.frames)
         {
-            if (frame.framebuffer) vk::framebuffer::destroy(frame.framebuffer);
-            if (frame.swap_view) vk::image_view::destroy(frame.swap_view);
-            destroy_target(frame.hdr);
-            destroy_target(frame.ldr);
+
         }
         data.frames.clear();
 
         data.lighting_program.reset();
         data.tone_program.reset();
         data.present_program.reset();
-        if (data.render_pass) vk::render_pass::destroy(data.render_pass);
+        data.presentation.reset();
         if (data.present_layout) device.destroyPipelineLayout(data.present_layout);
-        if (data.pool) device.destroyDescriptorPool(data.pool);
-        if (data.lighting_set) device.destroyDescriptorSetLayout(data.lighting_set);
-        if (data.tone_set) device.destroyDescriptorSetLayout(data.tone_set);
-        if (data.present_set) device.destroyDescriptorSetLayout(data.present_set);
+        data.lighting_sets.reset();
+        data.tone_sets.reset();
+        data.present_sets.reset();
+        data.targets.reset();
         if (data.sampler) device.destroySampler(data.sampler);
 
         data = {};
@@ -396,7 +277,7 @@ namespace clt::postprocess
     targets images(std::uint32_t image)
     {
         const auto& frame = get().frames.at(image);
-        return {frame.hdr.image.handle, frame.ldr.image.handle};
+        return {frame.hdr.image, frame.ldr.image};
     }
 
     vk::ImageView hdr_view(std::uint32_t image)
@@ -429,8 +310,8 @@ namespace clt::postprocess
         vk::ClearValue clear{};
         clear.color = vk::ClearColorValue(std::array<float, 4>{0, 0, 0, 1});
         vk::RenderPassBeginInfo info{};
-        info.renderPass = get().render_pass;
-        info.framebuffer = get().frames.at(image).framebuffer;
+        info.renderPass = get().presentation->pass();
+        info.framebuffer = get().presentation->framebuffer(image);
         info.renderArea = vk::Rect2D{{0, 0}, extent};
         info.clearValueCount = 1;
         info.pClearValues = &clear;

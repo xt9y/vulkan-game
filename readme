@@ -1,0 +1,19 @@
+vulkan-game
+  server.cpp                server application, authoritative world and rules
+  client.cpp                client application and input settings
+  srv/                      simulation, game scene serialization and authority
+  clt/                      rendering integration, player and weapon presentation
+  shd/                      game material, compute lighting and presentation GLSL
+  assets/                   game-owned art
+
+Uses VulkanEngine and VulkanSystems static libraries pinned in build.c.
+The generic GPU owners, descriptor resources, frame scheduler, HDR/LDR
+postprocessing targets, indirect culler, IPv4/IPv6 UDP sockets, reliable
+scene byte transport, spatial queries and jobs are provided by VulkanSystems.
+The game keeps its scene batch serialization, gameplay handshake, animation,
+input prediction, weapons and authoritative server simulation.
+
+vulkan-server and vulkan-client must use matching builds; VSN1 reliable scene
+delivery supersedes the old VSCN per-fragment request/response protocol.
+Transport is currently unencrypted, and source changes require native
+compilation and runtime tests on the supported platforms.

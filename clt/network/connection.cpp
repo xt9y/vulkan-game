@@ -6,6 +6,7 @@
 #include "srv/shared/net/message.hpp"
 #include "srv/shared/net/movement.hpp"
 #include <network/socket.hpp>
+#include <network/session.hpp>
 
 #include "srv/shared/net/scene_stream.hpp"
 
@@ -283,8 +284,18 @@ namespace clt::connection
 
             try
             {
-                data.socket = net::socket::create();
-                const auto server = net::endpoint::resolve(host, port);
+                const auto server=net::endpoint::resolve(host,port);
+                data.socket=net::socket::create(0,
+                    server.address.ss_family==AF_INET6?"::":"0.0.0.0");
+                net::session::settings transport_settings;
+                transport_settings.channel.max_message=net::scene_stream::max_scene_bytes+20;
+                transport_settings.channel.max_queued=2*(net::scene_stream::max_scene_bytes+20);
+                transport_settings.channel.window=512;
+                transport_settings.max_delivered_bytes=2*(net::scene_stream::max_scene_bytes+20);
+                transport_settings.max_peers=1;
+                transport_settings.allow_unknown_peers=false;
+                net::session transport(transport_settings);
+                transport.open(server);
                 std::uint32_t token = std::random_device{}() | 1u;
 
                 std::uint32_t sequence = 0;
@@ -295,14 +306,7 @@ namespace clt::connection
                 std::uint32_t last_player_tick = 0;
                 std::deque<::player::input> unacknowledged;
 
-                std::vector<std::uint8_t> scene_bytes;
-                std::vector<std::uint8_t> scene_received;
-                std::uint32_t scene_fragment = 0;
-                std::uint32_t reported_percent = 0;
-                std::uint32_t scene_batch = 0;
-                std::uint32_t scene_hash = 0;
-                std::uint32_t requested_until = 0;
-                bool scene_last = false;
+                std::uint32_t scene_batch=0;
                 clock::time_point stream_started{};
                 std::size_t transferred_bytes = 0;
                 bool scene_ready = false;
@@ -313,7 +317,7 @@ namespace clt::connection
                 auto next_weapon_send = next_send;
                 auto last_received = next_send;
                 auto retry = std::chrono::milliseconds(net::limits::retry_ms);
-                std::array<std::uint8_t, net::scene_stream::packet_size + 1> buffer{};
+                std::array<std::uint8_t,1473> buffer{};
 
                 auto clear_scene = [&]
                 {
@@ -325,20 +329,15 @@ namespace clt::connection
                         data.weapon_ack = data.weapon_tick = 0;
                         data.weapon_versions.clear();
                     }
-                    scene_bytes.clear();
-                    scene_received.clear();
+                    transport.clear();
+                    transport.open(server);
                     stream_started = {};
                     transferred_bytes = 0;
                     {
                         std::lock_guard<std::mutex> lock(data.player_mutex);
                         data.server_parameters.reset();
                     }
-                    scene_fragment = 0;
-                    reported_percent = 0;
                     scene_batch = 0;
-                    scene_hash = 0;
-                    requested_until = 0;
-                    scene_last = false;
                     scene_ready = false;
                     data.scene_complete.store(false, std::memory_order_relaxed);
 
@@ -511,125 +510,9 @@ namespace clt::connection
 
                         const auto message = net::message::decode(buffer.data(), *size);
 
-                        net::scene_stream::fragment fragment;
-
-                        if (net::endpoint::equal(peer, server) &&
-                            net::scene_stream::decode_fragment(buffer.data(), *size, fragment))
+                        if(net::endpoint::equal(peer,server) &&
+                           transport.accept(peer,buffer.data(),*size,now))
                         {
-                            if (!data.connected.load(std::memory_order_relaxed) || scene_ready ||
-                                fragment.token != token || (fragment.index >> 16) != scene_batch)
-                            {
-                                continue;
-                            }
-
-                            last_received = now;
-                            const auto index = fragment.index & 0xffffu;
-
-                            if (scene_bytes.empty())
-                            {
-                                if (stream_started == clock::time_point{})
-                                    stream_started = clock::now();
-                                scene_bytes.resize(fragment.total);
-                                scene_received.assign(
-                                    (fragment.total + net::scene_stream::fragment_size - 1) /
-                                    net::scene_stream::fragment_size, 0
-                                );
-                                scene_hash = fragment.checksum;
-                                reported_percent = 0;
-                                scene_last = fragment.final;
-                            }
-                            else if (fragment.total != scene_bytes.size() ||
-                                     fragment.checksum != scene_hash ||
-                                     fragment.final != scene_last)
-                            {
-                                clear_scene();
-                                next_scene_send = now;
-                                continue;
-                            }
-
-                            if (index >= scene_received.size())
-                            {
-                                continue;
-                            }
-
-                            if (!scene_received[index])
-                            {
-                                std::memcpy(
-                                    scene_bytes.data() +
-                                        std::size_t(index) * net::scene_stream::fragment_size,
-                                    fragment.data, fragment.size
-                                );
-                                scene_received[index] = 1;
-                                transferred_bytes += fragment.size;
-
-                                while (scene_fragment < scene_received.size() &&
-                                       scene_received[scene_fragment])
-                                {
-                                    ++scene_fragment;
-                                }
-
-                                const auto progress = std::uint32_t(
-                                    std::uint64_t(scene_fragment) * 100 /
-                                    std::max<std::size_t>(1, scene_received.size()));
-                                if (progress >= reported_percent + 10)
-                                {
-                                    reported_percent = (progress / 10) * 10;
-                                    std::cout << "clt: scene batch " << scene_batch
-                                              << " " << reported_percent << "%\n";
-                                }
-                                // A complete burst unlocks the next window immediately.
-                                if (scene_fragment >= requested_until)
-                                {
-                                    next_scene_send = now;
-                                }
-                            }
-
-                            if (scene_fragment == scene_received.size())
-                            {
-                                scene::state received;
-
-                                if (net::scene_stream::checksum(scene_bytes) == scene_hash &&
-                                    net::scene_stream::deserialize(scene_bytes, received))
-                                {
-                                    {
-                                        std::lock_guard<std::mutex> lock(data.scene_mutex);
-                                        std::cout << "clt: received scene batch " << scene_batch
-                                                   << " (" << received.meshes.size() << " meshes, "
-                                                   << received.instances.size() << " instances, "
-                                                   << received.textures.size() << " textures, "
-                                                   << received.skins.size() << " skins)\n";
-                                        data.pending_scene.push_back(std::move(received));
-                                    }
-
-                                    scene_ready = scene_last;
-                                    if (scene_ready && stream_started != clock::time_point{})
-                                    {
-                                        const auto elapsed =
-                                            std::chrono::duration_cast<std::chrono::milliseconds>(
-                                                clock::now() - stream_started).count();
-                                        std::cout << "clt: scene transferred in " << elapsed
-                                                  << " ms (" << transferred_bytes / 1024
-                                                  << " KiB)\n";
-                                    }
-                                    data.scene_complete.store(scene_ready, std::memory_order_relaxed);
-                                    ++scene_batch;
-                                    scene_fragment = 0;
-                                    reported_percent = 0;
-                                    requested_until = 0;
-                                    scene_hash = 0;
-                                    scene_last = false;
-                                    scene_received.clear();
-                                    scene_bytes.clear();
-                                    next_scene_send = now;
-
-                                }
-                                else
-                                {
-                                    clear_scene();
-                                    next_scene_send = now;
-                                }
-                            }
-
                             continue;
                         }
 
@@ -657,6 +540,48 @@ namespace clt::connection
                         waiting = false;
                         retry = std::chrono::milliseconds(net::limits::retry_ms);
                     }
+
+                    transport.pump(data.socket,64*1024,now);
+                    net::delivery completed;
+                    while(transport.pop(completed))
+                    {
+                        net::scene_stream::batch_payload batch;
+                        if(scene_ready ||
+                           !net::scene_stream::decode_batch(completed.payload,batch) ||
+                           batch.token!=token||batch.batch!=scene_batch)
+                            continue;
+                        if(stream_started==clock::time_point{})
+                            stream_started=clock::now();
+                        ::scene::state received;
+                        if(!net::scene_stream::deserialize(batch.scene,received))
+                        {
+                            clear_scene();
+                            next_scene_send=now;
+                            continue;
+                        }
+                        transferred_bytes+=batch.scene.size();
+                        {
+                            std::lock_guard<std::mutex> lock(data.scene_mutex);
+                            std::cout<<"clt: received scene batch "<<scene_batch
+                                     <<" ("<<received.meshes.size()<<" meshes, "
+                                     <<received.instances.size()<<" instances, "
+                                     <<received.textures.size()<<" textures, "
+                                     <<received.skins.size()<<" skins)\n";
+                            data.pending_scene.push_back(std::move(received));
+                        }
+                        scene_ready=batch.final;
+                        data.scene_complete.store(scene_ready,std::memory_order_relaxed);
+                        ++scene_batch;
+                        next_scene_send=now;
+                        if(scene_ready && stream_started!=clock::time_point{})
+                        {
+                            const auto elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(
+                                clock::now()-stream_started).count();
+                            std::cout<<"clt: scene transferred in "<<elapsed
+                                     <<" ms ("<<transferred_bytes/1024<<" KiB)\n";
+                        }
+                    }
+
 
                     if (data.connected.load(std::memory_order_relaxed) && now - last_received > std::chrono::milliseconds(net::limits::connection_timeout_ms))
                     {
@@ -714,7 +639,7 @@ namespace clt::connection
                             net::message::type::scene_request,
                             ++sequence,
                             token,
-                            (scene_batch << 16) | scene_fragment
+                            (scene_batch << 16)
                         });
 
                         net::socket::send(
@@ -724,7 +649,8 @@ namespace clt::connection
                             packet.size()
                         );
 
-                        requested_until = scene_fragment + net::limits::fragments_per_tick;
+                        if(stream_started==clock::time_point{})
+                            stream_started=now;
                         next_scene_send = now + std::chrono::milliseconds(net::limits::scene_request_ms);
                     }
 
