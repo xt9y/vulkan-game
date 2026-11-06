@@ -10,7 +10,8 @@
 #include "srv/shared/net/message.hpp"
 #include "srv/shared/net/movement.hpp"
 #include "srv/shared/net/scene_stream.hpp"
-#include <network/socket.hpp>
+#include <network/secure.hpp>
+#include "srv/shared/net/secure_config.hpp"
 #include <network/session.hpp>
 #include "srv/shared/net/weapon.hpp"
 #include "srv/shared/player/movement.hpp"
@@ -103,7 +104,10 @@ namespace srv::application
         if (!get()->scene_configured)
             throw std::runtime_error("The game must provide a scene with set_scene()");
         get()->options = *game::options::get();
-        get()->socket = net::socket::create(get()->options.port, get()->options.bind_host);
+        get()->socket = net::secure::create(
+            net::secure::role::server,
+            game::secure_config::load(net::secure::role::server),
+            get()->options.port,get()->options.bind_host);
         net::session::settings transport_settings;
         transport_settings.channel.max_message=net::scene_stream::max_scene_bytes+20;
         transport_settings.channel.max_queued=2*(net::scene_stream::max_scene_bytes+20);
@@ -428,7 +432,10 @@ namespace srv::application
             }
 
             send_scene_batches();
-            get()->scene_transport->pump(get()->socket,512*1200);
+            get()->scene_transport->pump(
+                [&](const net::endpoint::resource& peer,const void* bytes,std::size_t size) {
+                    return net::secure::send(get()->socket,peer,bytes,size);
+                },512*1200);
 
             // Streaming generation may be expensive; commit only when there is
             // room before the next tick, without blocking player simulation.
@@ -461,7 +468,7 @@ namespace srv::application
     void shutdown() noexcept
     {
         get()->scene_transport.reset();
-        net::socket::destroy(get()->socket);
+        net::secure::destroy(get()->socket);
         session::shutdown();
         generation::shutdown();
         get()->scene_batches.clear();
@@ -499,7 +506,7 @@ namespace srv::application
                  ++budget)
             {
                 net::endpoint::resource peer;
-                const auto size = net::socket::receive(get()->socket, peer, buffer.data(), buffer.size());
+                const auto size = net::secure::receive(get()->socket, peer, buffer.data(), buffer.size());
 
                 if (!size)
                 {
@@ -612,7 +619,7 @@ namespace srv::application
                         client.last_shot->state.weapon_id == command.weapon_id)
                     {
                         const auto packet = net::weapon::encode_shot(*client.last_shot);
-                        net::socket::send(
+                        net::secure::send(
                             get()->socket, client.endpoint, packet.data(), packet.size()
                         );
                     }
@@ -764,7 +771,7 @@ namespace srv::application
                         continue;
                     }
                     const auto snapshot = net::weapon::encode_snapshot(update);
-                    net::socket::send(
+                    net::secure::send(
                         get()->socket, client.endpoint, snapshot.data(), snapshot.size()
                     );
                     owned.published = update;
@@ -772,7 +779,7 @@ namespace srv::application
                 for (auto& pending : client.shots)
                 {
                     const auto packet = net::weapon::encode_shot(pending.value);
-                    net::socket::send(get()->socket, client.endpoint, packet.data(), packet.size());
+                    net::secure::send(get()->socket, client.endpoint, packet.data(), packet.size());
                     --pending.repeats;
                 }
                 std::erase_if(
@@ -881,7 +888,7 @@ namespace srv::application
                     auto event = item.event;
                     event.token = client.token;
                     const auto bytes = net::animation::encode_event(event);
-                    net::socket::send(get()->socket, client.endpoint,
+                    net::secure::send(get()->socket, client.endpoint,
                                       bytes.data(), bytes.size());
                 }
                 if (item.repeats) --item.repeats;
@@ -913,7 +920,7 @@ namespace srv::application
                         instance.animation_tick, instance.overlay_animation,
                         instance.overlay_root, instance.overlay_weight
                     });
-                    net::socket::send(
+                    net::secure::send(
                         get()->socket, client.endpoint, message.data(), message.size());
                 }
             }
@@ -951,10 +958,10 @@ namespace srv::application
         {
             const auto data =
                 net::message::encode({type, request.sequence, request.token, get()->tick});
-            net::socket::send(get()->socket, peer, data.data(), data.size());
+            net::secure::send(get()->socket, peer, data.data(), data.size());
             const auto settings = net::movement::encode_parameters(
                 request.token, player::parameters());
-            net::socket::send(get()->socket, peer, settings.data(), settings.size());
+            net::secure::send(get()->socket, peer, settings.data(), settings.size());
         }
 
         void tick_players()
@@ -988,7 +995,7 @@ namespace srv::application
 
                 const auto packet = net::movement::encode(snapshot);
 
-                net::socket::send(get()->socket, client.endpoint, packet.data(), packet.size());
+                net::secure::send(get()->socket, client.endpoint, packet.data(), packet.size());
             }
         }
     } // namespace

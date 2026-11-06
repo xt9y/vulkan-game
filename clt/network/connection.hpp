@@ -2,7 +2,7 @@
 
 #include "srv/shared/net/animation.hpp"
 #include "srv/shared/net/movement.hpp"
-#include <network/socket.hpp>
+#include <network/secure.hpp>
 #include "srv/shared/net/weapon.hpp"
 #include "srv/shared/scene/scene.hpp"
 
@@ -25,7 +25,7 @@ namespace clt::connection
     {
         std::string host;
         std::uint16_t port = 0;
-        net::socket::resource socket;
+        net::secure::resource socket;
 
         std::atomic<bool> stop{false};
         std::atomic<bool> connected{false};

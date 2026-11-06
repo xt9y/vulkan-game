@@ -1,19 +1,71 @@
 vulkan-game
   server.cpp                server application, authoritative world and rules
   client.cpp                client application and input settings
-  srv/                      simulation, game scene serialization and authority
-  clt/                      rendering integration, player and weapon presentation
-  shd/                      game material, compute lighting and presentation GLSL
-  assets/                   game-owned art
+  srv/                      game simulation, scene serialization and authority
+  clt/                      client rendering, prediction and weapon presentation
+  shd/                      game shaders
+  assets/                   game art
 
-Uses VulkanEngine and VulkanSystems static libraries pinned in build.c.
-The generic GPU owners, descriptor resources, frame scheduler, HDR/LDR
-postprocessing targets, indirect culler, IPv4/IPv6 UDP sockets, reliable
-scene byte transport, spatial queries and jobs are provided by VulkanSystems.
-The game keeps its scene batch serialization, gameplay handshake, animation,
-input prediction, weapons and authoritative server simulation.
+Build:
+  c build vulkan-server
+  c build vulkan-client
+The build pins VulkanEngine and VulkanSystems. VulkanNetwork uses Mbed TLS
+3.6.7 with DTLS 1.2, mandatory mutual X.509 authentication and forward-secret
+ECDHE-AES-GCM cipher suites. All gameplay, movement, weapon and reliable scene
+packets use the DTLS socket; there is no plaintext application fallback.
+The game owns its scene and authority protocols; network/session is reusable.
 
-vulkan-server and vulkan-client must use matching builds; VSN1 reliable scene
-delivery supersedes the old VSCN per-fragment request/response protocol.
-Transport is currently unencrypted, and source changes require native
-compilation and runtime tests on the supported platforms.
+Before launching either executable, provision the following environment:
+  VULKAN_NET_CA                PEM certificate of the trusted issuing CA
+  VULKAN_NET_CERT              PEM certificate of this server/client
+  VULKAN_NET_KEY               matching PEM private key of this process
+  VULKAN_NET_SERVER_NAME       optional hostname/SAN expected by the client;
+                               defaults to the game server hostname.
+
+The CA must sign both the server certificate (serverAuth) and the separate
+per-client certificate (clientAuth). The server certificate must have a SAN
+matching VULKAN_NET_SERVER_NAME (or the host used in client.cpp). Client
+private keys MUST NOT be shared across users. Keep CA and private keys outside
+the source tree. Certificates without valid chains or server identities are
+rejected. Missing credentials cause startup failure rather than fallback.
+
+Development-only credential example, on a machine with OpenSSL:
+  mkdir -p "$HOME/.config/vulkan-game/tls"
+  cd "$HOME/.config/vulkan-game/tls"
+  openssl req -new -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+    -nodes -sha256 -days 365 -subj "/CN=Vulkan Development CA" \
+    -addext "basicConstraints=critical,CA:TRUE" \
+    -keyout ca.key -out ca.crt
+  openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+    -nodes -subj "/CN=localhost" -keyout server.key -out server.csr
+  printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' > server.ext
+  openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+    -out server.crt -days 30 -sha256 -extfile server.ext
+  openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+    -nodes -subj "/CN=development-client" -keyout client.key -out client.csr
+  printf 'extendedKeyUsage=clientAuth\n' > client.ext
+  openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+    -out client.crt -days 30 -sha256 -extfile client.ext
+  chmod 600 *.key
+
+Use separate process environments:
+  server: VULKAN_NET_CA=.../ca.crt VULKAN_NET_CERT=.../server.crt
+          VULKAN_NET_KEY=.../server.key
+  client: VULKAN_NET_CA=.../ca.crt VULKAN_NET_CERT=.../client.crt
+          VULKAN_NET_KEY=.../client.key VULKAN_NET_SERVER_NAME=localhost
+
+This is a LOCAL-DEVELOPMENT example only; for deployed servers use a properly
+managed CA and unique client credentials with issuance, expiration, revocation
+and access control. No sample private key or certificate is stored in Git.
+
+Security and deployment limits:
+  Certificates authenticate transport peers, not game accounts or permissions.
+  Production deployments need admission controls, certificate revocation,
+  rate limiting, incident response, NAT traversal and packet-loss testing.
+  The transport is DTLS 1.2, not QUIC/DTLS 1.3. DTLS protects packet
+  confidentiality, integrity and replay; reliable ordering-independent bulk
+  scene messages are handled separately by network/session. There is no
+  guarantee of fixed bandwidth, latency or GPU frame time.
+
+Native compilation, handshake interoperability and platform/runtime regression
+testing are required before treating this revision as a release.

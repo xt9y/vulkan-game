@@ -3,7 +3,7 @@
 #include "srv/game/options.hpp"
 #include "srv/shared/net/animation.hpp"
 #include "srv/shared/net/message.hpp"
-#include <network/socket.hpp>
+#include <network/secure.hpp>
 #include <network/session.hpp>
 #include "srv/shared/net/weapon.hpp"
 #include "srv/shared/player/movement.hpp"
@@ -41,7 +41,7 @@ namespace srv::application
     struct state
     {
         game::options::state options;
-        net::socket::resource socket;
+        net::secure::resource socket;
         std::unique_ptr<net::session> scene_transport;
         scene::state scene;
         std::vector<model_request> models;

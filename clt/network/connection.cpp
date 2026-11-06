@@ -5,7 +5,8 @@
 #include <network/endpoint.hpp>
 #include "srv/shared/net/message.hpp"
 #include "srv/shared/net/movement.hpp"
-#include <network/socket.hpp>
+#include <network/secure.hpp>
+#include "srv/shared/net/secure_config.hpp"
 #include <network/session.hpp>
 
 #include "srv/shared/net/scene_stream.hpp"
@@ -265,7 +266,7 @@ namespace clt::connection
             get()->last_publish = {};
         }
 
-        net::socket::destroy(get()->socket);
+        net::secure::destroy(get()->socket);
         {
             std::lock_guard<std::mutex> lock(get()->error_mutex);
             get()->worker_error = {};
@@ -285,8 +286,11 @@ namespace clt::connection
             try
             {
                 const auto server=net::endpoint::resolve(host,port);
-                data.socket=net::socket::create(0,
+                data.socket=net::secure::create(
+                    net::secure::role::client,
+                    game::secure_config::load(net::secure::role::client,host),0,
                     server.address.ss_family==AF_INET6?"::":"0.0.0.0");
+                net::secure::connect(data.socket,server);
                 net::session::settings transport_settings;
                 transport_settings.channel.max_message=net::scene_stream::max_scene_bytes+20;
                 transport_settings.channel.max_queued=2*(net::scene_stream::max_scene_bytes+20);
@@ -356,7 +360,7 @@ namespace clt::connection
                 auto send = [&](net::message::type type)
                 {
                     const auto packet = net::message::encode({type, ++sequence, token, 0});
-                    net::socket::send(data.socket, server, packet.data(), packet.size());
+                    net::secure::send(data.socket, server, packet.data(), packet.size());
                     outstanding = sequence;
                 };
 
@@ -367,7 +371,7 @@ namespace clt::connection
                     for (int budget = 0; budget < 512; ++budget)
                     {
                         net::endpoint::resource peer;
-                        const auto size = net::socket::receive(data.socket, peer, buffer.data(), buffer.size());
+                        const auto size = net::secure::receive(data.socket, peer, buffer.data(), buffer.size());
 
                         if (!size)
                         {
@@ -541,7 +545,10 @@ namespace clt::connection
                         retry = std::chrono::milliseconds(net::limits::retry_ms);
                     }
 
-                    transport.pump(data.socket,64*1024,now);
+                    transport.pump(
+                        [&](const net::endpoint::resource& peer,const void* bytes,std::size_t size) {
+                            return net::secure::send(data.socket,peer,bytes,size);
+                        },64*1024,now);
                     net::delivery completed;
                     while(transport.pop(completed))
                     {
@@ -642,7 +649,7 @@ namespace clt::connection
                             (scene_batch << 16)
                         });
 
-                        net::socket::send(
+                        net::secure::send(
                             data.socket,
                             server,
                             packet.data(),
@@ -661,7 +668,7 @@ namespace clt::connection
                         {
                             command.token = token;
                             const auto packet = net::weapon::encode_command(command);
-                            net::socket::send(data.socket, server, packet.data(), packet.size());
+                            net::secure::send(data.socket, server, packet.data(), packet.size());
                         }
                         next_weapon_send = now + 30ms;
                     }
@@ -690,7 +697,7 @@ namespace clt::connection
                             auto transmit = [&](const ::player::input& input)
                             {
                                 const auto packet = net::movement::encode(token, input);
-                                net::socket::send(data.socket, server, packet.data(), packet.size());
+                                net::secure::send(data.socket, server, packet.data(), packet.size());
                             };
 
                             // Recover missing early ticks while transmitting current input.
@@ -724,7 +731,7 @@ namespace clt::connection
                         wake - clock::now()
                     );
 
-                    net::socket::wait_readable(
+                    net::secure::wait_readable(
                         data.socket,
                         std::clamp(
                             delay,

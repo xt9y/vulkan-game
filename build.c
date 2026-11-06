@@ -60,22 +60,22 @@ void build(C_Build* b)
     c_dep_include(engine, ".");
 
     C_Dependency* systems =
-        c_git(b, "VulkanSystems", "https://github.com/xt9y/vulkan-systems.git", "ed16657eb79a428d7d205e579046045229b111ef");
+        c_git(b, "VulkanSystems", "https://github.com/xt9y/vulkan-systems.git", "d1e1dd7f436dbf6f0677d056f59529449d6dfaaa");
     c_dep_cbuild(systems, "VulkanSystems", C_TARGET_STATIC_LIBRARY);
     c_dep_include(systems, "gpu");
     c_dep_include(systems, "render");
 
     // Independent CPU/network libraries: server does not use a graphics device.
     C_Dependency* network =
-        c_git(b, "VulkanNetwork", "https://github.com/xt9y/vulkan-systems.git", "ed16657eb79a428d7d205e579046045229b111ef");
+        c_git(b, "VulkanNetwork", "https://github.com/xt9y/vulkan-systems.git", "d1e1dd7f436dbf6f0677d056f59529449d6dfaaa");
     c_dep_cbuild(network, "VulkanNetwork", C_TARGET_STATIC_LIBRARY);
     c_dep_include(network, "network");
     C_Dependency* spatial =
-        c_git(b, "VulkanSpatial", "https://github.com/xt9y/vulkan-systems.git", "ed16657eb79a428d7d205e579046045229b111ef");
+        c_git(b, "VulkanSpatial", "https://github.com/xt9y/vulkan-systems.git", "d1e1dd7f436dbf6f0677d056f59529449d6dfaaa");
     c_dep_cbuild(spatial, "VulkanSpatial", C_TARGET_STATIC_LIBRARY);
     c_dep_include(spatial, "spatial");
     C_Dependency* jobs =
-        c_git(b, "VulkanJobs", "https://github.com/xt9y/vulkan-systems.git", "ed16657eb79a428d7d205e579046045229b111ef");
+        c_git(b, "VulkanJobs", "https://github.com/xt9y/vulkan-systems.git", "d1e1dd7f436dbf6f0677d056f59529449d6dfaaa");
     c_dep_cbuild(jobs, "VulkanJobs", C_TARGET_STATIC_LIBRARY);
     c_dep_include(jobs, "jobs");
 
