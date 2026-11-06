@@ -9,6 +9,7 @@
 #include <gpu/descriptors.hpp>
 #include <render/renderer.hpp>
 #include <render/pipeline.hpp>
+#include <render/target.hpp>
 #include "clt/view/camera.hpp"
 #include "clt/weapon/weapon.hpp"
 #include "srv/game/options.hpp"
@@ -106,7 +107,7 @@ namespace clt::scene_renderer
                 std::array<vk::ImageView, 3> views{};
                 gpu::owned_image depth;
                 vk::ImageView depth_view{};
-                vk::Framebuffer framebuffer{};
+                std::unique_ptr<::render::target> framebuffer;
             };
 
             std::vector<target> targets;
@@ -419,22 +420,16 @@ namespace clt::scene_renderer
                 depth_view.subresourceRange = {vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1};
                 target.depth_view = vk::image_view::create(depth_view);
 
-                const std::array<vk::ImageView, 4> attachments{
-                    target.views[0], target.views[1], target.views[2], target.depth_view
-                };
-                vk::FramebufferCreateInfo framebuffer{};
-                framebuffer.renderPass = data.render_pass;
-                framebuffer.attachmentCount = attachments.size();
-                framebuffer.pAttachments = attachments.data();
-                framebuffer.width = extent.width;
-                framebuffer.height = extent.height;
-                framebuffer.layers = 1;
-                target.framebuffer = vk::framebuffer::create(framebuffer);
+                target.framebuffer=std::make_unique<::render::target>();
+                target.framebuffer->create_framebuffer(
+                    data.render_pass,
+                    {target.views[0],target.views[1],target.views[2],target.depth_view},
+                    extent);
                 data.targets.push_back(std::move(target));
             }
             catch (...)
             {
-                if (target.framebuffer) vk::framebuffer::destroy(target.framebuffer);
+                target.framebuffer.reset();
                 if (target.depth_view) vk::image_view::destroy(target.depth_view);
                 if (target.depth.handle) target.depth.reset();
                 for (std::size_t i = 0; i < target.color.size(); ++i)
@@ -630,7 +625,7 @@ namespace clt::scene_renderer
 
         for (auto& target : data.targets)
         {
-            if (target.framebuffer) vk::framebuffer::destroy(target.framebuffer);
+            target.framebuffer.reset();
             if (target.depth_view) vk::image_view::destroy(target.depth_view);
             if (target.depth.handle) target.depth.reset();
             for (std::size_t i = 0; i < target.color.size(); ++i)
@@ -1109,7 +1104,7 @@ namespace clt::scene_renderer
 
         vk::RenderPassBeginInfo begin{};
         begin.renderPass = data.render_pass;
-        begin.framebuffer = data.targets.at(image).framebuffer;
+        begin.framebuffer = data.targets.at(image).framebuffer->framebuffer();
         begin.renderArea = vk::Rect2D{vk::Offset2D{0, 0}, extent};
         begin.clearValueCount = clear.size();
         begin.pClearValues = clear.data();
