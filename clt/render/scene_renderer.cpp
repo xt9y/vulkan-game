@@ -987,10 +987,10 @@ namespace clt::scene_renderer
         }
     }
 
-    void draw(vk::CommandBuffer command, std::uint32_t image)
+    void draw(vk::CommandBuffer command, std::uint32_t image,
+              const camera::frame& camera)
     {
         auto& data = get();
-        const auto camera = camera::capture();
         const auto& weapon_draws = weapon::update(camera.view);
         const auto extent = vk::swapchain::get()->extent;
         const float aspect = float(extent.width) / float(extent.height);
