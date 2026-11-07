@@ -73,19 +73,25 @@ Platform requirements:
   runtime compatibility still require verification on each OS.
 
 Rendering status:
-  Current main has deferred GGX direct sunlight and constant ambient light.
-  It does not render directional shadows, point-light shadows or true GI.
-  VulkanSystems supplies BVH code, but the game has not connected it to
-  visibility queries, irradiance probes or bounce-light accumulation.
+  The game keeps one deferred renderer: geometry -> half-resolution GI/contact
+  visibility -> PBR lighting -> tonemapping -> presentation. The half-resolution
+  compute pass estimates one local diffuse bounce from other visible G-buffer
+  surfaces and screen-space sun contact shadows. Lighting includes GGX, sun,
+  client-authored point lights, emission and the indirect result.
+  This is screen-space GI (SSGI), not scene-wide DDGI/path tracing. Off-screen
+  emitters and occluders cannot contribute, point lights do not cast true
+  shadows, and animated or otherwise hidden geometry does not enter GI.
+  VulkanSystems' TLAS/BLAS is not yet integrated into the live lighting passes.
+  No FPS target or GPU performance has been established for this algorithm.
 
 Rendering and reusable systems:
   VulkanSystems/render owns general indexed geometry buffers, sampled G-buffer
   attachment images, render target/frame boilerplate and ordered GPU graph
   recording. The client supplies scene snapshots, material/animation payloads,
   GPU draw parameters, game-specific deferred shaders and presentation policy.
-  clt/render/passes.* is removed: clt/render/renderer.cpp submits its four
-  callbacks through render::sequence. No new GI renderer or global lighting
-  policy is embedded in VulkanSystems. The existing game uses GPU culling and
+  clt/render/passes.* is removed: clt/render/renderer.cpp submits its five
+  passes through render::sequence. GI policy remains in the game shaders,
+  not in VulkanSystems. The existing game uses GPU culling and
   streamed indexed meshes through render::geometry with nonblocking uploads.
 
   Emissive RGB is packed through the otherwise unused alpha channels of the
