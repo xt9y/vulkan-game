@@ -2,10 +2,13 @@
 #include "srv/game/options.hpp"
 #include "scene_renderer.hpp"
 #include "clt/view/camera.hpp"
+#include "clt/player/prediction.hpp"
+#include "clt/network/connection.hpp"
 #include <render/renderer.hpp>
 #include <render/pipeline.hpp>
 #include <gpu/compute.hpp>
 #include <gpu/descriptors.hpp>
+#include <gpu/resource.hpp>
 #include <render/postprocess.hpp>
 #include <memory>
 
@@ -31,6 +34,9 @@ namespace clt::postprocess
         struct frame {
             image_target hdr;
             image_target ldr;
+            gpu::owned_image indirect;
+            vk::ImageView indirect_view{};
+            vk::DescriptorSet gi{};
             vk::DescriptorSet lighting{};
             vk::DescriptorSet tone{};
             vk::DescriptorSet presentation{};
@@ -39,12 +45,15 @@ namespace clt::postprocess
         struct state {
             std::vector<frame> frames;
             vk::Sampler sampler{};
+            gpu::owned_buffer lights;
+            std::unique_ptr<gpu::descriptors> gi_sets;
             std::unique_ptr<gpu::descriptors> lighting_sets;
             std::unique_ptr<gpu::descriptors> tone_sets;
             std::unique_ptr<gpu::descriptors> present_sets;
             std::unique_ptr<::render::postprocess_targets> targets;
             std::unique_ptr<::render::presentation_targets> presentation;
             vk::PipelineLayout present_layout{};
+            std::unique_ptr<gpu::compute> gi_program;
             std::unique_ptr<gpu::compute> lighting_program;
             std::unique_ptr<gpu::compute> tone_program;
             std::unique_ptr<::render::pipeline> present_program;
@@ -58,31 +67,40 @@ namespace clt::postprocess
 
         std::atomic<float> exposure_value{};
 
+        struct alignas(16) point_light {
+            std::array<float,4> position_range{};
+            std::array<float,4> color_intensity{};
+        };
+        static_assert(sizeof(point_light)==32);
+
         struct push {
             std::int32_t enabled;
             float exposure;
-            std::array<float, 2> padding{};
-            std::array<float, 4> view_direction{};
-            std::array<float, 4> view_right{};
-            std::array<float, 4> view_up{};
-            std::array<float, 4> sun{};
-            std::array<float, 4> ambient{};
-            std::array<float, 4> sky{};
+            std::array<float,2> padding{};
+            std::array<float,4> eye_near{};
+            std::array<float,4> forward_far{};
+            std::array<float,4> right_tan{};
+            std::array<float,4> up_tan{};
+            std::array<float,4> sun{};
+            std::array<float,4> ambient_count{};
+            std::array<float,4> sky{};
         };
-        static_assert(sizeof(push)<=128);
+        static_assert(sizeof(push)==128);
 
         std::vector<vk::DescriptorSetLayoutBinding> bindings(
-            std::uint32_t sampled,std::uint32_t storage,vk::ShaderStageFlags stages)
+            std::uint32_t sampled,std::uint32_t storage,vk::ShaderStageFlags stages,
+            std::uint32_t buffers=0)
         {
-            std::vector<vk::DescriptorSetLayoutBinding> result(sampled+storage);
+            std::vector<vk::DescriptorSetLayoutBinding> result(sampled+storage+buffers);
             for(std::uint32_t i=0;i<result.size();++i) {
-                auto& b=result[i];
-                b.binding=i;
-                b.descriptorCount=1;
-                b.stageFlags=stages;
-                b.descriptorType=i<sampled?
-                    vk::DescriptorType::eCombinedImageSampler:
-                    vk::DescriptorType::eStorageImage;
+                auto& binding=result[i];
+                binding.binding=i;
+                binding.descriptorCount=1;
+                binding.stageFlags=stages;
+                binding.descriptorType=i<sampled
+                    ? vk::DescriptorType::eCombinedImageSampler
+                    : i<sampled+storage ? vk::DescriptorType::eStorageImage
+                                        : vk::DescriptorType::eStorageBuffer;
             }
             return result;
         }
@@ -104,30 +122,35 @@ namespace clt::postprocess
             return vk::device::get()->handle.createPipelineLayout(info);
         }
 
-        void compute(vk::CommandBuffer command, const gpu::compute& program,
-                     vk::DescriptorSet set)
+        void compute(vk::CommandBuffer command,const gpu::compute& program,
+                     vk::DescriptorSet set,bool half=false)
         {
-            const auto extent = vk::swapchain::get()->extent;
-            const auto view = camera::snapshot();
-            const float sin_yaw=std::sin(view.yaw),cos_yaw=std::cos(view.yaw);
-            const float sin_pitch=std::sin(view.pitch),cos_pitch=std::cos(view.pitch);
+            const auto extent=vk::swapchain::get()->extent;
+            const auto view=camera::snapshot();
+            const float sy=std::sin(view.yaw),cy=std::cos(view.yaw);
+            const float sp=std::sin(view.pitch),cp=std::cos(view.pitch);
             const float tan_half=std::tan(view.fov*0.5f);
             const float aspect=float(extent.width)/float(extent.height);
-            const auto& lighting = game::options::get()->graphics;
+            const auto movement=connection::movement_parameters();
+            const auto position=prediction::position();
+            const float eye_height=movement?movement->height:0.0f;
+            const auto& lighting=game::options::get()->graphics;
             const push controls{
-                1, exposure_value.load(std::memory_order_relaxed),
-                {},
-                {-sin_yaw*cos_pitch,-sin_pitch,cos_yaw*cos_pitch,0},
-                {cos_yaw,0,sin_yaw,tan_half*aspect},
-                {-sin_yaw*sin_pitch,cos_pitch,-cos_yaw*sin_pitch,tan_half},
-                {lighting.sun_direction.x, lighting.sun_direction.y,
-                 lighting.sun_direction.z, lighting.sun_intensity},
-                {0.08f, 0.02f, 0, 0},
-                {0.035f, 0.045f, 0.065f, 1}
+                1,exposure_value.load(std::memory_order_relaxed),{},
+                {position.x,position.y+eye_height,position.z,0.1f},
+                {sy*cp,sp,-cy*cp,1000.0f},
+                {cy,0,sy,tan_half*aspect},
+                {-sy*sp,cp,cy*sp,tan_half},
+                {lighting.sun_direction.x,lighting.sun_direction.y,
+                 lighting.sun_direction.z,lighting.sun_intensity},
+                {0.01f,0.015f,0.02f,
+                 float(std::min<std::size_t>(lighting.point_lights.size(),64))},
+                {0.035f,0.045f,0.065f,1.0f}
             };
-            program.dispatch(
-                command, (extent.width + 7) / 8, (extent.height + 7) / 8, 1,
-                {set}, &controls, sizeof(controls));
+            const auto width=half?(extent.width+1)/2:extent.width;
+            const auto height=half?(extent.height+1)/2:extent.height;
+            program.dispatch(command,(width+7)/8,(height+7)/8,1,
+                             {set},&controls,sizeof(controls));
         }
     }
 
@@ -157,13 +180,18 @@ namespace clt::postprocess
             data.presentation=std::make_unique<::render::presentation_targets>();
             data.presentation->create(vk::swapchain::get()->images,
                 vk::swapchain::get()->format,vk::swapchain::get()->extent);
+            data.gi_sets=std::make_unique<gpu::descriptors>();
+            data.gi_sets->create(bindings(4,1,vk::ShaderStageFlagBits::eCompute),count);
             data.lighting_sets=std::make_unique<gpu::descriptors>();
-            data.lighting_sets->create(bindings(4,1,vk::ShaderStageFlagBits::eCompute),count);
+            data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,1),count);
             data.tone_sets=std::make_unique<gpu::descriptors>();
             data.tone_sets->create(bindings(1,1,vk::ShaderStageFlagBits::eCompute),count);
             data.present_sets=std::make_unique<gpu::descriptors>();
             data.present_sets->create(bindings(1,0,vk::ShaderStageFlagBits::eFragment),count);
             data.present_layout=pipeline_layout(data.present_sets->layout(),false);
+            data.gi_program=std::make_unique<gpu::compute>();
+            data.gi_program->create("build/shaders/gi.comp.spv",
+                                    {data.gi_sets->layout()},sizeof(push));
             data.lighting_program = std::make_unique<gpu::compute>();
             data.lighting_program->create(
                 game::options::get()->graphics.lighting_shader,
@@ -187,35 +215,86 @@ namespace clt::postprocess
                  game::options::get()->graphics.presentation_shader}
             });
 
-            data.frames.reserve(count);
-
-            for (std::uint32_t i = 0; i < count; ++i)
+            // Static light data is set by client.cpp. The scene does not yet
+            // transmit dynamic lights; retain a valid descriptor if empty.
+            const auto& source_lights=game::options::get()->graphics.point_lights;
+            if(source_lights.size()>64)
+                throw std::invalid_argument("At most 64 client point lights are supported");
+            std::vector<point_light> lights(std::max<std::size_t>(1,source_lights.size()));
+            for(std::size_t i=0;i<source_lights.size();++i)
             {
-                frame item;
-                data.frames.push_back(item);
-                auto& current = data.frames.back();
+                const auto& src=source_lights[i];
+                lights[i]={{src.position.x,src.position.y,src.position.z,src.range},
+                           {src.color.x,src.color.y,src.color.z,src.intensity}};
+            }
+            data.lights=gpu::create_buffer(lights.size()*sizeof(point_light),
+                vk::BufferUsageFlagBits::eStorageBuffer,
+                vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent);
+            vk::buffer::write(data.lights,lights.data(),lights.size()*sizeof(point_light));
+
+            data.frames.reserve(count);
+            for(std::uint32_t i=0;i<count;++i)
+            {
+                data.frames.emplace_back();
+                auto& current=data.frames.back();
                 const auto attachments=data.targets->at(i);
                 current.hdr={attachments.hdr,attachments.hdr_view};
                 current.ldr={attachments.ldr,attachments.ldr_view};
 
+                vk::ImageCreateInfo gi_image{};
+                gi_image.imageType=vk::ImageType::e2D;
+                gi_image.format=vk::Format::eR16G16B16A16Sfloat;
+                gi_image.extent=vk::Extent3D{
+                    (vk::swapchain::get()->extent.width+1)/2,
+                    (vk::swapchain::get()->extent.height+1)/2,1};
+                gi_image.mipLevels=1;
+                gi_image.arrayLayers=1;
+                gi_image.samples=vk::SampleCountFlagBits::e1;
+                gi_image.tiling=vk::ImageTiling::eOptimal;
+                gi_image.usage=vk::ImageUsageFlagBits::eStorage |
+                               vk::ImageUsageFlagBits::eSampled;
+                current.indirect=gpu::create_image(
+                    gi_image,vk::MemoryPropertyFlagBits::eDeviceLocal);
+                vk::ImageViewCreateInfo view{};
+                view.image=current.indirect.handle;
+                view.viewType=vk::ImageViewType::e2D;
+                view.format=gi_image.format;
+                view.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1};
+                current.indirect_view=vk::image_view::create(view);
+
+                current.gi=data.gi_sets->set(i);
                 current.lighting=data.lighting_sets->set(i);
                 current.tone=data.tone_sets->set(i);
                 current.presentation=data.present_sets->set(i);
 
                 const auto g = scene_renderer::outputs(i);
-                std::vector<vk::DescriptorImageInfo> lighting(5);
-                for (std::size_t j = 0; j < g.views.size(); ++j)
+                std::vector<vk::DescriptorImageInfo> gi(5);
+                for(std::size_t j=0;j<g.views.size();++j)
                 {
-                    lighting[j].sampler = data.sampler;
-                    lighting[j].imageView = g.views[j];
-                    lighting[j].imageLayout = j == 3 ?
-                        vk::ImageLayout::eDepthStencilReadOnlyOptimal :
-                        vk::ImageLayout::eShaderReadOnlyOptimal;
+                    gi[j].sampler=data.sampler;
+                    gi[j].imageView=g.views[j];
+                    gi[j].imageLayout=j==3
+                        ? vk::ImageLayout::eDepthStencilReadOnlyOptimal
+                        : vk::ImageLayout::eShaderReadOnlyOptimal;
                 }
-                lighting[4].imageView = current.hdr.view;
-                lighting[4].imageLayout = vk::ImageLayout::eGeneral;
+                gi[4].imageView=current.indirect_view;
+                gi[4].imageLayout=vk::ImageLayout::eGeneral;
+                for(std::uint32_t j=0;j<gi.size();++j)
+                    data.gi_sets->write_image(i,j,gi[j]);
+
+                std::vector<vk::DescriptorImageInfo> lighting(6);
+                for(std::size_t j=0;j<g.views.size();++j)
+                    lighting[j]=gi[j];
+                lighting[4].sampler=data.sampler;
+                lighting[4].imageView=current.indirect_view;
+                lighting[4].imageLayout=vk::ImageLayout::eGeneral;
+                lighting[5].imageView=current.hdr.view;
+                lighting[5].imageLayout=vk::ImageLayout::eGeneral;
                 for(std::uint32_t j=0;j<lighting.size();++j)
                     data.lighting_sets->write_image(i,j,lighting[j]);
+                data.lighting_sets->write_buffer(i,6,
+                    vk::buffer::descriptor(data.lights));
                 std::vector<vk::DescriptorImageInfo> tone(2);
                 tone[0].sampler = data.sampler;
                 tone[0].imageView = current.hdr.view;
@@ -242,17 +321,27 @@ namespace clt::postprocess
     {
         auto& data = get();
         const auto device = vk::device::get()->handle;
+        // Image views are destroyed before their RAII image allocations.
+        for(auto& frame:data.frames)
+        {
+            if(frame.indirect_view)
+                vk::image_view::destroy(frame.indirect_view);
+            frame.indirect_view=nullptr;
+        }
         data.frames.clear();
 
+        data.gi_program.reset();
         data.lighting_program.reset();
         data.tone_program.reset();
         data.present_program.reset();
         data.presentation.reset();
         if (data.present_layout) device.destroyPipelineLayout(data.present_layout);
+        data.gi_sets.reset();
         data.lighting_sets.reset();
         data.tone_sets.reset();
         data.present_sets.reset();
         data.targets.reset();
+        data.lights.reset();
         if (data.sampler) device.destroySampler(data.sampler);
 
         data = {};
@@ -261,7 +350,13 @@ namespace clt::postprocess
     targets images(std::uint32_t image)
     {
         const auto& frame = get().frames.at(image);
-        return {frame.hdr.image, frame.ldr.image};
+        return {frame.indirect.handle,frame.hdr.image,frame.ldr.image};
+    }
+
+    void gi(vk::CommandBuffer command,std::uint32_t image)
+    {
+        const auto& current=get().frames.at(image);
+        compute(command,*get().gi_program,current.gi,true);
     }
 
     void lighting(vk::CommandBuffer command, std::uint32_t image)
