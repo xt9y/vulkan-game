@@ -153,7 +153,6 @@ void main()
     color+=a.rgb*(1.0-metallic)*ao*
            (max(bounce_shadow.rgb,vec3(0.0))/PI+
             pc.ambient_count.rgb);
-    color+=fresnel(max(dot(N,V),0.0),mix(vec3(0.04),a.rgb,metallic))*0.01*ao;
     vec3 packed=vec3(a.a,n.a,m.a);
     color+=packed/max(vec3(1.0)-packed,vec3(1.0/255.0));
     imageStore(hdr,p,vec4(max(color,vec3(0.0)),1.0));
