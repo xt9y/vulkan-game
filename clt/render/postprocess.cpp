@@ -41,6 +41,8 @@ namespace clt::postprocess
             image_target hdr;
             image_target ldr;
             gpu::owned_buffer points;
+            gpu::owned_buffer tile_lights;
+            std::vector<std::uint32_t> tile_cpu;
             gpu::owned_image grid;
             vk::ImageView grid_view{};
             bool dirty=true;
@@ -61,6 +63,7 @@ namespace clt::postprocess
             gpu::owned_buffer neighborhood_indices;
             std::shared_ptr<const ::scene::state> snapshot;
             std::uint32_t light_count=0, point_count=0, vertex_count=0, node_count=0;
+            std::uint32_t tile_columns=0, tile_rows=0;
             vk::util::math::vec3 grid_origin{};
             float grid_spacing=0.2f;
             vk::Extent3D grid_extent{1,1,1};
@@ -90,6 +93,7 @@ namespace clt::postprocess
         constexpr float min_grid_spacing=0.2f;
         constexpr float bounce_reach=2.6f;
         constexpr std::uint64_t max_grid_probes=32768;
+        constexpr std::uint32_t tile_size=16,light_slot_width=65;
 
         struct alignas(16) point_light {
             std::array<float,4> position_range{};
@@ -239,6 +243,9 @@ namespace clt::postprocess
             data.sampler = device.createSampler(sampler);
 
             const auto count=static_cast<std::uint32_t>(vk::swapchain::get()->images.size());
+            const auto extent=vk::swapchain::get()->extent;
+            data.tile_columns=(extent.width+tile_size-1u)/tile_size;
+            data.tile_rows=(extent.height+tile_size-1u)/tile_size;
             data.targets=std::make_unique<::render::postprocess_targets>();
             data.targets->create(count,vk::swapchain::get()->extent);
             data.presentation=std::make_unique<::render::presentation_targets>();
@@ -249,7 +256,7 @@ namespace clt::postprocess
             data.gi_sets=std::make_unique<gpu::descriptors>();
             data.gi_sets->create(bindings(0,1,vk::ShaderStageFlagBits::eCompute,6),count);
             data.lighting_sets=std::make_unique<gpu::descriptors>();
-            data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,3),count);
+            data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,4),count);
             data.tone_sets=std::make_unique<gpu::descriptors>();
             data.tone_sets->create(bindings(1,1,vk::ShaderStageFlagBits::eCompute),count);
             data.present_sets=std::make_unique<gpu::descriptors>();
@@ -302,6 +309,10 @@ namespace clt::postprocess
                 current.hdr={attachments.hdr,attachments.hdr_view};
                 current.ldr={attachments.ldr,attachments.ldr_view};
                 current.points=gpu::create_buffer(sizeof(probe_point),storage,memory);
+                current.tile_cpu.resize(std::size_t(data.tile_columns)*
+                    data.tile_rows*light_slot_width);
+                current.tile_lights=gpu::create_buffer(
+                    current.tile_cpu.size()*sizeof(std::uint32_t),storage,memory);
 
                 create_grid(current,data.grid_extent);
 
@@ -346,6 +357,7 @@ namespace clt::postprocess
                 data.lighting_sets->write_buffer(i,6,vk::buffer::descriptor(data.lights));
                 data.lighting_sets->write_buffer(i,7,vk::buffer::descriptor(data.triangles));
                 data.lighting_sets->write_buffer(i,8,vk::buffer::descriptor(data.nodes));
+                data.lighting_sets->write_buffer(i,9,vk::buffer::descriptor(current.tile_lights));
                 std::array<vk::DescriptorImageInfo,2> tone{};
                 tone[0].sampler = data.sampler;
                 tone[0].imageView = current.hdr.view;
@@ -794,8 +806,75 @@ namespace clt::postprocess
     void lighting(vk::CommandBuffer command, std::uint32_t image,
                   const camera::frame& frame)
     {
-        const auto& current = get().frames.at(image);
-        compute(command,*get().lighting_program,current.lighting,frame);
+        auto& data=get();
+        auto& current=data.frames.at(image);
+        // Conservatively rasterize each light's projected influence sphere into
+        // screen tiles. Rays that cannot intersect the sphere cannot contribute.
+        // The remaining light IDs retain the original server-defined order.
+        std::fill(current.tile_cpu.begin(),current.tile_cpu.end(),0u);
+        if(data.snapshot)
+        {
+            using namespace vk::util::math;
+            const auto extent=vk::swapchain::get()->extent;
+            const float sy=std::sin(frame.pose.yaw),cy=std::cos(frame.pose.yaw);
+            const float sp=std::sin(frame.pose.pitch),cp=std::cos(frame.pose.pitch);
+            const vec3 forward{sy*cp,sp,-cy*cp};
+            const vec3 right{cy,0,sy};
+            const vec3 up{-sy*sp,cp,cy*sp};
+            const float tan_v=std::tan(frame.pose.fov*0.5f);
+            const float tan_h=tan_v*float(extent.width)/float(extent.height);
+            const auto projected=[](float value,float z,float radius,float tangent)
+            {
+                const float a=(value-radius)/(z-radius);
+                const float b=(value-radius)/(z+radius);
+                const float c=(value+radius)/(z-radius);
+                const float d=(value+radius)/(z+radius);
+                return std::pair{std::min(a,b)/tangent,std::max(c,d)/tangent};
+            };
+            for(std::uint32_t i=0;i<data.snapshot->lights.size();++i)
+            {
+                const auto& light=data.snapshot->lights[i];
+                if(light.radius<=0.f || light.strength==0.f)continue;
+                const vec3 delta=light.position-frame.eye;
+                const float z=dot(delta,forward),r=light.radius;
+                std::uint32_t x0=0,x1=data.tile_columns;
+                std::uint32_t y0=0,y1=data.tile_rows;
+                if(z>r && tan_v>0.f && tan_h>0.f)
+                {
+                    const auto [left,right_edge]=projected(dot(delta,right),z,r,tan_h);
+                    const auto [bottom,top]=projected(dot(delta,up),z,r,tan_v);
+                    const auto lower=[](float ndc,std::uint32_t size,
+                                        std::uint32_t count)
+                    {
+                        return std::uint32_t(std::clamp(
+                            int(std::floor((ndc*0.5f+0.5f)*float(size)/tile_size))-1,
+                            0,int(count)));
+                    };
+                    const auto upper=[](float ndc,std::uint32_t size,
+                                        std::uint32_t count)
+                    {
+                        return std::uint32_t(std::clamp(
+                            int(std::ceil((ndc*0.5f+0.5f)*float(size)/tile_size))+1,
+                            0,int(count)));
+                    };
+                    x0=lower(left,extent.width,data.tile_columns);
+                    x1=upper(right_edge,extent.width,data.tile_columns);
+                    y0=lower(-top,extent.height,data.tile_rows);
+                    y1=upper(-bottom,extent.height,data.tile_rows);
+                }
+                for(std::uint32_t y=y0;y<y1;++y)
+                for(std::uint32_t x=x0;x<x1;++x)
+                {
+                    const auto base=(std::size_t(y)*data.tile_columns+x)*light_slot_width;
+                    auto& count=current.tile_cpu[base];
+                    if(count<light_slot_width-1u)
+                        current.tile_cpu[base+1u+count++]=i;
+                }
+            }
+        }
+        vk::buffer::write(current.tile_lights,current.tile_cpu.data(),
+                          current.tile_cpu.size()*sizeof(std::uint32_t));
+        compute(command,*data.lighting_program,current.lighting,frame);
     }
 
     void tonemap(vk::CommandBuffer command, std::uint32_t image,
