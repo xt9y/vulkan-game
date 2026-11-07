@@ -16,9 +16,9 @@ layout(std430,set=0,binding=5) readonly buffer Lights {
 };
 
 layout(push_constant) uniform Controls {
-    int enabled;
     float exposure;
-    vec2 padding;
+    float reserved0;
+    vec2 reserved1;
     vec4 eye_near;
     vec4 forward_far;
     vec4 right_tan;
