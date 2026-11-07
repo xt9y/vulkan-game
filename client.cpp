@@ -80,7 +80,7 @@ int main(int argc, char** argv)
         settings.graphics.presentation_shader = "build/shaders/present.frag.spv";
         settings.graphics.exposure = 1.0f;
         settings.graphics.sun_direction = {0.5f, 1.0f, 0.3f};
-        settings.graphics.sun_intensity = 3.0f;
+        settings.graphics.sun_intensity = 0.0f; // Global sun disabled
         settings.graphics.point_lights = {
             {{0.0f,2.0f,0.0f},6.0f,{1.0f,0.5f,0.2f},14.0f}
         };
