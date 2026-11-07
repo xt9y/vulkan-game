@@ -21,6 +21,5 @@ namespace clt::window
     bool minimized();
     void framebuffer_size(int& width, int& height);
     void poll_events();
-    void set_connected(bool connected);
     void shutdown() noexcept;
 } // namespace clt::window
