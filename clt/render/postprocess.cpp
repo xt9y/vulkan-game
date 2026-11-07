@@ -650,7 +650,7 @@ namespace clt::postprocess
             // used by mesh.vert; alpha-blended surfaces do not occlude light.
             std::unordered_map<std::uint32_t,const ::scene::mesh*> mesh_lookup;
             mesh_lookup.reserve(source->meshes.size());
-            for(const auto& mesh:source->meshes)mesh_lookup[mesh.id]=&mesh;
+            for(const auto& mesh:source->meshes)mesh_lookup.emplace(mesh.id,&mesh);
             for(const auto& instance:source->instances)
             {
                 const auto found=mesh_lookup.find(instance.mesh_id);
