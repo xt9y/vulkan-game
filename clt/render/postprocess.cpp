@@ -374,6 +374,65 @@ namespace clt::postprocess
         if(source==data.snapshot)return;
 
         using namespace vk::util::math;
+
+        // Cover every server-authored light radius and its local bounce reach.
+        // Preserve the full spatial coverage; reduce probe density if necessary
+        // rather than silently cropping a light to a hardcoded box.
+        vec3 origin{};
+        float spacing=min_grid_spacing;
+        vk::Extent3D extent{1,1,1};
+        if(source && !source->lights.empty())
+        {
+            const float inf=std::numeric_limits<float>::infinity();
+            vec3 minimum{inf,inf,inf},maximum{-inf,-inf,-inf};
+            bool any=false;
+            for(const auto& light:source->lights)
+            {
+                if(light.strength<=0.0f)continue;
+                const float reach=light.radius+bounce_reach;
+                const vec3 low=light.position-vec3{reach,reach,reach};
+                const vec3 high=light.position+vec3{reach,reach,reach};
+                minimum={std::min(minimum.x,low.x),
+                         std::min(minimum.y,low.y),
+                         std::min(minimum.z,low.z)};
+                maximum={std::max(maximum.x,high.x),
+                         std::max(maximum.y,high.y),
+                         std::max(maximum.z,high.z)};
+                any=true;
+            }
+            if(any)
+            {
+                const vec3 dimensions=maximum-minimum;
+                const auto max_dim=vk::physical_device::get()->handle
+                    .getProperties().limits.maxImageDimension3D;
+                const double dx=dimensions.x,dy=dimensions.y,dz=dimensions.z;
+                double step=std::max({
+                    double(min_grid_spacing),
+                    std::max({dx,dy,dz})/std::max(2u,max_dim-1u),
+                    std::cbrt((dx*dy*dz)/double(max_grid_probes))
+                });
+                for(;;)
+                {
+                    const auto nx=std::uint32_t(std::ceil(dx/step))+1u;
+                    const auto ny=std::uint32_t(std::ceil(dy/step))+1u;
+                    const auto nz=std::uint32_t(std::ceil(dz/step))+1u;
+                    if(nx<=max_dim && ny<=max_dim && nz<=max_dim &&
+                       std::uint64_t(nx)*ny*nz<=max_grid_probes)
+                    {
+                        extent={nx,ny,nz};
+                        break;
+                    }
+                    step*=1.1;
+                }
+                origin=minimum;
+                spacing=static_cast<float>(step);
+            }
+        }
+        const vec3 limit{
+            origin.x+(extent.width-1)*spacing,
+            origin.y+(extent.height-1)*spacing,
+            origin.z+(extent.depth-1)*spacing
+        };
         std::vector<point_light> lights;
         std::vector<probe_point> points;
         std::vector<std::array<float,4>> triangles;
@@ -390,11 +449,6 @@ namespace clt::postprocess
             // Rogue's probe cloud is built from static room surfaces, not
             // every polygon of imported character/prop meshes. The server
             // already streams those static surfaces as collision boxes.
-            const vec3 limit{
-                grid_origin.x+grid_width*grid_spacing,
-                grid_origin.y+grid_height*grid_spacing,
-                grid_origin.z+grid_depth*grid_spacing
-            };
             const auto face=[&](vec3 base,vec3 u,vec3 v,vec3 normal)
             {
                 // Samples use the original 0.3-unit surface spacing.
@@ -407,7 +461,7 @@ namespace clt::postprocess
                 const float du=lu/float(nu),dv=lv/float(nv);
                 const auto interval=[&](vec3 axis,float step,int count)
                 {
-                    float lo=dot(grid_origin-base,axis);
+                    float lo=dot(origin-base,axis);
                     float hi=dot(limit-base,axis);
                     if(lo>hi)std::swap(lo,hi);
                     const int begin=std::clamp(int(std::ceil(lo/step-0.5f)),0,count);
@@ -421,9 +475,21 @@ namespace clt::postprocess
                 {
                     const vec3 p=base+U*((float(i)+0.5f)*du)
                                      +V*((float(j)+0.5f)*dv);
-                    if(p.x<grid_origin.x || p.y<grid_origin.y ||
-                       p.z<grid_origin.z || p.x>=limit.x ||
-                       p.y>=limit.y || p.z>=limit.z)continue;
+                    if(p.x<origin.x || p.y<origin.y || p.z<origin.z ||
+                       p.x>limit.x || p.y>limit.y || p.z>limit.z)continue;
+                    // Do not generate surface samples in dark gaps between lights.
+                    bool reached=false;
+                    for(const auto& light:source->lights)
+                    {
+                        const float radius=light.radius+bounce_reach;
+                        if(light.strength>0.0f &&
+                           length_squared(p-light.position)<=radius*radius)
+                        {
+                            reached=true;
+                            break;
+                        }
+                    }
+                    if(!reached)continue;
                     points.push_back({
                         {p.x,p.y,p.z,0.0f},
                         {normal.x,normal.y,normal.z,0.0f},{}
@@ -436,12 +502,12 @@ namespace clt::postprocess
                 // Keep all casters that can intersect a light's radius,
                 // including those just outside the probe volume.
                 const bool inside=
-                    box.maximum.x>=grid_origin.x-2.6f &&
-                    box.maximum.y>=grid_origin.y-2.6f &&
-                    box.maximum.z>=grid_origin.z-2.6f &&
-                    box.minimum.x<=limit.x+2.6f &&
-                    box.minimum.y<=limit.y+2.6f &&
-                    box.minimum.z<=limit.z+2.6f;
+                    box.maximum.x>=origin.x-bounce_reach &&
+                    box.maximum.y>=origin.y-bounce_reach &&
+                    box.maximum.z>=origin.z-bounce_reach &&
+                    box.minimum.x<=limit.x+bounce_reach &&
+                    box.minimum.y<=limit.y+bounce_reach &&
+                    box.minimum.z<=limit.z+bounce_reach;
                 bool near_light=false;
                 for(const auto& light:source->lights)
                 {
@@ -619,6 +685,34 @@ namespace clt::postprocess
                   << points.size() << " probes, "
                   << primitives.size() << " mesh triangles, "
                   << nodes.size() << " shadow nodes\n";
+
+        const bool new_shape=
+            extent.width!=data.grid_extent.width ||
+            extent.height!=data.grid_extent.height ||
+            extent.depth!=data.grid_extent.depth;
+        data.grid_origin=origin;
+        data.grid_spacing=spacing;
+        data.grid_extent=extent;
+        if(new_shape)
+        {
+            // synchronize_scene() is called after prior GPU frames are idle.
+            for(std::uint32_t i=0;i<data.frames.size();++i)
+            {
+                auto& frame=data.frames[i];
+                create_grid(frame,extent);
+                vk::DescriptorImageInfo gi{};
+                gi.imageView=frame.grid_view;
+                gi.imageLayout=vk::ImageLayout::eGeneral;
+                data.gi_sets->write_image(i,0,gi);
+                gi.sampler=data.sampler;
+                data.lighting_sets->write_image(i,4,gi);
+            }
+        }
+        std::clog << "clt: light-driven GI volume: "
+                  << extent.width << "x" << extent.height << "x"
+                  << extent.depth << " probes, spacing=" << spacing
+                  << ", origin=(" << origin.x << "," << origin.y
+                  << "," << origin.z << ")\n";
 
         const auto storage=vk::BufferUsageFlagBits::eStorageBuffer;
         const auto memory=vk::MemoryPropertyFlagBits::eHostVisible |
