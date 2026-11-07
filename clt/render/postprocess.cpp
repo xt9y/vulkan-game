@@ -61,6 +61,7 @@ namespace clt::postprocess
             gpu::owned_buffer lights;
             gpu::owned_buffer triangles;
             gpu::owned_buffer nodes;
+            gpu::owned_buffer shadow_light_ranges;
             gpu::owned_buffer neighborhood_offsets;
             gpu::owned_buffer neighborhood_indices;
             std::shared_ptr<const ::scene::state> snapshot;
@@ -258,7 +259,7 @@ namespace clt::postprocess
             data.gi_sets=std::make_unique<gpu::descriptors>();
             data.gi_sets->create(bindings(0,1,vk::ShaderStageFlagBits::eCompute,6),count);
             data.lighting_sets=std::make_unique<gpu::descriptors>();
-            data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,4),count);
+            data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,5),count);
             data.tone_sets=std::make_unique<gpu::descriptors>();
             data.tone_sets->create(bindings(1,1,vk::ShaderStageFlagBits::eCompute),count);
             data.present_sets=std::make_unique<gpu::descriptors>();
@@ -299,6 +300,11 @@ namespace clt::postprocess
             data.lights=gpu::create_buffer(64*sizeof(point_light),storage,memory);
             data.triangles=gpu::create_buffer(3*sizeof(std::array<float,4>),storage,memory);
             data.nodes=gpu::create_buffer(sizeof(shadow_node),storage,memory);
+            data.shadow_light_ranges=gpu::create_buffer(
+                64*sizeof(bvh::light_tree_range),storage,memory);
+            const std::array<bvh::light_tree_range,64> initial_ranges{};
+            vk::buffer::write(data.shadow_light_ranges,initial_ranges.data(),
+                              sizeof(initial_ranges));
             data.neighborhood_offsets=gpu::create_buffer(2*sizeof(std::uint32_t),storage,memory);
             data.neighborhood_indices=gpu::create_buffer(sizeof(std::uint32_t),storage,memory);
 
@@ -360,6 +366,7 @@ namespace clt::postprocess
                 data.lighting_sets->write_buffer(i,7,vk::buffer::descriptor(data.triangles));
                 data.lighting_sets->write_buffer(i,8,vk::buffer::descriptor(data.nodes));
                 data.lighting_sets->write_buffer(i,9,vk::buffer::descriptor(current.tile_lights));
+                data.lighting_sets->write_buffer(i,10,vk::buffer::descriptor(data.shadow_light_ranges));
                 std::array<vk::DescriptorImageInfo,2> tone{};
                 tone[0].sampler = data.sampler;
                 tone[0].imageView = current.hdr.view;
@@ -753,13 +760,27 @@ namespace clt::postprocess
             }))
             throw std::runtime_error("Failed to schedule lighting preparation");
         auto nodes=bvh::build_stackless(triangles);
+        // The original tree remains at the beginning of both buffers; GI
+        // and probe-cloud queries continue using its original counts.
+        const auto shared_nodes=static_cast<std::uint32_t>(nodes.size());
+        const auto shared_vertices=static_cast<std::uint32_t>(triangles.size());
+        std::vector<bvh::local_light> local_lights;
+        local_lights.reserve(lights.size());
+        for(const auto& light:lights)
+            local_lights.push_back({
+                {light.position_range[0],light.position_range[1],
+                 light.position_range[2]},light.position_range[3]
+            });
+        const auto light_ranges=bvh::append_light_local_trees(
+            triangles,nodes,local_lights);
         preparation.wait_idle();
         preparation.commit(1);
         auto neighborhoods=std::move(indexed.value());
         std::clog << "clt: Rogue lighting geometry: "
                   << points.size() << " probes, "
-                  << triangles.size()/3 << " mesh triangles, "
-                  << nodes.size() << " shadow nodes\n";
+                  << shared_vertices/3 << " mesh triangles, "
+                  << shared_nodes << " shared shadow nodes, "
+                  << nodes.size()-shared_nodes << " local shadow nodes\n";
 
         const bool new_shape=
             extent.width!=data.grid_extent.width ||
@@ -811,6 +832,9 @@ namespace clt::postprocess
 
         data.triangles=std::move(new_triangles);
         data.nodes=std::move(new_nodes);
+        if(!light_ranges.empty())
+            vk::buffer::write(data.shadow_light_ranges,
+                light_ranges.data(),light_ranges.size()*sizeof(bvh::light_tree_range));
         // Ordered candidate lists keep the original sum order for each cell.
         const auto offset_bytes=neighborhoods.offsets.size()*sizeof(std::uint32_t);
         const auto candidate_bytes=neighborhoods.indices.size()*sizeof(std::uint32_t);
@@ -823,9 +847,9 @@ namespace clt::postprocess
             vk::buffer::write(new_candidates,neighborhoods.indices.data(),candidate_bytes);
         data.neighborhood_offsets=std::move(new_offsets);
         data.neighborhood_indices=std::move(new_candidates);
-        data.node_count=static_cast<std::uint32_t>(nodes.size());
+        data.node_count=shared_nodes;
         data.point_count=static_cast<std::uint32_t>(points.size());
-        data.vertex_count=static_cast<std::uint32_t>(triangles.size());
+        data.vertex_count=shared_vertices;
         data.light_count=static_cast<std::uint32_t>(lights.size());
         for(std::uint32_t i=0;i<data.frames.size();++i)
         {
@@ -876,6 +900,7 @@ namespace clt::postprocess
         data.lights.reset();
         data.triangles.reset();
         data.nodes.reset();
+        data.shadow_light_ranges.reset();
         data.neighborhood_offsets.reset();
         data.neighborhood_indices.reset();
         if (data.sampler) device.destroySampler(data.sampler);
