@@ -73,9 +73,15 @@ static void prepare_editor_font(void)
             return;
         }
     }
-    if(system("git -C build/editor-font-repository sparse-checkout set "
+    // Keep the original pixel-font revision reproducible.
+    if(system("git -C build/editor-font-repository fetch -q --depth 1 "
+              "origin 2ab96641cc98912ffcdcae67c77a10de5e0fdc7d && "
+              "git -C build/editor-font-repository checkout -q --detach "
+              "2ab96641cc98912ffcdcae67c77a10de5e0fdc7d && "
+              "git -C build/editor-font-repository sparse-checkout set "
               "Rogue/Rogue/res/textures/font")!=0)
-        fprintf(stderr,"editor: font asset checkout failed; using fallback\\n");
+        fprintf(stderr,"editor: original font checkout requires GitHub "
+                       "access to xt9y/hellengine-bak; using fallback\\n");
 }
 
 void build(C_Build* b)
