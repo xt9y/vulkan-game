@@ -76,8 +76,17 @@ Platform requirements:
 
 Rendering status:
   Rendering uses Rogue/hellengine-bak's world-space point-cloud and 3D probe
-  approach: static collision surfaces provide 0.3-unit lighting samples, and
-  RGBA16F 32x22x36 probes at 0.2-unit spacing provide diffuse GI.
+  approach: static collision surfaces provide 0.3-unit lighting samples.
+  The RGBA16F 3D irradiance grid now derives its origin and extent from the
+  union of server-authored point-light spheres, including 2.6 units of bounce
+  reach. Probe spacing starts at 0.2 units and increases only when necessary
+  to fit a 32,768-cell GPU-work budget and the Vulkan 3D-image size limit.
+  Cells outside the light-influenced spheres are zeroed. Space draws every
+  third nonzero probe as a sphere, not a fixed rectangular debug block.
+  Updating server light positions or radii repositions/reallocates the GI
+  volume when the client receives a new scene snapshot. The image is still
+  one rectangular 3D allocation: distant separate lights may lower effective
+  probe density because their union contains empty space.
   Point-light shadows and probe visibility now trace the actual streamed
   mesh triangles (including imported models) through a compact stackless BVH
   built when a scene snapshot changes. This replaces the old collision-box
@@ -90,9 +99,10 @@ Rendering status:
   Vulkan shaders, static light positions and level configuration remain
   game-specific; reusable Vulkan modules stay generic.
 
-  The finite probe volume is centered around the demo scene. This is not a
-  literal OpenGL cubemap-PCF port, and performance, native compilation, and
-  Vulkan validation on macOS/Linux/Windows remain unverified.
+  The adaptive probe volume follows the currently streamed light locations
+  instead of the demo center. This is not a literal OpenGL cubemap-PCF port;
+  native compilation, rendering accuracy, and performance remain unverified
+  on macOS/Linux/Windows.
 
 Rendering and reusable systems:
   VulkanRender owns general indexed geometry buffers, sampled G-buffer
