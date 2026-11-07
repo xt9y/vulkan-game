@@ -23,8 +23,6 @@ namespace game::options
         std::string culling_shader, lighting_shader, tonemap_shader;
         std::string fullscreen_shader, presentation_shader;
         float exposure;
-        vk::util::math::vec3 sun_direction;
-        float sun_intensity;
     };
 
     struct state
