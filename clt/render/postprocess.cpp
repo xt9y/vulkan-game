@@ -138,8 +138,7 @@ namespace clt::postprocess
         }
 
         void compute(vk::CommandBuffer command,const gpu::compute& program,
-                     vk::DescriptorSet set,const camera::frame& frame,
-                     bool half=false)
+                     vk::DescriptorSet set,const camera::frame& frame)
         {
             const auto extent=vk::swapchain::get()->extent;
             const auto& view=frame.pose;
@@ -158,8 +157,8 @@ namespace clt::postprocess
                  float(get().vertex_count),0.0f},
                 {grid_origin.x,grid_origin.y,grid_origin.z,grid_spacing}
             };
-            const auto width=half?(extent.width+1)/2:extent.width;
-            const auto height=half?(extent.height+1)/2:extent.height;
+            const auto width=extent.width;
+            const auto height=extent.height;
             program.dispatch(command,(width+7)/8,(height+7)/8,1,
                              {set},&controls,sizeof(controls));
         }
@@ -338,26 +337,118 @@ namespace clt::postprocess
         }
     }
 
-    // Only called after all previous GPU frames are idle.
-    void synchronize_lights()
+    // The original Rogue backend samples static triangle surfaces every
+    // 0.3 units. World-space positions use the same instance transforms
+    // as the raster geometry; skinned surfaces were not included in Rogue's
+    // shadow/point-cloud generation either.
+    void synchronize_scene()
     {
         auto& data=get();
         const auto source=connection::snapshot();
-        const auto count=source?source->lights.size():0;
-        if(count>64)
-            throw std::runtime_error("Scene exceeds 64 point lights");
-        if(count)
+        if(source==data.snapshot && !data.dirty)return;
+
+        using namespace vk::util::math;
+        std::vector<point_light> lights;
+        std::vector<probe_point> points;
+        std::vector<std::array<float,4>> triangles;
+        if(source)
         {
-            std::array<point_light,64> payload{};
-            for(std::size_t i=0;i<count;++i)
+            if(source->lights.size()>64)
+                throw std::runtime_error("Scene exceeds 64 point lights");
+            for(const auto& light:source->lights)
+                lights.push_back({
+                    {light.position.x,light.position.y,light.position.z,light.radius},
+                    {light.color.x,light.color.y,light.color.z,light.strength}
+                });
+
+            const vec3 limit{
+                grid_origin.x+grid_width*grid_spacing,
+                grid_origin.y+grid_height*grid_spacing,
+                grid_origin.z+grid_depth*grid_spacing
+            };
+            for(const auto& instance:source->instances)
             {
-                const auto& light=source->lights[i];
-                payload[i]={{light.position.x,light.position.y,light.position.z,light.radius},
-                            {light.color.x,light.color.y,light.color.z,light.strength}};
+                const auto mesh=std::find_if(source->meshes.begin(),source->meshes.end(),
+                    [&](const ::scene::mesh& item){return item.id==instance.mesh_id;});
+                if(mesh==source->meshes.end() || mesh->skin_id)continue;
+                const auto transform=[&](vec3 position) {
+                    const auto scale=instance.pose.scale;
+                    return instance.pose.position+rotate(instance.pose.rotation,
+                        vec3{position.x*scale.x,position.y*scale.y,position.z*scale.z});
+                };
+                for(std::size_t i=0;i+2<mesh->indices.size();i+=3)
+                {
+                    const auto& a=mesh->vertices.at(mesh->indices[i]);
+                    const auto& b=mesh->vertices.at(mesh->indices[i+1]);
+                    const auto& c=mesh->vertices.at(mesh->indices[i+2]);
+                    const vec3 A=transform(a.position);
+                    const vec3 B=transform(b.position);
+                    const vec3 C=transform(c.position);
+                    for(const auto& p:{A,B,C})
+                        triangles.push_back({p.x,p.y,p.z,0.0f});
+                    const vec3 e1=B-A,e2=C-A;
+                    const vec3 normal=normalize(rotate(instance.pose.rotation,
+                        a.normal+b.normal+c.normal));
+                    if(length_squared(normal)<0.5f)continue;
+                    const int nu=std::max(1,int(std::ceil(length(e1)/0.3f)));
+                    const int nv=std::max(1,int(std::ceil(length(e2)/0.3f)));
+                    for(int j=0;j<nv;++j)
+                    for(int k=0;k<nu;++k)
+                    {
+                        const float u=(float(k)+0.5f)/float(nu);
+                        const float v=(float(j)+0.5f)/float(nv);
+                        if(u+v>=1.0f)continue;
+                        const vec3 p=A+e1*u+e2*v;
+                        if(p.x<grid_origin.x || p.y<grid_origin.y ||
+                           p.z<grid_origin.z || p.x>=limit.x ||
+                           p.y>=limit.y || p.z>=limit.z)continue;
+                        points.push_back({
+                            {p.x,p.y,p.z,0.0f},
+                            {normal.x,normal.y,normal.z,0.0f},
+                            {}
+                        });
+                    }
+                }
             }
-            vk::buffer::write(data.lights,payload.data(),count*sizeof(point_light));
         }
-        data.light_count=static_cast<std::uint32_t>(count);
+        // Avoid silently discarding the geometry required for shadows.
+        if(points.size()>65536 || triangles.size()>196608)
+            throw std::runtime_error("Rogue probe volume scene exceeds supported geometry budget");
+
+        const auto storage=vk::BufferUsageFlagBits::eStorageBuffer;
+        const auto memory=vk::MemoryPropertyFlagBits::eHostVisible |
+                          vk::MemoryPropertyFlagBits::eHostCoherent;
+        auto new_points=gpu::create_buffer(
+            std::max<std::size_t>(sizeof(probe_point),points.size()*sizeof(probe_point)),
+            storage,memory);
+        auto new_triangles=gpu::create_buffer(
+            std::max<std::size_t>(3*sizeof(std::array<float,4>),
+                                  triangles.size()*sizeof(std::array<float,4>)),
+            storage,memory);
+        if(!points.empty())
+            vk::buffer::write(new_points,points.data(),points.size()*sizeof(probe_point));
+        if(!triangles.empty())
+            vk::buffer::write(new_triangles,triangles.data(),
+                              triangles.size()*sizeof(std::array<float,4>));
+        if(!lights.empty())
+            vk::buffer::write(data.lights,lights.data(),
+                              lights.size()*sizeof(point_light));
+
+        data.points=std::move(new_points);
+        data.triangles=std::move(new_triangles);
+        data.point_count=static_cast<std::uint32_t>(points.size());
+        data.vertex_count=static_cast<std::uint32_t>(triangles.size());
+        data.light_count=static_cast<std::uint32_t>(lights.size());
+        for(std::uint32_t i=0;i<data.frames.size();++i)
+        {
+            data.cloud_sets->write_buffer(i,0,vk::buffer::descriptor(data.points));
+            data.cloud_sets->write_buffer(i,1,vk::buffer::descriptor(data.triangles));
+            data.gi_sets->write_buffer(i,1,vk::buffer::descriptor(data.points));
+            data.gi_sets->write_buffer(i,2,vk::buffer::descriptor(data.triangles));
+            data.lighting_sets->write_buffer(i,7,vk::buffer::descriptor(data.triangles));
+        }
+        data.snapshot=source;
+        data.dirty=true;
     }
 
     void release()
