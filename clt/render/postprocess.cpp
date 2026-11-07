@@ -69,9 +69,8 @@ namespace clt::postprocess
         static_assert(sizeof(point_light)==32);
 
         struct push {
-            std::int32_t enabled;
             float exposure;
-            std::array<float,2> padding{};
+            std::array<float,3> padding{};
             std::array<float,4> eye_near{};
             std::array<float,4> forward_far{};
             std::array<float,4> right_tan{};
@@ -121,7 +120,7 @@ namespace clt::postprocess
             const auto& position=frame.eye;
             const auto& lighting=game::options::get()->graphics;
             const push controls{
-                1,exposure_value.load(std::memory_order_relaxed),{},
+                exposure_value.load(std::memory_order_relaxed),{},
                 {position.x,position.y,position.z,0.1f},
                 {sy*cp,sp,-cy*cp,1000.0f},
                 {cy,0,sy,tan_half*aspect},
