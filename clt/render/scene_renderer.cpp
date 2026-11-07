@@ -29,6 +29,9 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <unordered_map>
+#include <map>
+#include <bit>
 
 namespace clt::scene_renderer
 {
@@ -646,14 +649,16 @@ namespace clt::scene_renderer
         }
     }
 
-    void refresh_instances(gpu_mesh& mesh, std::size_t first = 0)
+    void refresh_instances(gpu_mesh& mesh, std::size_t first = 0,
+                           gpu::upload::batch* shared_upload = nullptr)
     {
         if (mesh.transforms.empty())
         {
             return;
         }
 
-        gpu::upload::batch transfers;
+        gpu::upload::batch local_upload;
+        auto& transfers=shared_upload?*shared_upload:local_upload;
         const auto transform_bytes = mesh.transforms.size() * sizeof(instance_data);
         if (!mesh.instance_buffer.handle || mesh.instance_buffer.size < transform_bytes)
         {
@@ -738,7 +743,7 @@ namespace clt::scene_renderer
             );
         }
 
-        transfers.finish();
+        if(!shared_upload)transfers.finish();
         bind_instances(mesh);
     }
 
@@ -756,15 +761,17 @@ namespace clt::scene_renderer
             static_cast<std::uint32_t>(count));
 
         std::uint32_t index = 0;
+        gpu::upload::batch transfers;
         for(auto& mesh : data.meshes)
         {
             if(mesh.transforms.empty()) continue;
             // Existing instance and geometry buffers remain GPU-resident.
-            refresh_instances(mesh, mesh.transforms.size());
+            refresh_instances(mesh, mesh.transforms.size(),&transfers);
             for(auto& frame : mesh.frames)
                 frame.set = data.instance_sets->set(index++);
             bind_instances(mesh);
         }
+        transfers.finish();
     }
 
     bool needs_sync()
@@ -823,26 +830,26 @@ namespace clt::scene_renderer
                 previous_counts.push_back(mesh.transforms.size());
             }
 
-            for (std::size_t i = data.snapshot->instances.size();
-                 i < source->instances.size(); ++i)
+            std::unordered_map<std::uint32_t,std::size_t> mesh_indices;
+            mesh_indices.reserve(data.meshes.size());
+            for(std::size_t j=0;j<data.meshes.size();++j)
+                mesh_indices.emplace(data.meshes[j].id,j);
+            for(std::size_t i=data.snapshot->instances.size();
+                i<source->instances.size();++i)
             {
-                const auto& instance = source->instances[i];
-                for (std::size_t j = 0; j < data.meshes.size(); ++j)
-                {
-                    if (data.meshes[j].id == instance.mesh_id)
-                    {
-                        append_instance(data.meshes[j], instance);
-                        break;
-                    }
-                }
+                const auto found=mesh_indices.find(source->instances[i].mesh_id);
+                if(found!=mesh_indices.end())
+                    append_instance(data.meshes[found->second],source->instances[i]);
             }
+            gpu::upload::batch scene_upload;
             for (std::size_t i = 0; i < data.meshes.size(); ++i)
             {
                 if (data.meshes[i].transforms.size() != previous_counts[i])
                 {
-                    refresh_instances(data.meshes[i], previous_counts[i]);
+                    refresh_instances(data.meshes[i], previous_counts[i],&scene_upload);
                 }
             }
+            scene_upload.finish();
             data.snapshot = source;
             return;
         }
@@ -927,16 +934,16 @@ namespace clt::scene_renderer
         {
             if (source)
             {
-                for (const auto& instance : source->instances)
+                std::unordered_map<std::uint32_t,std::size_t> mesh_indices;
+                mesh_indices.reserve(meshes.size());
+                for(std::size_t j=0;j<meshes.size();++j)
+                    mesh_indices.emplace(meshes[j].id,j);
+                for(const auto& instance:source->instances)
                 {
-                    const auto it = std::find_if(meshes.begin(), meshes.end(),
-                        [&](const gpu_mesh& mesh) { return mesh.id == instance.mesh_id; });
-                    if (it == meshes.end() || !it->index_count)
-                    {
-                        continue;
-                    }
-
-                    append_instance(*it, instance);
+                    const auto found=mesh_indices.find(instance.mesh_id);
+                    if(found==mesh_indices.end())continue;
+                    auto& mesh=meshes[found->second];
+                    if(mesh.index_count)append_instance(mesh,instance);
                 }
 
                 // Allocate each scene descriptor through the reusable GPU
@@ -948,6 +955,7 @@ namespace clt::scene_renderer
                 new_sets->create(std::vector<vk::DescriptorSetLayoutBinding>(schema.begin(),schema.end()),
                     static_cast<std::uint32_t>(count));
                 std::uint32_t descriptor_index=0;
+                gpu::upload::batch instances_upload;
 
                 for (auto& mesh : meshes)
                 {
@@ -956,7 +964,7 @@ namespace clt::scene_renderer
                         continue;
                     }
 
-                    refresh_instances(mesh);
+                    refresh_instances(mesh,0,&instances_upload);
 
                     for (auto& frame : mesh.frames)
                     {
@@ -964,6 +972,7 @@ namespace clt::scene_renderer
                     }
                     bind_instances(mesh);
                 }
+                instances_upload.finish();
             }
         }
         catch (...)
