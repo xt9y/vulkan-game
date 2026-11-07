@@ -10,9 +10,11 @@ Build:
   c build vulkan-server
   c build vulkan-client
 The build pins VulkanEngine and VulkanSystems. VulkanNetwork uses Mbed TLS
-3.6.7 with DTLS 1.2, mandatory mutual X.509 authentication and forward-secret
-ECDHE-AES-GCM cipher suites. All gameplay, movement, weapon and reliable scene
-packets use the DTLS socket; there is no plaintext application fallback.
+3.6.7 with DTLS 1.2 and forward-secret ECDHE-AES-GCM cipher suites.
+Automatic mode uses a persistent server identity and per-destination public
+key pinning (TOFU); explicit CA-verified mutual X.509 TLS is also supported.
+All gameplay, movement, weapon and reliable scene packets use the DTLS
+socket; there is no plaintext application fallback.
 The game owns its scene and authority protocols; network/session is reusable.
 
 Networking (automatic by default):
