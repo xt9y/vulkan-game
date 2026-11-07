@@ -33,6 +33,9 @@ namespace clt::postprocess
         struct frame {
             image_target hdr;
             image_target ldr;
+            gpu::owned_image grid;
+            vk::ImageView grid_view{};
+            bool dirty=true;
             vk::DescriptorSet cloud{};
             vk::DescriptorSet gi{};
             vk::DescriptorSet lighting{};
@@ -46,11 +49,8 @@ namespace clt::postprocess
             gpu::owned_buffer lights;
             gpu::owned_buffer points;
             gpu::owned_buffer triangles;
-            gpu::owned_image grid;
-            vk::ImageView grid_view{};
             std::shared_ptr<const ::scene::state> snapshot;
             std::uint32_t light_count=0, point_count=0, vertex_count=0;
-            bool dirty=true;
             std::unique_ptr<gpu::descriptors> cloud_sets;
             std::unique_ptr<gpu::descriptors> gi_sets;
             std::unique_ptr<gpu::descriptors> lighting_sets;
@@ -170,14 +170,14 @@ namespace clt::postprocess
                           std::memory_order_relaxed);
     }
 
-    bool needs_update()
+    bool needs_update(std::uint32_t image)
     {
-        return get().dirty;
+        return get().frames.at(image).dirty;
     }
 
-    void updated()
+    void updated(std::uint32_t image)
     {
-        get().dirty=false;
+        get().frames.at(image).dirty=false;
     }
 
     void set_exposure(float exposure)
@@ -253,24 +253,6 @@ namespace clt::postprocess
             data.points=gpu::create_buffer(sizeof(probe_point),storage,memory);
             data.triangles=gpu::create_buffer(3*sizeof(std::array<float,4>),storage,memory);
 
-            vk::ImageCreateInfo grid_info{};
-            grid_info.imageType=vk::ImageType::e3D;
-            grid_info.format=vk::Format::eR16G16B16A16Sfloat;
-            grid_info.extent={grid_width,grid_height,grid_depth};
-            grid_info.mipLevels=1;
-            grid_info.arrayLayers=1;
-            grid_info.samples=vk::SampleCountFlagBits::e1;
-            grid_info.tiling=vk::ImageTiling::eOptimal;
-            grid_info.usage=vk::ImageUsageFlagBits::eStorage |
-                            vk::ImageUsageFlagBits::eSampled;
-            data.grid=gpu::create_image(grid_info,vk::MemoryPropertyFlagBits::eDeviceLocal);
-            vk::ImageViewCreateInfo grid_view{};
-            grid_view.image=data.grid.handle;
-            grid_view.viewType=vk::ImageViewType::e3D;
-            grid_view.format=grid_info.format;
-            grid_view.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1};
-            data.grid_view=vk::image_view::create(grid_view);
-
             data.frames.reserve(count);
             for(std::uint32_t i=0;i<count;++i)
             {
@@ -280,6 +262,24 @@ namespace clt::postprocess
                 current.hdr={attachments.hdr,attachments.hdr_view};
                 current.ldr={attachments.ldr,attachments.ldr_view};
 
+                vk::ImageCreateInfo grid_info{};
+                grid_info.imageType=vk::ImageType::e3D;
+                grid_info.format=vk::Format::eR16G16B16A16Sfloat;
+                grid_info.extent=vk::Extent3D{grid_width,grid_height,grid_depth};
+                grid_info.mipLevels=1;
+                grid_info.arrayLayers=1;
+                grid_info.samples=vk::SampleCountFlagBits::e1;
+                grid_info.tiling=vk::ImageTiling::eOptimal;
+                grid_info.usage=vk::ImageUsageFlagBits::eStorage |
+                                vk::ImageUsageFlagBits::eSampled;
+                current.grid=gpu::create_image(grid_info,vk::MemoryPropertyFlagBits::eDeviceLocal);
+                vk::ImageViewCreateInfo grid_view{};
+                grid_view.image=current.grid.handle;
+                grid_view.viewType=vk::ImageViewType::e3D;
+                grid_view.format=grid_info.format;
+                grid_view.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1};
+                current.grid_view=vk::image_view::create(grid_view);
+
                 current.cloud=data.cloud_sets->set(i);
                 current.gi=data.gi_sets->set(i);
                 current.lighting=data.lighting_sets->set(i);
@@ -288,7 +288,7 @@ namespace clt::postprocess
 
                 const auto g = scene_renderer::outputs(i);
                 vk::DescriptorImageInfo grid_storage{};
-                grid_storage.imageView=data.grid_view;
+                grid_storage.imageView=current.grid_view;
                 grid_storage.imageLayout=vk::ImageLayout::eGeneral;
                 data.gi_sets->write_image(i,0,grid_storage);
                 data.cloud_sets->write_buffer(i,0,vk::buffer::descriptor(data.points));
@@ -307,7 +307,7 @@ namespace clt::postprocess
                         : vk::ImageLayout::eShaderReadOnlyOptimal;
                 }
                 lighting[4].sampler=data.sampler;
-                lighting[4].imageView=data.grid_view;
+                lighting[4].imageView=current.grid_view;
                 lighting[4].imageLayout=vk::ImageLayout::eGeneral;
                 lighting[5].imageView=current.hdr.view;
                 lighting[5].imageLayout=vk::ImageLayout::eGeneral;
@@ -345,7 +345,7 @@ namespace clt::postprocess
     {
         auto& data=get();
         const auto source=connection::snapshot();
-        if(source==data.snapshot && !data.dirty)return;
+        if(source==data.snapshot)return;
 
         using namespace vk::util::math;
         std::vector<point_light> lights;
@@ -448,13 +448,18 @@ namespace clt::postprocess
             data.lighting_sets->write_buffer(i,7,vk::buffer::descriptor(data.triangles));
         }
         data.snapshot=source;
-        data.dirty=true;
+        for(auto& frame:data.frames)frame.dirty=true;
     }
 
     void release()
     {
         auto& data = get();
         const auto device = vk::device::get()->handle;
+        for(auto& frame:data.frames)
+        {
+            if(frame.grid_view)vk::image_view::destroy(frame.grid_view);
+            frame.grid_view={};
+        }
         data.frames.clear();
         data.cloud_program.reset();
         data.gi_program.reset();
@@ -472,9 +477,6 @@ namespace clt::postprocess
         data.lights.reset();
         data.points.reset();
         data.triangles.reset();
-        if(data.grid_view)vk::image_view::destroy(data.grid_view);
-        data.grid_view={};
-        data.grid.reset();
         if (data.sampler) device.destroySampler(data.sampler);
 
         data = {};
@@ -483,12 +485,12 @@ namespace clt::postprocess
     targets images(std::uint32_t image)
     {
         const auto& frame = get().frames.at(image);
-        return {get().grid.handle,get().points.handle,frame.hdr.image,frame.ldr.image};
+        return {frame.grid.handle,get().points.handle,frame.hdr.image,frame.ldr.image};
     }
 
     void cloud(vk::CommandBuffer command,std::uint32_t image)
     {
-        if(!get().dirty || !get().point_count)return;
+        if(!get().frames.at(image).dirty || !get().point_count)return;
         const cloud_push push{get().point_count,get().vertex_count,get().light_count,0};
         get().cloud_program->dispatch(command,(get().point_count+63)/64,1,1,
                                       {get().frames.at(image).cloud},&push,sizeof(push));
@@ -496,7 +498,7 @@ namespace clt::postprocess
 
     void gi(vk::CommandBuffer command,std::uint32_t image)
     {
-        if(!get().dirty)return;
+        if(!get().frames.at(image).dirty)return;
         const grid_push push{
             get().point_count,get().vertex_count,{},
             {grid_origin.x,grid_origin.y,grid_origin.z,grid_spacing}
