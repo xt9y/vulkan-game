@@ -103,7 +103,7 @@ namespace net::scene_stream
         // The byte budget, not an arbitrary object count, bounds the snapshot.
         if (scene.meshes.size() > max_scene_bytes / 12 ||
             scene.instances.size() > max_scene_bytes / 48 ||
-             scene.lights.size() > max_scene_bytes / 32)
+             scene.lights.size() > 64)
         {
             throw std::runtime_error("Scene snapshot exceeds maximum batch size");
         }
@@ -302,6 +302,7 @@ namespace net::scene_stream
             !input.take(skin_count) ||
             !input.take(collider_count) ||
             !input.take(light_count) ||
+            light_count > 64 ||
             light_count > input.remaining() / 32 ||
             collider_count > input.remaining() / 24 ||
             texture_count > input.remaining() / 20 ||
