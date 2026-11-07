@@ -773,6 +773,9 @@ namespace clt::postprocess
             });
         const auto light_ranges=bvh::append_light_local_trees(
             triangles,nodes,local_lights);
+        // Both the shared tree and local subtrees now reference immutable
+        // triangles. Encode (origin, edge1, edge2) for all shadow queries.
+        bvh::store_triangle_edges(triangles);
         preparation.wait_idle();
         preparation.commit(1);
         auto neighborhoods=std::move(indexed.value());
