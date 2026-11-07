@@ -100,17 +100,17 @@ vec3 emission_at(ivec2 pixel)
 
 void main()
 {
-    ivec2 half=ivec2(gl_GlobalInvocationID.xy);
+    ivec2 pixel=ivec2(gl_GlobalInvocationID.xy);
     ivec2 extent=imageSize(indirect_shadow);
-    if(any(greaterThanEqual(half,extent)))return;
+    if(any(greaterThanEqual(pixel,extent)))return;
 
     ivec2 size=textureSize(g_depth,0);
-    ivec2 p=min(half*2+ivec2(1),size-1);
+    ivec2 p=min(pixel*2+ivec2(1),size-1);
     float depth=texelFetch(g_depth,p,0).r;
     // First-person weapon depth is mapped to 0..0.099; it is not world geometry.
     if(depth>=0.999999 || depth<0.1)
     {
-        imageStore(indirect_shadow,half,vec4(0.0,0.0,0.0,1.0));
+        imageStore(indirect_shadow,pixel,vec4(0.0,0.0,0.0,1.0));
         return;
     }
     vec3 P=position(p,size,depth);
@@ -173,5 +173,5 @@ void main()
         indirect+=outgoing*weight;
     }
     // Fixed pattern avoids stochastic flicker; estimated bounce is local only.
-    imageStore(indirect_shadow,half,vec4(max(indirect,vec3(0.0)),visible));
+    imageStore(indirect_shadow,pixel,vec4(max(indirect,vec3(0.0)),visible));
 }
