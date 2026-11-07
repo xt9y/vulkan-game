@@ -20,6 +20,8 @@ struct ShadowNode {
     uvec4 info; // next node after subtree, first triangle, triangle count
 };
 layout(std430,set=0,binding=8) readonly buffer ShadowTree { ShadowNode nodes[]; };
+// Conservative 16x16 light lists: [count, indices[0..63]] for each tile.
+layout(std430,set=0,binding=9) readonly buffer TileLights { uint tile_lights[]; };
 
 layout(push_constant) uniform Controls {
     float exposure;
@@ -265,9 +267,13 @@ void main()
     float metallic=clamp(material.g,0.0,1.0);
     float ao=clamp(material.b,0.0,1.0);
     vec3 color=vec3(0.0);
-    uint count=min(uint(max(pc.light_count.x,0.0)),uint(lights.length()));
-    for(uint i=0u;i<count;++i)
+    uint tile_cols=(uint(size.x)+15u)/16u;
+    uint tile=(uint(p.y)/16u)*tile_cols+uint(p.x)/16u;
+    uint offset=tile*65u;
+    uint count=min(tile_lights[offset],64u);
+    for(uint candidate=0u;candidate<count;++candidate)
     {
+        uint i=tile_lights[offset+1u+candidate];
         vec3 to_light=lights[i].position_range.xyz-P;
         float dist=length(to_light);
         float radius=lights[i].position_range.w;
