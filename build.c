@@ -215,6 +215,7 @@ void build(C_Build* b)
     c_use(client, network);
     c_use(client, crypto);
     c_use(client, spatial);
+    c_use(client, jobs);
     c_use(client, engine);
     c_use(client, headers);
     c_use(client, glfw);
