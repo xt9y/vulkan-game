@@ -89,7 +89,7 @@ vec4 filtered_indirect(ivec2 pixel,vec3 normal,float depth)
         ivec2 c=clamp(base+ivec2(x,y),ivec2(0),size-1);
         ivec2 source=min(c*2+ivec2(1),full-1);
         float neighbor_depth=texelFetch(g_depth,source,0).r;
-        if(neighbor_depth>=0.999999)continue;
+        if(neighbor_depth>=0.999999 || neighbor_depth<0.1)continue;
         vec3 neighbor_normal=normalize(
             texelFetch(g_normal,source,0).rgb*2.0-1.0);
         float bilateral=exp(-abs(linear_depth(depth)-
