@@ -3,6 +3,7 @@
 #include "scene_renderer.hpp"
 #include "clt/network/connection.hpp"
 #include "clt/view/camera.hpp"
+#include "util/math/quaternion.hpp"
 #include <render/renderer.hpp>
 #include <render/pipeline.hpp>
 #include <gpu/compute.hpp>
@@ -17,6 +18,8 @@
 #include <cmath>
 #include <stdexcept>
 #include <vector>
+#include <cstdint>
+#include <limits>
 
 namespace clt::postprocess
 {
@@ -30,8 +33,7 @@ namespace clt::postprocess
         struct frame {
             image_target hdr;
             image_target ldr;
-            gpu::owned_image indirect;
-            vk::ImageView indirect_view{};
+            vk::DescriptorSet cloud{};
             vk::DescriptorSet gi{};
             vk::DescriptorSet lighting{};
             vk::DescriptorSet tone{};
@@ -42,7 +44,14 @@ namespace clt::postprocess
             std::vector<frame> frames;
             vk::Sampler sampler{};
             gpu::owned_buffer lights;
-            std::uint32_t light_count=0;
+            gpu::owned_buffer points;
+            gpu::owned_buffer triangles;
+            gpu::owned_image grid;
+            vk::ImageView grid_view{};
+            std::shared_ptr<const ::scene::state> snapshot;
+            std::uint32_t light_count=0, point_count=0, vertex_count=0;
+            bool dirty=true;
+            std::unique_ptr<gpu::descriptors> cloud_sets;
             std::unique_ptr<gpu::descriptors> gi_sets;
             std::unique_ptr<gpu::descriptors> lighting_sets;
             std::unique_ptr<gpu::descriptors> tone_sets;
@@ -50,6 +59,7 @@ namespace clt::postprocess
             std::unique_ptr<::render::postprocess_targets> targets;
             std::unique_ptr<::render::presentation_targets> presentation;
             vk::PipelineLayout present_layout{};
+            std::unique_ptr<gpu::compute> cloud_program;
             std::unique_ptr<gpu::compute> gi_program;
             std::unique_ptr<gpu::compute> lighting_program;
             std::unique_ptr<gpu::compute> tone_program;
@@ -63,12 +73,31 @@ namespace clt::postprocess
         }
 
         std::atomic<float> exposure_value{};
+        std::atomic<bool> draw_probes=false;
+        constexpr std::uint32_t grid_width=32,grid_height=22,grid_depth=36;
+        constexpr float grid_spacing=0.2f;
+        const vk::util::math::vec3 grid_origin{-3.2f,-0.2f,-3.6f};
 
         struct alignas(16) point_light {
             std::array<float,4> position_range{};
             std::array<float,4> color_intensity{};
         };
         static_assert(sizeof(point_light)==32);
+        struct probe_point {
+            std::array<float,4> position{};
+            std::array<float,4> normal{};
+            std::array<float,4> radiance{};
+        };
+        static_assert(sizeof(probe_point)==48);
+        struct cloud_push {
+            std::uint32_t points,vertices,lights,padding=0;
+        };
+        struct grid_push {
+            std::uint32_t points,vertices;
+            std::array<float,2> padding{};
+            std::array<float,4> origin_spacing{};
+        };
+        static_assert(sizeof(grid_push)==32);
 
         struct push {
             float exposure;
@@ -125,14 +154,31 @@ namespace clt::postprocess
                 {sy*cp,sp,-cy*cp,1000.0f},
                 {cy,0,sy,tan_half*aspect},
                 {-sy*sp,cp,cy*sp,tan_half},
-                {float(get().light_count),0.0f,0.0f,0.0f},
-                {0.035f,0.045f,0.065f,1.0f}
+                {float(get().light_count),draw_probes.load(std::memory_order_relaxed)?1.0f:0.0f,
+                 float(get().vertex_count),0.0f},
+                {grid_origin.x,grid_origin.y,grid_origin.z,grid_spacing}
             };
             const auto width=half?(extent.width+1)/2:extent.width;
             const auto height=half?(extent.height+1)/2:extent.height;
             program.dispatch(command,(width+7)/8,(height+7)/8,1,
                              {set},&controls,sizeof(controls));
         }
+    }
+
+    void toggle_probes()
+    {
+        draw_probes.store(!draw_probes.load(std::memory_order_relaxed),
+                          std::memory_order_relaxed);
+    }
+
+    bool needs_update()
+    {
+        return get().dirty;
+    }
+
+    void updated()
+    {
+        get().dirty=false;
     }
 
     void set_exposure(float exposure)
@@ -161,18 +207,23 @@ namespace clt::postprocess
             data.presentation=std::make_unique<::render::presentation_targets>();
             data.presentation->create(vk::swapchain::get()->images,
                 vk::swapchain::get()->format,vk::swapchain::get()->extent);
+            data.cloud_sets=std::make_unique<gpu::descriptors>();
+            data.cloud_sets->create(bindings(0,0,vk::ShaderStageFlagBits::eCompute,3),count);
             data.gi_sets=std::make_unique<gpu::descriptors>();
-            data.gi_sets->create(bindings(4,1,vk::ShaderStageFlagBits::eCompute,1),count);
+            data.gi_sets->create(bindings(0,1,vk::ShaderStageFlagBits::eCompute,2),count);
             data.lighting_sets=std::make_unique<gpu::descriptors>();
-            data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,1),count);
+            data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,2),count);
             data.tone_sets=std::make_unique<gpu::descriptors>();
             data.tone_sets->create(bindings(1,1,vk::ShaderStageFlagBits::eCompute),count);
             data.present_sets=std::make_unique<gpu::descriptors>();
             data.present_sets->create(bindings(1,0,vk::ShaderStageFlagBits::eFragment),count);
             data.present_layout=pipeline_layout(data.present_sets->layout());
+            data.cloud_program=std::make_unique<gpu::compute>();
+            data.cloud_program->create("build/shaders/cloud.comp.spv",
+                                       {data.cloud_sets->layout()},sizeof(cloud_push));
             data.gi_program=std::make_unique<gpu::compute>();
             data.gi_program->create("build/shaders/gi.comp.spv",
-                                    {data.gi_sets->layout()},sizeof(push));
+                                    {data.gi_sets->layout()},sizeof(grid_push));
             data.lighting_program = std::make_unique<gpu::compute>();
             data.lighting_program->create(
                 game::options::get()->graphics.lighting_shader,
@@ -196,10 +247,30 @@ namespace clt::postprocess
                  game::options::get()->graphics.presentation_shader}
             });
 
-            data.lights=gpu::create_buffer(64*sizeof(point_light),
-                vk::BufferUsageFlagBits::eStorageBuffer,
-                vk::MemoryPropertyFlagBits::eHostVisible |
-                vk::MemoryPropertyFlagBits::eHostCoherent);
+            const auto storage=vk::BufferUsageFlagBits::eStorageBuffer;
+            const auto memory=vk::MemoryPropertyFlagBits::eHostVisible |
+                              vk::MemoryPropertyFlagBits::eHostCoherent;
+            data.lights=gpu::create_buffer(64*sizeof(point_light),storage,memory);
+            data.points=gpu::create_buffer(sizeof(probe_point),storage,memory);
+            data.triangles=gpu::create_buffer(3*sizeof(std::array<float,4>),storage,memory);
+
+            vk::ImageCreateInfo grid_info{};
+            grid_info.imageType=vk::ImageType::e3D;
+            grid_info.format=vk::Format::eR16G16B16A16Sfloat;
+            grid_info.extent={grid_width,grid_height,grid_depth};
+            grid_info.mipLevels=1;
+            grid_info.arrayLayers=1;
+            grid_info.samples=vk::SampleCountFlagBits::e1;
+            grid_info.tiling=vk::ImageTiling::eOptimal;
+            grid_info.usage=vk::ImageUsageFlagBits::eStorage |
+                            vk::ImageUsageFlagBits::eSampled;
+            data.grid=gpu::create_image(grid_info,vk::MemoryPropertyFlagBits::eDeviceLocal);
+            vk::ImageViewCreateInfo grid_view{};
+            grid_view.image=data.grid.handle;
+            grid_view.viewType=vk::ImageViewType::e3D;
+            grid_view.format=grid_info.format;
+            grid_view.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1};
+            data.grid_view=vk::image_view::create(grid_view);
 
             data.frames.reserve(count);
             for(std::uint32_t i=0;i<count;++i)
@@ -210,61 +281,41 @@ namespace clt::postprocess
                 current.hdr={attachments.hdr,attachments.hdr_view};
                 current.ldr={attachments.ldr,attachments.ldr_view};
 
-                vk::ImageCreateInfo gi_image{};
-                gi_image.imageType=vk::ImageType::e2D;
-                gi_image.format=vk::Format::eR16G16B16A16Sfloat;
-                gi_image.extent=vk::Extent3D{
-                    (vk::swapchain::get()->extent.width+1)/2,
-                    (vk::swapchain::get()->extent.height+1)/2,1};
-                gi_image.mipLevels=1;
-                gi_image.arrayLayers=1;
-                gi_image.samples=vk::SampleCountFlagBits::e1;
-                gi_image.tiling=vk::ImageTiling::eOptimal;
-                gi_image.usage=vk::ImageUsageFlagBits::eStorage |
-                               vk::ImageUsageFlagBits::eSampled;
-                current.indirect=gpu::create_image(
-                    gi_image,vk::MemoryPropertyFlagBits::eDeviceLocal);
-                vk::ImageViewCreateInfo view{};
-                view.image=current.indirect.handle;
-                view.viewType=vk::ImageViewType::e2D;
-                view.format=gi_image.format;
-                view.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1};
-                current.indirect_view=vk::image_view::create(view);
-
+                current.cloud=data.cloud_sets->set(i);
                 current.gi=data.gi_sets->set(i);
                 current.lighting=data.lighting_sets->set(i);
                 current.tone=data.tone_sets->set(i);
                 current.presentation=data.present_sets->set(i);
 
                 const auto g = scene_renderer::outputs(i);
-                std::array<vk::DescriptorImageInfo,5> gi{};
-                for(std::size_t j=0;j<g.views.size();++j)
-                {
-                    gi[j].sampler=data.sampler;
-                    gi[j].imageView=g.views[j];
-                    gi[j].imageLayout=j==3
-                        ? vk::ImageLayout::eDepthStencilReadOnlyOptimal
-                        : vk::ImageLayout::eShaderReadOnlyOptimal;
-                }
-                gi[4].imageView=current.indirect_view;
-                gi[4].imageLayout=vk::ImageLayout::eGeneral;
-                for(std::uint32_t j=0;j<gi.size();++j)
-                    data.gi_sets->write_image(i,j,gi[j]);
-                data.gi_sets->write_buffer(i,5,
-                    vk::buffer::descriptor(data.lights));
+                vk::DescriptorImageInfo grid_storage{};
+                grid_storage.imageView=data.grid_view;
+                grid_storage.imageLayout=vk::ImageLayout::eGeneral;
+                data.gi_sets->write_image(i,0,grid_storage);
+                data.cloud_sets->write_buffer(i,0,vk::buffer::descriptor(data.points));
+                data.cloud_sets->write_buffer(i,1,vk::buffer::descriptor(data.triangles));
+                data.cloud_sets->write_buffer(i,2,vk::buffer::descriptor(data.lights));
+                data.gi_sets->write_buffer(i,1,vk::buffer::descriptor(data.points));
+                data.gi_sets->write_buffer(i,2,vk::buffer::descriptor(data.triangles));
 
                 std::array<vk::DescriptorImageInfo,6> lighting{};
                 for(std::size_t j=0;j<g.views.size();++j)
-                    lighting[j]=gi[j];
+                {
+                    lighting[j].sampler=data.sampler;
+                    lighting[j].imageView=g.views[j];
+                    lighting[j].imageLayout=j==3
+                        ? vk::ImageLayout::eDepthStencilReadOnlyOptimal
+                        : vk::ImageLayout::eShaderReadOnlyOptimal;
+                }
                 lighting[4].sampler=data.sampler;
-                lighting[4].imageView=current.indirect_view;
+                lighting[4].imageView=data.grid_view;
                 lighting[4].imageLayout=vk::ImageLayout::eGeneral;
                 lighting[5].imageView=current.hdr.view;
                 lighting[5].imageLayout=vk::ImageLayout::eGeneral;
                 for(std::uint32_t j=0;j<lighting.size();++j)
                     data.lighting_sets->write_image(i,j,lighting[j]);
-                data.lighting_sets->write_buffer(i,6,
-                    vk::buffer::descriptor(data.lights));
+                data.lighting_sets->write_buffer(i,6,vk::buffer::descriptor(data.lights));
+                data.lighting_sets->write_buffer(i,7,vk::buffer::descriptor(data.triangles));
                 std::array<vk::DescriptorImageInfo,2> tone{};
                 tone[0].sampler = data.sampler;
                 tone[0].imageView = current.hdr.view;
@@ -313,27 +364,26 @@ namespace clt::postprocess
     {
         auto& data = get();
         const auto device = vk::device::get()->handle;
-        // Image views are destroyed before their RAII image allocations.
-        for(auto& frame:data.frames)
-        {
-            if(frame.indirect_view)
-                vk::image_view::destroy(frame.indirect_view);
-            frame.indirect_view=nullptr;
-        }
         data.frames.clear();
-
+        data.cloud_program.reset();
         data.gi_program.reset();
         data.lighting_program.reset();
         data.tone_program.reset();
         data.present_program.reset();
         data.presentation.reset();
         if (data.present_layout) device.destroyPipelineLayout(data.present_layout);
+        data.cloud_sets.reset();
         data.gi_sets.reset();
         data.lighting_sets.reset();
         data.tone_sets.reset();
         data.present_sets.reset();
         data.targets.reset();
         data.lights.reset();
+        data.points.reset();
+        data.triangles.reset();
+        if(data.grid_view)vk::image_view::destroy(data.grid_view);
+        data.grid_view={};
+        data.grid.reset();
         if (data.sampler) device.destroySampler(data.sampler);
 
         data = {};
@@ -342,14 +392,27 @@ namespace clt::postprocess
     targets images(std::uint32_t image)
     {
         const auto& frame = get().frames.at(image);
-        return {frame.indirect.handle,frame.hdr.image,frame.ldr.image};
+        return {get().grid.handle,get().points.handle,frame.hdr.image,frame.ldr.image};
     }
 
-    void gi(vk::CommandBuffer command,std::uint32_t image,
-            const camera::frame& frame)
+    void cloud(vk::CommandBuffer command,std::uint32_t image)
     {
-        const auto& current=get().frames.at(image);
-        compute(command,*get().gi_program,current.gi,frame,true);
+        if(!get().dirty || !get().point_count)return;
+        const cloud_push push{get().point_count,get().vertex_count,get().light_count,0};
+        get().cloud_program->dispatch(command,(get().point_count+63)/64,1,1,
+                                      {get().frames.at(image).cloud},&push,sizeof(push));
+    }
+
+    void gi(vk::CommandBuffer command,std::uint32_t image)
+    {
+        if(!get().dirty)return;
+        const grid_push push{
+            get().point_count,get().vertex_count,{},
+            {grid_origin.x,grid_origin.y,grid_origin.z,grid_spacing}
+        };
+        get().gi_program->dispatch(command,
+            (grid_width+3)/4,(grid_height+3)/4,(grid_depth+3)/4,
+            {get().frames.at(image).gi},&push,sizeof(push));
     }
 
     void lighting(vk::CommandBuffer command, std::uint32_t image,
