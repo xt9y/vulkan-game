@@ -1079,21 +1079,36 @@ namespace clt::scene_renderer
                 if (!mesh.joint_count || mesh.transforms.empty()) continue;
                 std::vector<animation::matrix> matrices;
                 matrices.reserve(mesh.instances.size() * mesh.joint_count);
+                // Multiple instances often use the same clip and start tick.
+                // Sample that pose once per frame; retain each instance's
+                // palette order and the same exact animation time.
+                std::map<std::array<std::uint32_t,5>,
+                         std::vector<animation::matrix>> sampled_poses;
                 for (const auto& instance : mesh.instances)
                 {
-                    std::vector<animation::matrix> bones;
                     const auto update = connection::animation(instance.id);
                     const auto start = update ? update->start_tick : instance.animation_tick;
                     const auto clip = update ? update->clip : instance.animation;
                     const auto overlay = update ? update->overlay : instance.overlay_animation;
                     const auto weight = update ? update->blend : instance.overlay_weight;
                     const auto root = update ? update->mask_root : instance.overlay_root;
-                    const float time = (smooth_tick - float(start)) / float(net::limits::tick_hz);
-                    if (!animation::sample(mesh.skin_id, clip, std::max(0.f, time), bones,
-                        overlay, weight, root) ||
-                        bones.size() != mesh.joint_count)
-                        throw std::runtime_error("Cannot sample streamed animation");
-                    matrices.insert(matrices.end(), bones.begin(), bones.end());
+                    const std::array<std::uint32_t,5> key{
+                        clip,start,overlay,root,std::bit_cast<std::uint32_t>(weight)
+                    };
+                    auto found=sampled_poses.find(key);
+                    if(found==sampled_poses.end())
+                    {
+                        const float time=(smooth_tick-float(start))/
+                            float(net::limits::tick_hz);
+                        std::vector<animation::matrix> bones;
+                        if(!animation::sample(mesh.skin_id,clip,std::max(0.f,time),
+                            bones,overlay,weight,root) ||
+                            bones.size()!=mesh.joint_count)
+                            throw std::runtime_error("Cannot sample streamed animation");
+                        found=sampled_poses.emplace(key,std::move(bones)).first;
+                    }
+                    const auto& bones=found->second;
+                    matrices.insert(matrices.end(),bones.begin(),bones.end());
                 }
                 vk::buffer::write(mesh.frames.at(image).skin_palette,
                                   matrices.data(), matrices.size() * sizeof(matrices[0]));
