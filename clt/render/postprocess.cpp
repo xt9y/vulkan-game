@@ -1,6 +1,7 @@
 #include "postprocess.hpp"
 #include "srv/game/options.hpp"
 #include "scene_renderer.hpp"
+#include "clt/network/connection.hpp"
 #include "clt/view/camera.hpp"
 #include <render/renderer.hpp>
 #include <render/pipeline.hpp>
