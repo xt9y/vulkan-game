@@ -3,6 +3,7 @@
 #include "util/math/vector.hpp"
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace game::options
 {
@@ -11,6 +12,14 @@ namespace game::options
     enum class surface_format { unspecified, bgra8_srgb, rgba8_srgb };
     enum class depth_precision { unspecified, d32, d16 };
     enum class presentation { unspecified, fifo, mailbox, immediate };
+
+    struct point_light
+    {
+        vk::util::math::vec3 position;
+        float range;
+        vk::util::math::vec3 color;
+        float intensity;
+    };
 
     struct client_graphics
     {
@@ -25,6 +34,7 @@ namespace game::options
         float exposure;
         vk::util::math::vec3 sun_direction;
         float sun_intensity;
+        std::vector<point_light> point_lights;
     };
 
     struct state
