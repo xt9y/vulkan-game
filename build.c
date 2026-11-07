@@ -69,7 +69,7 @@ static void prepare_editor_font(void)
                   "https://github.com/xt9y/hellengine-bak.git "
                   "build/editor-font-repository")!=0)
         {
-            fprintf(stderr,"editor: original font download failed; using fallback\\n");
+            fprintf(stderr,"editor: original font download failed; using fallback\n");
             return;
         }
     }
@@ -81,7 +81,7 @@ static void prepare_editor_font(void)
               "git -C build/editor-font-repository sparse-checkout set "
               "Rogue/Rogue/res/textures/font")!=0)
         fprintf(stderr,"editor: original font checkout requires GitHub "
-                       "access to xt9y/hellengine-bak; using fallback\\n");
+                       "access to xt9y/hellengine-bak; using fallback\n");
 }
 
 void build(C_Build* b)
