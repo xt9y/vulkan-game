@@ -446,7 +446,13 @@ namespace clt::postprocess
                     length_squared(vertex.position));
             const float scale=std::max({std::abs(instance.pose.scale.x),
                 std::abs(instance.pose.scale.y),std::abs(instance.pose.scale.z)});
-            if(!std::isfinite(scale) || !std::isfinite(furthest_squared))
+            const auto& rotation=instance.pose.rotation;
+            const float rotation_length_squared=
+                rotation.x*rotation.x+rotation.y*rotation.y+
+                rotation.z*rotation.z+rotation.w*rotation.w;
+            if(!std::isfinite(scale) || !std::isfinite(furthest_squared) ||
+               !std::isfinite(rotation_length_squared) ||
+               std::abs(rotation_length_squared-1.f)>0.00001f)
                 return false;
             const float radius=std::sqrt(furthest_squared)*scale+0.01f;
             for(const auto& light:incoming.lights)
