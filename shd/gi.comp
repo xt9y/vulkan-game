@@ -17,11 +17,16 @@ struct ShadowNode {
     uvec4 info; // next node after subtree, first triangle, triangle count
 };
 layout(std430,set=0,binding=3) readonly buffer ShadowTree { ShadowNode nodes[]; };
+struct Light {
+    vec4 position_range;
+    vec4 color_intensity;
+};
+layout(std430,set=0,binding=4) readonly buffer Lights { Light lights[]; };
 layout(push_constant) uniform Settings {
     uint point_count;
     uint vertex_count;
     uint node_count;
-    uint padding;
+    uint light_count;
     vec4 grid_origin_spacing;
 } pc;
 
@@ -89,8 +94,25 @@ void main()
     if(any(greaterThanEqual(cell,imageSize(grid))))return;
     vec3 position=pc.grid_origin_spacing.xyz+
                   vec3(cell)*pc.grid_origin_spacing.w;
-    vec3 indirect=vec3(0.0);
     const float max_distance=2.6; // Rogue's original probe range
+    bool near_light=false;
+    for(uint i=0u;i<min(pc.light_count,uint(lights.length()));++i)
+    {
+        float reach=lights[i].position_range.w+max_distance;
+        if(lights[i].color_intensity.w>0.0 &&
+           dot(position-lights[i].position_range.xyz,
+               position-lights[i].position_range.xyz)<=reach*reach)
+        {
+            near_light=true;
+            break;
+        }
+    }
+    if(!near_light)
+    {
+        imageStore(grid,cell,vec4(0.0));
+        return;
+    }
+    vec3 indirect=vec3(0.0);
     for(uint i=0u;i<pc.point_count;++i)
     {
         vec3 value=points[i].radiance.rgb;
