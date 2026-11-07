@@ -243,7 +243,6 @@ namespace clt::renderer
         data.passes.reset();
         postprocess::release();
         scene_renderer::release_frame_resources();
-        scene_renderer::reset_scene();
         const auto caps = vk::surface::capabilities();
 
         if (!(caps.supportedUsageFlags & vk::ImageUsageFlagBits::eColorAttachment))
