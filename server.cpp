@@ -10,7 +10,6 @@
 #include <array>
 #include <cstdint>
 #include <atomic>
-#include <cmath>
 #include <csignal>
 #include <exception>
 #include <iostream>
@@ -56,41 +55,41 @@ namespace
     void place(::scene::state& initial_scene,std::uint32_t id,
                std::uint32_t mesh,vk::util::math::vec3 position)
     {
-            ::scene::instance object{};
-            object.id = id;
-            object.mesh_id = mesh;
-            object.pose.position = position;
+        ::scene::instance object{};
+        object.id = id;
+        object.mesh_id = mesh;
+        object.pose.position = position;
 
-            // World collision bounds follow actual transformed scene vertices.
-            const auto geometry = std::find_if(
-                initial_scene.meshes.begin(), initial_scene.meshes.end(),
-                [mesh](const ::scene::mesh& item) { return item.id == mesh; });
-            if (geometry == initial_scene.meshes.end())
-                throw std::runtime_error("No mesh for scene collision bounds");
+        // World collision bounds follow actual transformed scene vertices.
+        const auto geometry = std::find_if(
+            initial_scene.meshes.begin(), initial_scene.meshes.end(),
+            [mesh](const ::scene::mesh& item) { return item.id == mesh; });
+        if (geometry == initial_scene.meshes.end())
+            throw std::runtime_error("No mesh for scene collision bounds");
 
-            ::scene::collision_box bounds{};
-            const auto infinity = std::numeric_limits<float>::infinity();
-            bounds.minimum = { infinity, infinity, infinity };
-            bounds.maximum = {-infinity,-infinity,-infinity };
-            for (const auto& vertex : geometry->vertices)
-            {
-                const auto& p = vertex.position;
-                const auto& scale = object.pose.scale;
-                const auto local = vk::util::math::vec3{
-                    p.x * scale.x, p.y * scale.y, p.z * scale.z
-                };
-                const auto rotated = vk::util::math::rotate(
-                    object.pose.rotation, local);
-                const auto world = position + rotated;
-                bounds.minimum.x = std::min(bounds.minimum.x, world.x);
-                bounds.minimum.y = std::min(bounds.minimum.y, world.y);
-                bounds.minimum.z = std::min(bounds.minimum.z, world.z);
-                bounds.maximum.x = std::max(bounds.maximum.x, world.x);
-                bounds.maximum.y = std::max(bounds.maximum.y, world.y);
-                bounds.maximum.z = std::max(bounds.maximum.z, world.z);
-            }
-            initial_scene.instances.push_back(object);
-            initial_scene.collision_boxes.push_back(bounds);
+        ::scene::collision_box bounds{};
+        const auto infinity = std::numeric_limits<float>::infinity();
+        bounds.minimum = { infinity, infinity, infinity };
+        bounds.maximum = {-infinity,-infinity,-infinity };
+        for (const auto& vertex : geometry->vertices)
+        {
+            const auto& p = vertex.position;
+            const auto& scale = object.pose.scale;
+            const auto local = vk::util::math::vec3{
+                p.x * scale.x, p.y * scale.y, p.z * scale.z
+            };
+            const auto rotated = vk::util::math::rotate(
+                object.pose.rotation, local);
+            const auto world = position + rotated;
+            bounds.minimum.x = std::min(bounds.minimum.x, world.x);
+            bounds.minimum.y = std::min(bounds.minimum.y, world.y);
+            bounds.minimum.z = std::min(bounds.minimum.z, world.z);
+            bounds.maximum.x = std::max(bounds.maximum.x, world.x);
+            bounds.maximum.y = std::max(bounds.maximum.y, world.y);
+            bounds.maximum.z = std::max(bounds.maximum.z, world.z);
+        }
+        initial_scene.instances.push_back(object);
+        initial_scene.collision_boxes.push_back(bounds);
     }
 
     // Define level geometry, instances, imported models and lights here.
@@ -105,10 +104,10 @@ namespace
         auto cube=make_rect(2,.5f,.5f,.5f,{1.f,1.f,1.f,1.f});
         initial_scene.meshes.push_back(std::move(floor));
         initial_scene.meshes.push_back(std::move(cube));
-        place(initial_scene,1, 1, {0, -0.1f, 0});
-        place(initial_scene,2, 2, {-2.f, .5f, 0});
-        place(initial_scene,3, 2, {0, .5f, 0});
-        place(initial_scene,4, 2, {2.f, .5f, 0});
+        place(initial_scene,1,1, {0, -0.1f, 0});
+        place(initial_scene,2,2, {-2.f, .5f, 0});
+        place(initial_scene,3,2, {0, .5f, 0});
+        place(initial_scene,4,2, {2.f, .5f, 0});
         // Imported models: path, world position/scale, animation clip.
         ::scene::transform mermaid{};
         mermaid.position = {0.0f,1.0f,0.5f/3.0f};
