@@ -452,7 +452,7 @@ namespace clt::postprocess
         for(auto& frame:data.frames)
         {
             if(frame.grid_view)vk::image_view::destroy(frame.grid_view);
-            frame.grid_view={};
+            frame.grid_view=vk::ImageView{};
         }
         data.frames.clear();
         data.cloud_program.reset();
