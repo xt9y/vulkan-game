@@ -56,6 +56,9 @@ namespace clt::postprocess
             gpu::owned_buffer nodes;
             std::shared_ptr<const ::scene::state> snapshot;
             std::uint32_t light_count=0, point_count=0, vertex_count=0, node_count=0;
+            vk::util::math::vec3 grid_origin{};
+            float grid_spacing=0.2f;
+            vk::Extent3D grid_extent{1,1,1};
             std::unique_ptr<gpu::descriptors> cloud_sets;
             std::unique_ptr<gpu::descriptors> gi_sets;
             std::unique_ptr<gpu::descriptors> lighting_sets;
@@ -79,9 +82,9 @@ namespace clt::postprocess
 
         std::atomic<float> exposure_value{};
         std::atomic<bool> draw_probes=false;
-        constexpr std::uint32_t grid_width=32,grid_height=22,grid_depth=36;
-        constexpr float grid_spacing=0.2f;
-        const vk::util::math::vec3 grid_origin{-3.2f,-0.2f,-3.6f};
+        constexpr float min_grid_spacing=0.2f;
+        constexpr float bounce_reach=2.6f;
+        constexpr std::uint64_t max_grid_probes=32768;
 
         struct alignas(16) point_light {
             std::array<float,4> position_range{};
@@ -140,6 +143,34 @@ namespace clt::postprocess
             return result;
         }
 
+        void create_grid(frame& current,vk::Extent3D extent)
+        {
+            if(current.grid_view)
+            {
+                vk::image_view::destroy(current.grid_view);
+                current.grid_view=vk::ImageView{};
+            }
+            current.grid.reset();
+            vk::ImageCreateInfo grid_info{};
+            grid_info.imageType=vk::ImageType::e3D;
+            grid_info.format=vk::Format::eR16G16B16A16Sfloat;
+            grid_info.extent=extent;
+            grid_info.mipLevels=1;
+            grid_info.arrayLayers=1;
+            grid_info.samples=vk::SampleCountFlagBits::e1;
+            grid_info.tiling=vk::ImageTiling::eOptimal;
+            grid_info.usage=vk::ImageUsageFlagBits::eStorage |
+                            vk::ImageUsageFlagBits::eSampled;
+            current.grid=gpu::create_image(grid_info,vk::MemoryPropertyFlagBits::eDeviceLocal);
+            vk::ImageViewCreateInfo view{};
+            view.image=current.grid.handle;
+            view.viewType=vk::ImageViewType::e3D;
+            view.format=grid_info.format;
+            view.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1};
+            current.grid_view=vk::image_view::create(view);
+            current.dirty=true;
+        }
+
         vk::PipelineLayout pipeline_layout(vk::DescriptorSetLayout set)
         {
             vk::PipelineLayoutCreateInfo info{};
@@ -158,6 +189,7 @@ namespace clt::postprocess
             const float tan_half=std::tan(view.fov*0.5f);
             const float aspect=float(extent.width)/float(extent.height);
             const auto& position=frame.eye;
+            const auto& grid=get();
             const push controls{
                 exposure_value.load(std::memory_order_relaxed),{},
                 {position.x,position.y,position.z,0.1f},
@@ -166,7 +198,8 @@ namespace clt::postprocess
                 {-sy*sp,cp,cy*sp,tan_half},
                 {float(get().light_count),draw_probes.load(std::memory_order_relaxed)?1.0f:0.0f,
                  float(get().vertex_count),float(get().node_count)},
-                {grid_origin.x,grid_origin.y,grid_origin.z,grid_spacing}
+                {grid.grid_origin.x,grid.grid_origin.y,grid.grid_origin.z,
+                 grid.grid_spacing}
             };
             const auto width=extent.width;
             const auto height=extent.height;
@@ -269,23 +302,7 @@ namespace clt::postprocess
                 current.ldr={attachments.ldr,attachments.ldr_view};
                 current.points=gpu::create_buffer(sizeof(probe_point),storage,memory);
 
-                vk::ImageCreateInfo grid_info{};
-                grid_info.imageType=vk::ImageType::e3D;
-                grid_info.format=vk::Format::eR16G16B16A16Sfloat;
-                grid_info.extent=vk::Extent3D{grid_width,grid_height,grid_depth};
-                grid_info.mipLevels=1;
-                grid_info.arrayLayers=1;
-                grid_info.samples=vk::SampleCountFlagBits::e1;
-                grid_info.tiling=vk::ImageTiling::eOptimal;
-                grid_info.usage=vk::ImageUsageFlagBits::eStorage |
-                                vk::ImageUsageFlagBits::eSampled;
-                current.grid=gpu::create_image(grid_info,vk::MemoryPropertyFlagBits::eDeviceLocal);
-                vk::ImageViewCreateInfo grid_view{};
-                grid_view.image=current.grid.handle;
-                grid_view.viewType=vk::ImageViewType::e3D;
-                grid_view.format=grid_info.format;
-                grid_view.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1};
-                current.grid_view=vk::image_view::create(grid_view);
+                create_grid(current,data.grid_extent);
 
                 current.cloud=data.cloud_sets->set(i);
                 current.gi=data.gi_sets->set(i);
@@ -700,10 +717,13 @@ namespace clt::postprocess
         if(!get().frames.at(image).dirty)return;
         const grid_push push{
             get().point_count,get().vertex_count,get().node_count,0,
-            {grid_origin.x,grid_origin.y,grid_origin.z,grid_spacing}
+            {get().grid_origin.x,get().grid_origin.y,get().grid_origin.z,
+             get().grid_spacing}
         };
         get().gi_program->dispatch(command,
-            (grid_width+3)/4,(grid_height+3)/4,(grid_depth+3)/4,
+            (get().grid_extent.width+3)/4,
+            (get().grid_extent.height+3)/4,
+            (get().grid_extent.depth+3)/4,
             {get().frames.at(image).gi},&push,sizeof(push));
     }
 
