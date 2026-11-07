@@ -33,6 +33,7 @@ namespace clt::postprocess
         struct frame {
             image_target hdr;
             image_target ldr;
+            gpu::owned_buffer points;
             gpu::owned_image grid;
             vk::ImageView grid_view{};
             bool dirty=true;
@@ -47,7 +48,6 @@ namespace clt::postprocess
             std::vector<frame> frames;
             vk::Sampler sampler{};
             gpu::owned_buffer lights;
-            gpu::owned_buffer points;
             gpu::owned_buffer triangles;
             std::shared_ptr<const ::scene::state> snapshot;
             std::uint32_t light_count=0, point_count=0, vertex_count=0;
@@ -250,7 +250,6 @@ namespace clt::postprocess
             const auto memory=vk::MemoryPropertyFlagBits::eHostVisible |
                               vk::MemoryPropertyFlagBits::eHostCoherent;
             data.lights=gpu::create_buffer(64*sizeof(point_light),storage,memory);
-            data.points=gpu::create_buffer(sizeof(probe_point),storage,memory);
             data.triangles=gpu::create_buffer(3*sizeof(std::array<float,4>),storage,memory);
 
             data.frames.reserve(count);
@@ -261,6 +260,7 @@ namespace clt::postprocess
                 const auto attachments=data.targets->at(i);
                 current.hdr={attachments.hdr,attachments.hdr_view};
                 current.ldr={attachments.ldr,attachments.ldr_view};
+                current.points=gpu::create_buffer(sizeof(probe_point),storage,memory);
 
                 vk::ImageCreateInfo grid_info{};
                 grid_info.imageType=vk::ImageType::e3D;
@@ -291,10 +291,10 @@ namespace clt::postprocess
                 grid_storage.imageView=current.grid_view;
                 grid_storage.imageLayout=vk::ImageLayout::eGeneral;
                 data.gi_sets->write_image(i,0,grid_storage);
-                data.cloud_sets->write_buffer(i,0,vk::buffer::descriptor(data.points));
+                data.cloud_sets->write_buffer(i,0,vk::buffer::descriptor(current.points));
                 data.cloud_sets->write_buffer(i,1,vk::buffer::descriptor(data.triangles));
                 data.cloud_sets->write_buffer(i,2,vk::buffer::descriptor(data.lights));
-                data.gi_sets->write_buffer(i,1,vk::buffer::descriptor(data.points));
+                data.gi_sets->write_buffer(i,1,vk::buffer::descriptor(current.points));
                 data.gi_sets->write_buffer(i,2,vk::buffer::descriptor(data.triangles));
 
                 std::array<vk::DescriptorImageInfo,6> lighting{};
@@ -418,15 +418,10 @@ namespace clt::postprocess
         const auto storage=vk::BufferUsageFlagBits::eStorageBuffer;
         const auto memory=vk::MemoryPropertyFlagBits::eHostVisible |
                           vk::MemoryPropertyFlagBits::eHostCoherent;
-        auto new_points=gpu::create_buffer(
-            std::max<std::size_t>(sizeof(probe_point),points.size()*sizeof(probe_point)),
-            storage,memory);
         auto new_triangles=gpu::create_buffer(
             std::max<std::size_t>(3*sizeof(std::array<float,4>),
                                   triangles.size()*sizeof(std::array<float,4>)),
             storage,memory);
-        if(!points.empty())
-            vk::buffer::write(new_points,points.data(),points.size()*sizeof(probe_point));
         if(!triangles.empty())
             vk::buffer::write(new_triangles,triangles.data(),
                               triangles.size()*sizeof(std::array<float,4>));
@@ -434,16 +429,21 @@ namespace clt::postprocess
             vk::buffer::write(data.lights,lights.data(),
                               lights.size()*sizeof(point_light));
 
-        data.points=std::move(new_points);
         data.triangles=std::move(new_triangles);
         data.point_count=static_cast<std::uint32_t>(points.size());
         data.vertex_count=static_cast<std::uint32_t>(triangles.size());
         data.light_count=static_cast<std::uint32_t>(lights.size());
         for(std::uint32_t i=0;i<data.frames.size();++i)
         {
-            data.cloud_sets->write_buffer(i,0,vk::buffer::descriptor(data.points));
+            auto& frame=data.frames[i];
+            frame.points=gpu::create_buffer(
+                std::max<std::size_t>(sizeof(probe_point),points.size()*sizeof(probe_point)),
+                storage,memory);
+            if(!points.empty())
+                vk::buffer::write(frame.points,points.data(),points.size()*sizeof(probe_point));
+            data.cloud_sets->write_buffer(i,0,vk::buffer::descriptor(frame.points));
             data.cloud_sets->write_buffer(i,1,vk::buffer::descriptor(data.triangles));
-            data.gi_sets->write_buffer(i,1,vk::buffer::descriptor(data.points));
+            data.gi_sets->write_buffer(i,1,vk::buffer::descriptor(frame.points));
             data.gi_sets->write_buffer(i,2,vk::buffer::descriptor(data.triangles));
             data.lighting_sets->write_buffer(i,7,vk::buffer::descriptor(data.triangles));
         }
@@ -475,7 +475,6 @@ namespace clt::postprocess
         data.present_sets.reset();
         data.targets.reset();
         data.lights.reset();
-        data.points.reset();
         data.triangles.reset();
         if (data.sampler) device.destroySampler(data.sampler);
 
@@ -485,7 +484,7 @@ namespace clt::postprocess
     targets images(std::uint32_t image)
     {
         const auto& frame = get().frames.at(image);
-        return {frame.grid.handle,get().points.handle,frame.hdr.image,frame.ldr.image};
+        return {frame.grid.handle,frame.points.handle,frame.hdr.image,frame.ldr.image};
     }
 
     void cloud(vk::CommandBuffer command,std::uint32_t image)
