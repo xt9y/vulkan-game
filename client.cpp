@@ -1,5 +1,6 @@
 #include "clt/app/application.hpp"
 #include "clt/weapon/weapon.hpp"
+#include "clt/render/postprocess.hpp"
 #include "weapons.hpp"
 #include "srv/game/application.hpp"
 #include "srv/game/options.hpp"
@@ -27,6 +28,11 @@ namespace
 
     void on_input(const clt::input::frame& frame)
     {
+        static bool space_held=false;
+        const bool space=clt::input::key_down(GLFW_KEY_SPACE);
+        if(space && !space_held)clt::postprocess::toggle_probes();
+        space_held=space;
+
         // Each gun chooses its own equip key, trigger, ADS and reload input.
         static std::array<bool,GLFW_KEY_LAST+1> equip_held{};
         for(const auto& item:clt::weapon::equip_bindings())
