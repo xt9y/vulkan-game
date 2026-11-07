@@ -14,6 +14,7 @@ namespace clt::postprocess
 
     targets images(std::uint32_t image);
     void create();
+    void synchronize_lights();
     void release();
     void gi(vk::CommandBuffer command, std::uint32_t image, const camera::frame& frame);
     void lighting(vk::CommandBuffer command, std::uint32_t image, const camera::frame& frame);
