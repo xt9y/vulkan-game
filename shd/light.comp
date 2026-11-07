@@ -136,7 +136,8 @@ void main()
 
     uint count=min(min(uint(max(pc.ambient_count.w,0.0)),
                        uint(lights.length())),64u);
-    for(uint i=0u;i<(viewmodel?0u:count);++i)
+    // Viewmodel receives nearby point lights, but no screen-space world GI.
+    for(uint i=0u;i<count;++i)
     {
         vec3 delta=lights[i].position_range.xyz-P;
         float d2=dot(delta,delta);
