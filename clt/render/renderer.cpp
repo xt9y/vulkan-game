@@ -8,6 +8,7 @@
 
 #include "clt/platform/vulkan_loader.hpp"
 #include "clt/platform/window.hpp"
+#include "clt/view/camera.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -360,19 +361,20 @@ namespace clt::renderer
 
         // Geometry retains its render-pass external dependency into compute.
         // All subsequent image hazards are tracked by the reusable GPU graph.
+        const auto render_camera=camera::capture();
         const auto target=postprocess::images(active.image);
         const vk::ImageSubresourceRange range{
             vk::ImageAspectFlagBits::eColor,0,1,0,1
         };
         data.passes.record(active.command,active.image,{
-            {"geometry",{},[image=active.image](vk::CommandBuffer cmd)
-                {scene_renderer::draw(cmd,image);}},
+            {"geometry",{},[image=active.image,render_camera](vk::CommandBuffer cmd)
+                {scene_renderer::draw(cmd,image,render_camera);}},
             {"indirect",{gpu::access::for_image(target.indirect,range,
                 vk::ImageLayout::eGeneral,
                 vk::PipelineStageFlagBits::eComputeShader,
                 vk::AccessFlagBits::eShaderWrite,true)},
-                [image=active.image](vk::CommandBuffer cmd)
-                {postprocess::gi(cmd,image);}},
+                [image=active.image,render_camera](vk::CommandBuffer cmd)
+                {postprocess::gi(cmd,image,render_camera);}},
             {"lighting",{
                 gpu::access::for_image(target.indirect,range,
                     vk::ImageLayout::eGeneral,
@@ -382,8 +384,8 @@ namespace clt::renderer
                     vk::ImageLayout::eGeneral,
                     vk::PipelineStageFlagBits::eComputeShader,
                     vk::AccessFlagBits::eShaderWrite,true)},
-                [image=active.image](vk::CommandBuffer cmd)
-                {postprocess::lighting(cmd,image);}},
+                [image=active.image,render_camera](vk::CommandBuffer cmd)
+                {postprocess::lighting(cmd,image,render_camera);}},
             {"tonemapping",{
                 gpu::access::for_image(target.hdr,range,
                     vk::ImageLayout::eGeneral,
@@ -393,8 +395,8 @@ namespace clt::renderer
                     vk::ImageLayout::eGeneral,
                     vk::PipelineStageFlagBits::eComputeShader,
                     vk::AccessFlagBits::eShaderWrite,true)},
-                [image=active.image](vk::CommandBuffer cmd)
-                {postprocess::tonemap(cmd,image);}},
+                [image=active.image,render_camera](vk::CommandBuffer cmd)
+                {postprocess::tonemap(cmd,image,render_camera);}},
             {"presentation",{gpu::access::for_image(target.ldr,range,
                 vk::ImageLayout::eGeneral,
                 vk::PipelineStageFlagBits::eFragmentShader,
