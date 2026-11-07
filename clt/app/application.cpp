@@ -167,8 +167,9 @@ namespace clt::application
                 events.question=typed_question.exchange(false,
                     std::memory_order_relaxed);
                 events.tab=pressed(GLFW_KEY_TAB,0);
-                events.enter=pressed(GLFW_KEY_ENTER,1) |
-                             pressed(GLFW_KEY_KP_ENTER,2);
+                const bool main_enter=pressed(GLFW_KEY_ENTER,1);
+                const bool keypad_enter=pressed(GLFW_KEY_KP_ENTER,2);
+                events.enter=main_enter || keypad_enter;
                 events.escape=pressed(GLFW_KEY_ESCAPE,3);
                 events.up=pressed(GLFW_KEY_UP,4);
                 events.down=pressed(GLFW_KEY_DOWN,5);
