@@ -181,7 +181,7 @@ namespace clt::postprocess
             data.presentation->create(vk::swapchain::get()->images,
                 vk::swapchain::get()->format,vk::swapchain::get()->extent);
             data.gi_sets=std::make_unique<gpu::descriptors>();
-            data.gi_sets->create(bindings(4,1,vk::ShaderStageFlagBits::eCompute),count);
+            data.gi_sets->create(bindings(4,1,vk::ShaderStageFlagBits::eCompute,1),count);
             data.lighting_sets=std::make_unique<gpu::descriptors>();
             data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,1),count);
             data.tone_sets=std::make_unique<gpu::descriptors>();
@@ -280,6 +280,8 @@ namespace clt::postprocess
                 gi[4].imageLayout=vk::ImageLayout::eGeneral;
                 for(std::uint32_t j=0;j<gi.size();++j)
                     data.gi_sets->write_image(i,j,gi[j]);
+                data.gi_sets->write_buffer(i,5,
+                    vk::buffer::descriptor(data.lights));
 
                 std::vector<vk::DescriptorImageInfo> lighting(6);
                 for(std::size_t j=0;j<g.views.size();++j)
