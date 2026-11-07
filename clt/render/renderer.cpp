@@ -306,6 +306,7 @@ namespace clt::renderer
         vk::swapchain::init(info);
         scene_renderer::create_frame_resources();
         postprocess::create();
+        postprocess::synchronize_lights();
         data.passes.resize(vk::swapchain::get()->images.size());
 
         data.frames.resize(vk::swapchain::get()->size);
@@ -346,6 +347,7 @@ namespace clt::renderer
                 return;
             }
             scene_renderer::synchronize();
+            postprocess::synchronize_lights();
         }
 
         ::render::frame_scheduler::ticket active{};
