@@ -24,6 +24,9 @@ struct ShadowNode {
 layout(std430,set=0,binding=8) readonly buffer ShadowTree { ShadowNode nodes[]; };
 // Conservative 16x16 light lists: [count, indices[0..63]] for each tile.
 layout(std430,set=0,binding=9) readonly buffer TileLights { uint tile_lights[]; };
+// Each light can reference a smaller BVH containing all geometry able to
+// occlude that light. A zero count means no possible shadow casters.
+layout(std430,set=0,binding=10) readonly buffer ShadowRanges { uvec2 shadow_ranges[]; };
 
 layout(push_constant) uniform Controls {
     float exposure;
@@ -107,18 +110,21 @@ bool shadow_box(vec3 origin,vec3 inverse_direction,float distance,ShadowNode nod
     return t0<=t1;
 }
 
-bool any_hit(vec3 origin,vec3 ray,float distance)
+bool any_hit(vec3 origin,vec3 ray,float distance,uint light_index)
 {
-    uint total=min(uint(max(pc.light_count.w,0.0)),uint(nodes.length()));
-    uint vertex_count=min(uint(max(pc.light_count.z,0.0)),uint(vertices.length()));
-    if(total==0u || vertex_count==0u || distance<=0.001)return false;
+    uvec2 span=shadow_ranges[light_index];
+    uint first_node=min(span.x,uint(nodes.length()));
+    uint end_node=min(first_node+span.y,uint(nodes.length()));
+    uint vertex_count=uint(vertices.length());
+    if(first_node>=end_node || vertex_count==0u || distance<=0.001)
+        return false;
     vec3 safe=vec3(
         abs(ray.x)<1e-7?(ray.x<0.0?-1e-7:1e-7):ray.x,
         abs(ray.y)<1e-7?(ray.y<0.0?-1e-7:1e-7):ray.y,
         abs(ray.z)<1e-7?(ray.z<0.0?-1e-7:1e-7):ray.z);
     vec3 inverse_direction=1.0/safe;
-    uint index=0u;
-    while(index<total)
+    uint index=first_node;
+    while(index<end_node)
     {
         ShadowNode node=nodes[index];
         if(!shadow_box(origin,inverse_direction,distance,node))
@@ -301,7 +307,7 @@ void main()
         float attenuation=1.0-q*q*(3.0-2.0*q);
         // Viewmodel geometry uses its own depth interval and is never a
         // world shadow receiver; otherwise query the exact scene triangles.
-        if(!viewmodel && any_hit(P+N*0.004,direction,dist-0.008))
+        if(!viewmodel && any_hit(P+N*0.004,direction,dist-0.008,i))
             continue;
         color+=brdf(albedo.rgb,metallic,roughness,N,V,direction)*
             light.color_intensity.rgb*
