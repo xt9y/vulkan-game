@@ -248,7 +248,7 @@ namespace clt::postprocess
             data.cloud_sets=std::make_unique<gpu::descriptors>();
             data.cloud_sets->create(bindings(0,0,vk::ShaderStageFlagBits::eCompute,4),count);
             data.gi_sets=std::make_unique<gpu::descriptors>();
-            data.gi_sets->create(bindings(0,1,vk::ShaderStageFlagBits::eCompute,3),count);
+            data.gi_sets->create(bindings(0,1,vk::ShaderStageFlagBits::eCompute,4),count);
             data.lighting_sets=std::make_unique<gpu::descriptors>();
             data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,3),count);
             data.tone_sets=std::make_unique<gpu::descriptors>();
@@ -322,6 +322,7 @@ namespace clt::postprocess
                 data.gi_sets->write_buffer(i,1,vk::buffer::descriptor(current.points));
                 data.gi_sets->write_buffer(i,2,vk::buffer::descriptor(data.triangles));
                 data.gi_sets->write_buffer(i,3,vk::buffer::descriptor(data.nodes));
+                data.gi_sets->write_buffer(i,4,vk::buffer::descriptor(data.lights));
 
                 std::array<vk::DescriptorImageInfo,6> lighting{};
                 for(std::size_t j=0;j<g.views.size();++j)
@@ -810,7 +811,7 @@ namespace clt::postprocess
     {
         if(!get().frames.at(image).dirty)return;
         const grid_push push{
-            get().point_count,get().vertex_count,get().node_count,0,
+            get().point_count,get().vertex_count,get().node_count,get().light_count,
             {get().grid_origin.x,get().grid_origin.y,get().grid_origin.z,
              get().grid_spacing}
         };
