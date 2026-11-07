@@ -100,12 +100,6 @@ int main(int argc, char** argv)
                     origin, direction, event.definition.range
                 );
                 
-                const auto distance = [&](const weapon::hit& h) {
-                    return h.impacted
-                        ? vk::util::math::length_squared(h.position - origin)
-                        : std::numeric_limits<float>::infinity();
-                };
-                
                 return world_hit;
             }
         );
