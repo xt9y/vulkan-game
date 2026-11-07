@@ -420,7 +420,7 @@ namespace clt::renderer
         {
             auto result = data.frames.submit(active);
             if(result==vk::Result::eSuccess || result==vk::Result::eSuboptimalKHR)
-                postprocess::updated();
+                postprocess::updated(active.image);
 
             if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR)
             {
