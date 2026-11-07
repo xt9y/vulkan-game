@@ -99,7 +99,6 @@ namespace clt::application
         postprocess::set_exposure(get()->options.graphics.exposure);
         renderer::init(get()->options.graphics.vertex_shader.c_str(),
                        get()->options.graphics.fragment_shader.c_str());
-        bool connected = false;
 
         std::atomic<bool> render_stop{false};
         std::exception_ptr render_error;
@@ -140,13 +139,6 @@ namespace clt::application
                 if (get()->hooks.on_input)
                 {
                     get()->hooks.on_input(frame);
-                }
-
-                const bool current = connection::get()->connected.load(std::memory_order_relaxed);
-                if (current != connected)
-                {
-                    window::set_connected(current);
-                    connected = current;
                 }
 
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
