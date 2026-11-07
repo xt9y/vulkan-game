@@ -116,6 +116,9 @@ int main(int argc, char** argv)
         auto cube=make_rect(2,.5f,.5f,.5f,{1.f,1.f,1.f,1.f});
         initial_scene.meshes.push_back(std::move(floor));
         initial_scene.meshes.push_back(std::move(cube));
+        initial_scene.lights.push_back({
+            {0.0f,2.0f,0.0f},6.0f,{1.0f,0.5f,0.2f},4.0f
+        });
 
         auto add = [&](std::uint32_t id, std::uint32_t mesh, vk::util::math::vec3 position)
         {
