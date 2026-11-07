@@ -426,7 +426,7 @@ namespace clt::postprocess
                     if(nx<=max_dim && ny<=max_dim && nz<=max_dim &&
                        std::uint64_t(nx)*ny*nz<=max_grid_probes)
                     {
-                        extent={nx,ny,nz};
+                        extent=vk::Extent3D{nx,ny,nz};
                         break;
                     }
                     step*=1.1;
