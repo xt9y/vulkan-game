@@ -112,6 +112,13 @@ void build(C_Build* b)
     c_dep_cbuild(jobs, "VulkanJobs", C_TARGET_STATIC_LIBRARY);
     c_dep_include(jobs, ".");
 
+    // Optional, renderer-independent editor: no scene or server dependencies.
+    C_Dependency* editor =
+        c_git(b, "VulkanEditor", "https://github.com/xt9y/vulkan-systems.git", "9ca6e9e067528f40114209bc7f28dc425ac326cb");
+    c_dep_subdir(editor, "editor");
+    c_dep_cbuild(editor, "VulkanEditor", C_TARGET_STATIC_LIBRARY);
+    c_dep_include(editor, ".");
+
     C_Dependency* headers =
         c_git(b, "VulkanHeaders", "https://github.com/KhronosGroup/Vulkan-Headers.git", "9fbc2a782ee3f8a4db64e7d991e23da75e893f44");
     c_dep_header_only(headers);
@@ -211,6 +218,7 @@ void build(C_Build* b)
     c_warnings_strict(client);
     c_flag(client, "-std=c++20");
     // Dependents first, providers after: Render -> GPU -> Engine.
+    c_use(client, editor);
     c_use(client, render);
     c_use(client, bvh);
     c_use(client, gpu);
