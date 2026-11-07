@@ -75,26 +75,24 @@ Platform requirements:
   runtime compatibility still require verification on each OS.
 
 Rendering status:
-  The old screen-space GI shader and its 2D target were replaced by the
-  Rogue/hellengine-bak world-space approach: a 0.3-unit static-surface point
-  cloud generated from streamed collision boxes rather than high-poly model
-  triangles, triangle visibility, and an RGBA16F 32x22x36 probe volume spaced
-  at 0.2 units. The shaders preserve Rogue's 2.6-unit propagation range,
-  inverse-distance point contribution, /40 probe scale and eight-neighbour
-  normal-oriented interpolation. Space toggles spherical visualization of
-  actual volume cells without changing their underlying representation.
-  Lighting remains game-specific; the reusable Vulkan modules stay generic.
+  Rendering uses Rogue/hellengine-bak's world-space point-cloud and 3D probe
+  approach: static collision surfaces provide 0.3-unit lighting samples, and
+  RGBA16F 32x22x36 probes at 0.2-unit spacing provide diffuse GI.
+  Point-light shadows and probe visibility now trace the actual streamed
+  mesh triangles (including imported models) through a compact stackless BVH
+  built when a scene snapshot changes. This replaces the old collision-box
+  shadow silhouettes and brute-force per-ray triangle scans.
+  Skinned meshes are sampled at their initial pose for shadow construction;
+  continuous animation-driven BVH updates are not implemented.
+  Alpha-blended surfaces do not cast opaque shadows; masked materials still
+  use triangle silhouettes, not texture-based alpha tests.
+  Space visualizes every third probe as a sphere without changing GI.
+  Vulkan shaders, static light positions and level configuration remain
+  game-specific; reusable Vulkan modules stay generic.
 
-  The current Vulkan backend uses per-pixel world-triangle any-hit checks
-  for point shadows rather than Rogue's OpenGL depth-cubemap PCF path.
-  This is not a literal 1:1 raster pipeline port: the OpenGL framebuffer,
-  presentation, animated-geometry and weapon code cannot be copied into
-  Vulkan unchanged. Probe geometry uses static collision boxes, so imported
-  characters without such boxes do not cast detailed mesh shadows. The volume covers
-  only the region around the demo center; objects outside that region
-  receive direct lighting but no probe contribution.
-  Probe updates are triggered by new scene snapshots and tracked per
-  swapchain image. Performance and Vulkan validation remain unverified.
+  The finite probe volume is centered around the demo scene. This is not a
+  literal OpenGL cubemap-PCF port, and performance, native compilation, and
+  Vulkan validation on macOS/Linux/Windows remain unverified.
 
 Rendering and reusable systems:
   VulkanRender owns general indexed geometry buffers, sampled G-buffer
