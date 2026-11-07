@@ -13,7 +13,7 @@ namespace game_weapons
         glock.rules.id=1;
         glock.rules.magazine_capacity=15;
         glock.rules.initial_reserve=90;
-        glock.rules.fire_interval=.55; 
+        glock.rules.fire_interval=.25; 
         glock.rules.range=200;
         glock.rules.reload=weapon::load_timing(
             "assets/glock/metadata.json",

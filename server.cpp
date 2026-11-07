@@ -116,7 +116,7 @@ namespace
 
         // Level-authored lights: position, radius, RGB, intensity.
         initial_scene.lights.push_back({
-            {0.0f,2.0f,0.0f},6.0f,{1.0f,0.5f,0.2f},4.0f
+            {0.0f,5.0f,1.0f},6.0f,{1.0f,0.5f,0.2f},4.0f
         });
 
         return initial_scene;
@@ -160,18 +160,28 @@ int main(int argc, char** argv)
         for(const auto& gun:game_weapons::all())
             srv::application::add_weapon(gun.rules);
         srv::application::on_weapon_command(
-            [](srv::application::weapon_command_context& event)
-            {
-                const auto origin = event.player.position;
-                const auto direction = weapon::direction(event.command.yaw, event.command.pitch);
+        [](srv::application::weapon_command_context& event)
+        {
+            const auto result = ::weapon::apply(
+                event.state,
+                event.command.sequence,
+                event.command.kind,
+                event.now,
+                event.definition
+            );
 
-                const auto world_hit = event.world.trace(
-                    origin, direction, event.definition.range
-                );
-                
-                return world_hit;
-            }
-        );
+            if (result != ::weapon::result::fired)
+                return ::weapon::hit{};
+
+            return event.world.trace(
+                event.player.position,
+                weapon::direction(
+                    event.command.yaw,
+                    event.command.pitch
+                ),
+                event.definition.range
+            );
+        });
 
         net::socket::init();
         std::signal(SIGINT, stop);
