@@ -779,11 +779,20 @@ namespace clt::postprocess
         preparation.wait_idle();
         preparation.commit(1);
         auto neighborhoods=std::move(indexed.value());
+        std::size_t accelerated_lights=0,unshadowed_lights=0;
+        for(const auto& range:light_ranges)
+        {
+            if(range.first>0 && range.count>0)++accelerated_lights;
+            if(range.count==0)++unshadowed_lights;
+        }
         std::clog << "clt: Rogue lighting geometry: "
                   << points.size() << " probes, "
                   << shared_vertices/3 << " mesh triangles, "
                   << shared_nodes << " shared shadow nodes, "
-                  << nodes.size()-shared_nodes << " local shadow nodes\n";
+                  << nodes.size()-shared_nodes << " local shadow nodes, "
+                  << accelerated_lights << "/" << light_ranges.size()
+                  << " accelerated lights, "
+                  << unshadowed_lights << " lights without casters\n";
 
         const bool new_shape=
             extent.width!=data.grid_extent.width ||
