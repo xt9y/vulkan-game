@@ -102,18 +102,20 @@ namespace net::scene_stream
     {
         // The byte budget, not an arbitrary object count, bounds the snapshot.
         if (scene.meshes.size() > max_scene_bytes / 12 ||
-            scene.instances.size() > max_scene_bytes / 48)
+            scene.instances.size() > max_scene_bytes / 48 ||
+             scene.lights.size() > max_scene_bytes / 32)
         {
             throw std::runtime_error("Scene snapshot exceeds maximum batch size");
         }
 
-        std::vector<std::uint8_t> bytes{'S', 'C', 'N', '9'};
+        std::vector<std::uint8_t> bytes{'S', 'C', 'N', 'A'};
 
         add(bytes, std::uint32_t(scene.meshes.size()));
         add(bytes, std::uint32_t(scene.instances.size()));
         add(bytes, std::uint32_t(scene.textures.size()));
         add(bytes, std::uint32_t(scene.skins.size()));
         add(bytes, std::uint32_t(scene.collision_boxes.size()));
+        add(bytes, std::uint32_t(scene.lights.size()));
 
         for (const auto& texture : scene.textures)
         {
@@ -250,6 +252,18 @@ namespace net::scene_stream
             add_vec3(bytes, b);
         }
 
+        for(const auto& light:scene.lights)
+        {
+            if(!std::isfinite(light.radius) || light.radius<=0 ||
+               !std::isfinite(light.strength) || light.strength<0 ||
+               light.color.x<0 || light.color.y<0 || light.color.z<0)
+                throw std::runtime_error("Invalid scene light");
+            add_vec3(bytes,light.position);
+            add_float(bytes,light.radius);
+            add_vec3(bytes,light.color);
+            add_float(bytes,light.strength);
+        }
+
         if (bytes.size() > max_scene_bytes)
         {
             throw std::runtime_error("Scene snapshot exceeds maximum batch size");
@@ -263,12 +277,12 @@ namespace net::scene_stream
         ::scene::state& scene
     )
     {
-        if (bytes.size() < 24 ||
+        if (bytes.size() < 28 ||
             bytes.size() > max_scene_bytes ||
             bytes[0] != 'S' ||
             bytes[1] != 'C' ||
             bytes[2] != 'N' ||
-            bytes[3] != '9')
+            bytes[3] != 'A')
         {
             return false;
         }
@@ -280,12 +294,15 @@ namespace net::scene_stream
         std::uint32_t texture_count = 0;
         std::uint32_t skin_count = 0;
         std::uint32_t collider_count = 0;
+        std::uint32_t light_count = 0;
 
         if (!input.take(mesh_count) ||
             !input.take(instance_count) ||
             !input.take(texture_count) ||
             !input.take(skin_count) ||
             !input.take(collider_count) ||
+            !input.take(light_count) ||
+            light_count > input.remaining() / 32 ||
             collider_count > input.remaining() / 24 ||
             texture_count > input.remaining() / 20 ||
             skin_count > input.remaining() / 16 ||
@@ -301,6 +318,7 @@ namespace net::scene_stream
         result.textures.reserve(texture_count);
         result.skins.reserve(skin_count);
         result.collision_boxes.reserve(collider_count);
+        result.lights.reserve(light_count);
 
         for (std::uint32_t i = 0; i < texture_count; ++i)
         {
@@ -495,6 +513,19 @@ namespace net::scene_stream
                 a.x >= b.x || a.y >= b.y || a.z >= b.z)
                 return false;
             result.collision_boxes.push_back(box);
+        }
+
+        for(std::uint32_t i=0;i<light_count;++i)
+        {
+            ::scene::point_light light{};
+            if(!take_vec3(input,light.position) ||
+               !input.take_float(light.radius) ||
+               !take_vec3(input,light.color) ||
+               !input.take_float(light.strength) ||
+               light.radius<=0 || light.strength<0 ||
+               light.color.x<0 || light.color.y<0 || light.color.z<0)
+                return false;
+            result.lights.push_back(light);
         }
 
         if (input.remaining() != 0)
