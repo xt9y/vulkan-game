@@ -125,7 +125,7 @@ void main()
     vec4 n=texelFetch(g_normal,p,0);
     vec4 m=texelFetch(g_material,p,0);
     vec3 N=normalize(n.rgb*2.0-1.0);
-    const bool viewmodel=depth<0.1;
+    bool viewmodel=depth<0.1;
     vec3 P=viewmodel
         ? pc.eye_near.xyz+normalize(world_position(p,size,0.18)-pc.eye_near.xyz)*0.5
         : world_position(p,size,depth);
