@@ -5,16 +5,15 @@ layout(set=0,binding=0) uniform sampler2D g_albedo;
 layout(set=0,binding=1) uniform sampler2D g_normal;
 layout(set=0,binding=2) uniform sampler2D g_material;
 layout(set=0,binding=3) uniform sampler2D g_depth;
-layout(set=0,binding=4) uniform sampler2D indirect_shadow;
+layout(set=0,binding=4) uniform sampler3D probes;
 layout(rgba16f,set=0,binding=5) writeonly uniform image2D hdr;
 
 struct PointLight {
     vec4 position_range;
     vec4 color_intensity;
 };
-layout(std430,set=0,binding=6) readonly buffer Lights {
-    PointLight lights[];
-};
+layout(std430,set=0,binding=6) readonly buffer Lights { PointLight lights[]; };
+layout(std430,set=0,binding=7) readonly buffer Geometry { vec4 vertices[]; };
 
 layout(push_constant) uniform Controls {
     float exposure;
@@ -24,19 +23,16 @@ layout(push_constant) uniform Controls {
     vec4 forward_far;
     vec4 right_tan;
     vec4 up_tan;
-    vec4 light_count;
-    vec4 sky;
+    vec4 light_count;  // x: lights, y: display probes, z: triangle vertices
+    vec4 sky;          // xyz: grid origin, w: spacing
 } pc;
 
 const float PI=3.14159265359;
-
-vec3 fresnel(float cos_theta,vec3 f0)
+vec3 fresnel(float cosine,vec3 f0)
 {
-    return f0+(1.0-f0)*pow(1.0-cos_theta,5.0);
+    return f0+(1.0-f0)*pow(1.0-clamp(cosine,0.0,1.0),5.0);
 }
-
-vec3 brdf(vec3 albedo,float metallic,float roughness,
-          vec3 N,vec3 V,vec3 L)
+vec3 brdf(vec3 albedo,float metallic,float roughness,vec3 N,vec3 V,vec3 L)
 {
     float nl=max(dot(N,L),0.0);
     if(nl<=0.0)return vec3(0.0);
@@ -44,114 +40,188 @@ vec3 brdf(vec3 albedo,float metallic,float roughness,
     float nv=max(dot(N,V),1e-4);
     float nh=max(dot(N,H),0.0);
     float vh=max(dot(V,H),0.0);
-    float a=roughness*roughness;
-    float a2=a*a;
+    float a=roughness*roughness, a2=a*a;
     float d=nh*nh*(a2-1.0)+1.0;
     float D=a2/max(PI*d*d,1e-6);
     float k=(roughness+1.0)*(roughness+1.0)*0.125;
     float G=(nv/(nv*(1.0-k)+k))*(nl/(nl*(1.0-k)+k));
     vec3 F=fresnel(vh,mix(vec3(0.04),albedo,metallic));
-    vec3 specular=D*G*F/max(4.0*nv*nl,1e-4);
-    vec3 diffuse=(1.0-F)*(1.0-metallic)*albedo/PI;
-    return (diffuse+specular)*nl;
+    return ((1.0-F)*(1.0-metallic)*albedo/PI+
+            D*G*F/max(4.0*nv*nl,1e-4))*nl;
 }
-
 float linear_depth(float depth)
 {
-    float n=pc.eye_near.w,f=pc.forward_far.w;
-    // The scene render pass maps world depth into the 0.1..1.0 viewport.
+    float n=pc.eye_near.w,far_plane=pc.forward_far.w;
     float d=clamp((depth-0.1)/0.9,0.0,1.0);
-    return n*f/max(f-d*(f-n),1e-6);
+    return n*far_plane/max(far_plane-d*(far_plane-n),1e-6);
 }
-
 vec3 world_position(ivec2 pixel,ivec2 extent,float depth)
 {
     vec2 ndc=(vec2(pixel)+0.5)/vec2(extent)*2.0-1.0;
-    vec3 direction=pc.forward_far.xyz+
+    vec3 ray=pc.forward_far.xyz+
         ndc.x*pc.right_tan.xyz*pc.right_tan.w-
         ndc.y*pc.up_tan.xyz*pc.up_tan.w;
-    return pc.eye_near.xyz+direction*linear_depth(depth);
+    return pc.eye_near.xyz+ray*linear_depth(depth);
 }
 
-vec4 filtered_indirect(ivec2 pixel,vec3 normal,float depth)
+// Original Rogue point-light shadow test was a cubemap PCF pass.
+// This uses the same world triangles for explicit visibility on Vulkan.
+bool triangle_hit(vec3 origin,vec3 ray,float far_distance,vec3 a,vec3 b,vec3 c)
 {
-    ivec2 size=textureSize(indirect_shadow,0);
-    ivec2 full=textureSize(g_depth,0);
-    vec2 pos=(vec2(pixel)+0.5)*0.5-0.5;
-    ivec2 base=ivec2(floor(pos));
-    vec2 t=fract(pos);
-    vec4 sum=vec4(0.0);
+    vec3 e1=b-a,e2=c-a,p=cross(ray,e2);
+    float det=dot(e1,p);
+    if(abs(det)<0.00001)return false;
+    float inv=1.0/det;
+    vec3 t=origin-a;
+    float u=dot(t,p)*inv;
+    if(u<0.0 || u>1.0)return false;
+    vec3 q=cross(t,e1);
+    float v=dot(ray,q)*inv;
+    if(v<0.0 || u+v>1.0)return false;
+    float distance=dot(e2,q)*inv;
+    return distance>0.001 && distance<far_distance;
+}
+bool any_hit(vec3 origin,vec3 ray,float distance)
+{
+    uint vertex_count=min(uint(max(pc.light_count.z,0.0)),uint(vertices.length()));
+    for(uint i=0u;i+2u<vertex_count;i+=3u)
+        if(triangle_hit(origin,ray,distance,
+            vertices[i].xyz,vertices[i+1].xyz,vertices[i+2].xyz))
+            return true;
+    return false;
+}
+
+// Port of Rogue/test.frag GetProbe: eight weighted neighbouring probes,
+// rejecting probes behind the receiver's geometric normal.
+vec3 indirect_lighting(vec3 world,vec3 normal)
+{
+    float spacing=pc.sky.w;
+    vec3 coords=(world-pc.sky.xyz)/spacing;
+    ivec3 base=ivec3(floor(coords));
+    vec3 blend=fract(coords);
+    ivec3 size=textureSize(probes,0);
+    vec3 sum=vec3(0.0);
     float weight_sum=0.0;
+    for(int z=0;z<2;++z)
     for(int y=0;y<2;++y)
     for(int x=0;x<2;++x)
     {
-        ivec2 c=clamp(base+ivec2(x,y),ivec2(0),size-1);
-        ivec2 source=min(c*2+ivec2(1),full-1);
-        float neighbor_depth=texelFetch(g_depth,source,0).r;
-        if(neighbor_depth>=0.999999 || neighbor_depth<0.1)continue;
-        vec3 neighbor_normal=normalize(
-            texelFetch(g_normal,source,0).rgb*2.0-1.0);
-        float bilateral=exp(-abs(linear_depth(depth)-
-                     linear_depth(neighbor_depth))*2.0)*
-                     pow(max(dot(normal,neighbor_normal),0.0),8.0);
-        float bilinear=(x==0?1.0-t.x:t.x)*(y==0?1.0-t.y:t.y);
-        float weight=bilateral*bilinear;
-        sum+=texelFetch(indirect_shadow,c,0)*weight;
+        ivec3 offset=ivec3(x,y,z),probe=base+offset;
+        if(any(lessThan(probe,ivec3(0))) ||
+           any(greaterThanEqual(probe,size)))continue;
+        vec3 to_probe=pc.sky.xyz+vec3(probe)*spacing-world;
+        if(dot(normal,to_probe)<=0.0)continue;
+        vec3 factors=mix(vec3(1.0)-blend,blend,vec3(offset));
+        float weight=factors.x*factors.y*factors.z;
+        sum+=weight*texelFetch(probes,probe,0).rgb;
         weight_sum+=weight;
     }
-    if(weight_sum>1e-5)return sum/weight_sum;
-    return texelFetch(indirect_shadow,clamp(pixel/2,ivec2(0),size-1),0);
+    return weight_sum>1e-5 ? max(sum/weight_sum,vec3(0.0)) : vec3(0.0);
+}
+
+// The Space debug view draws ray/sphere impostors at the actual
+// probe lattice coordinates. The lattice is not converted into geometry.
+vec4 debug_sphere(vec3 eye,vec3 direction,float max_distance)
+{
+    ivec3 dims=textureSize(probes,0);
+    float spacing=pc.sky.w;
+    vec3 box_min=pc.sky.xyz-vec3(spacing*0.5);
+    vec3 box_max=box_min+vec3(dims)*spacing;
+    vec3 inv=1.0/max(abs(direction),vec3(1e-6))*sign(direction);
+    vec3 near_axis=min((box_min-eye)*inv,(box_max-eye)*inv);
+    vec3 far_axis=max((box_min-eye)*inv,(box_max-eye)*inv);
+    float start=max(max(near_axis.x,near_axis.y),max(near_axis.z,0.0));
+    float end=min(min(far_axis.x,far_axis.y),min(far_axis.z,max_distance));
+    if(start>=end)return vec4(-1.0);
+    float t=start;
+    for(int step=0;step<160 && t<end;++step)
+    {
+        vec3 sample_pos=eye+direction*(t+1e-4);
+        ivec3 cell=ivec3(floor((sample_pos-box_min)/spacing));
+        if(any(lessThan(cell,ivec3(0))) ||
+           any(greaterThanEqual(cell,dims)))break;
+        vec3 center=pc.sky.xyz+vec3(cell)*spacing;
+        vec3 offset=center-eye;
+        float projection=dot(offset,direction);
+        float distance_squared=max(dot(offset,offset)-projection*projection,0.0);
+        const float sphere_radius=0.045;
+        if(projection>0.0 && distance_squared<sphere_radius*sphere_radius)
+        {
+            float hit=projection-sqrt(sphere_radius*sphere_radius-distance_squared);
+            if(hit>=t-0.001 && hit<end)
+            {
+                vec3 value=texelFetch(probes,cell,0).rgb;
+                if(dot(value,value)>0.000001)
+                    return vec4(value,1.0);
+            }
+        }
+        vec3 next_face=box_min+(vec3(cell)+
+            vec3(greaterThan(direction,vec3(0.0))))*spacing;
+        vec3 next_t=(next_face-eye)*inv;
+        float next=min(next_t.x,min(next_t.y,next_t.z));
+        if(next<=t+1e-5)break;
+        t=next+1e-5;
+    }
+    return vec4(-1.0);
 }
 
 void main()
 {
-    ivec2 p=ivec2(gl_GlobalInvocationID.xy);
-    ivec2 size=imageSize(hdr);
+    ivec2 p=ivec2(gl_GlobalInvocationID.xy),size=imageSize(hdr);
     if(any(greaterThanEqual(p,size)))return;
-
     float depth=texelFetch(g_depth,p,0).r;
+    bool viewmodel=depth<0.1;
+    vec3 eye=pc.eye_near.xyz;
+    vec3 fragment=world_position(p,size,depth>=0.999999?0.999:depth);
+    if(pc.light_count.y>0.5 && !viewmodel)
+    {
+        vec3 direction=normalize(fragment-eye);
+        float distance=depth>=0.999999?25.0:length(fragment-eye);
+        vec4 sphere=debug_sphere(eye,direction,distance);
+        if(sphere.a>0.0)
+        {
+            imageStore(hdr,p,vec4(sphere.rgb,1.0));
+            return;
+        }
+    }
     if(depth>=0.999999)
     {
-        imageStore(hdr,p,vec4(pc.sky.rgb,1.0));
+        imageStore(hdr,p,vec4(0.035,0.045,0.065,1.0));
         return;
     }
-    vec4 a=texelFetch(g_albedo,p,0);
+    vec4 albedo=texelFetch(g_albedo,p,0);
     vec4 n=texelFetch(g_normal,p,0);
-    vec4 m=texelFetch(g_material,p,0);
+    vec4 material=texelFetch(g_material,p,0);
     vec3 N=normalize(n.rgb*2.0-1.0);
-    bool viewmodel=depth<0.1;
-    vec3 P=viewmodel
-        ? pc.eye_near.xyz+normalize(world_position(p,size,0.18)-pc.eye_near.xyz)*0.5
-        : world_position(p,size,depth);
-    vec3 V=normalize(pc.eye_near.xyz-P);
-    float roughness=clamp(m.r,0.045,1.0);
-    float metallic=clamp(m.g,0.0,1.0);
-    float ao=clamp(m.b,0.0,1.0);
-
-    vec4 bounce_shadow=viewmodel?vec4(0.0,0.0,0.0,1.0)
-                                  :filtered_indirect(p,N,depth);
+    vec3 P=viewmodel?eye+normalize(fragment-eye)*0.5:fragment;
+    vec3 V=normalize(eye-P);
+    float roughness=clamp(material.r,0.045,1.0);
+    float metallic=clamp(material.g,0.0,1.0);
+    float ao=clamp(material.b,0.0,1.0);
     vec3 color=vec3(0.0);
-
-    uint count=min(min(uint(max(pc.light_count.x,0.0)),
-                       uint(lights.length())),64u);
-    // Viewmodel receives nearby point lights, but no screen-space world GI.
+    uint count=min(uint(max(pc.light_count.x,0.0)),uint(lights.length()));
     for(uint i=0u;i<count;++i)
     {
-        vec3 delta=lights[i].position_range.xyz-P;
-        float d2=dot(delta,delta);
-        float range=max(lights[i].position_range.w,0.001);
-        float d=sqrt(d2);
-        if(d>=range || d<1e-4)continue;
-        // Hell-style radius falloff, defined without reversed smoothstep edges.
-        float q=clamp(d/range,0.0,1.0);
+        vec3 to_light=lights[i].position_range.xyz-P;
+        float dist=length(to_light);
+        float radius=lights[i].position_range.w;
+        if(dist<0.002 || dist>=radius)continue;
+        vec3 direction=to_light/dist;
+        float q=clamp(dist/radius,0.0,1.0);
         float attenuation=1.0-q*q*(3.0-2.0*q);
-        color+=brdf(a.rgb,metallic,roughness,N,V,delta/d)*
-               lights[i].color_intensity.rgb*
-               (lights[i].color_intensity.w*attenuation);
+        // Viewmodel geometry uses its own depth interval and is never a
+        // world shadow receiver; otherwise query the exact scene triangles.
+        if(!viewmodel && any_hit(P+N*0.004,direction,dist-0.008))
+            continue;
+        color+=brdf(albedo.rgb,metallic,roughness,N,V,direction)*
+            lights[i].color_intensity.rgb*
+            (lights[i].color_intensity.w*attenuation);
     }
-    color+=a.rgb*(1.0-metallic)*ao*
-           max(bounce_shadow.rgb,vec3(0.0))/PI;
-    vec3 packed=vec3(a.a,n.a,m.a);
-    color+=packed/max(vec3(1.0)-packed,vec3(1.0/255.0));
+    // Rogue uses a 0.01 diffuse bounce factor after normalized probe sampling.
+    if(!viewmodel)
+        color+=albedo.rgb*(1.0-metallic)*ao*
+            indirect_lighting(P,N)*(0.01*min(1.0,roughness*1.5));
+    vec3 emission=vec3(albedo.a,n.a,material.a);
+    color+=emission/max(vec3(1.0)-emission,vec3(1.0/255.0));
     imageStore(hdr,p,vec4(max(color,vec3(0.0)),1.0));
 }
