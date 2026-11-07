@@ -1,5 +1,6 @@
 #pragma once
 #include <vk/vk.hpp>
+#include "clt/view/camera.hpp"
 #include <cstdint>
 
 namespace clt::postprocess
@@ -14,8 +15,8 @@ namespace clt::postprocess
     targets images(std::uint32_t image);
     void create();
     void release();
-    void gi(vk::CommandBuffer command, std::uint32_t image);
-    void lighting(vk::CommandBuffer command, std::uint32_t image);
-    void tonemap(vk::CommandBuffer command, std::uint32_t image);
+    void gi(vk::CommandBuffer command, std::uint32_t image, const camera::frame& frame);
+    void lighting(vk::CommandBuffer command, std::uint32_t image, const camera::frame& frame);
+    void tonemap(vk::CommandBuffer command, std::uint32_t image, const camera::frame& frame);
     void present(vk::CommandBuffer command, std::uint32_t image);
 }
