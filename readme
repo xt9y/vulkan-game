@@ -9,7 +9,9 @@ vulkan-game
 Build:
   c build vulkan-server
   c build vulkan-client
-The build pins VulkanEngine and VulkanSystems. VulkanNetwork uses Mbed TLS
+The build uses VulkanEngine plus direct standalone VulkanGPU, VulkanRender,
+VulkanBVH, VulkanSpatial, VulkanJobs and VulkanNetwork modules from
+vulkan-systems; it no longer uses the removed root build.c. VulkanNetwork uses Mbed TLS
 3.6.7 with DTLS 1.2 and forward-secret ECDHE-AES-GCM cipher suites.
 The single supported transport uses a persistent server identity and
 per-destination trust-on-first-use (TOFU) public-key pinning.
@@ -80,7 +82,7 @@ Rendering status:
   inverse-distance point contribution, /40 probe scale and eight-neighbour
   normal-oriented interpolation. Space toggles spherical visualization of
   actual volume cells without changing their underlying representation.
-  Lighting remains game-specific; VulkanSystems remains generic.
+  Lighting remains game-specific; the reusable Vulkan modules stay generic.
 
   The current Vulkan backend uses per-pixel world-triangle any-hit checks
   for point shadows rather than Rogue's OpenGL depth-cubemap PCF path.
@@ -94,19 +96,19 @@ Rendering status:
   swapchain image. Performance and Vulkan validation remain unverified.
 
 Rendering and reusable systems:
-  VulkanSystems/render owns general indexed geometry buffers, sampled G-buffer
+  VulkanRender owns general indexed geometry buffers, sampled G-buffer
   attachment images, render target/frame boilerplate and ordered GPU graph
   recording. The client supplies scene snapshots, material/animation payloads,
   GPU draw parameters, game-specific deferred shaders and presentation policy.
   clt/render/passes.* is removed: clt/render/renderer.cpp submits the six
   ordered geometry, cloud, probe, light, tone and presentation passes through
   render::sequence. GI policy remains in the game shaders,
-  not in VulkanSystems. The existing game uses GPU culling and
+  not in the shared VulkanGPU/Render libraries. The existing game uses GPU culling and
   streamed indexed meshes through render::geometry with nonblocking uploads.
 
   Emissive RGB is packed through the otherwise unused alpha channels of the
   existing three G-buffer targets, avoiding a fourth target. The light pass
   computes per-pixel view rays using the camera FOV and basis vectors.
-  BVH TLAS/BLAS ray queries are an optional VulkanSystems capability and are
+  BVH TLAS/BLAS ray queries remain an optional VulkanBVH capability and are
   not dispatched by the normal rasterization path; no BVH work is performed
   without a consumer requiring ray/visibility queries.
