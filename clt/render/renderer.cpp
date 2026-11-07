@@ -306,7 +306,7 @@ namespace clt::renderer
         vk::swapchain::init(info);
         scene_renderer::create_frame_resources();
         postprocess::create();
-        postprocess::synchronize_lights();
+        postprocess::synchronize_scene();
         data.passes.resize(vk::swapchain::get()->images.size());
 
         data.frames.resize(vk::swapchain::get()->size);
@@ -347,7 +347,7 @@ namespace clt::renderer
                 return;
             }
             scene_renderer::synchronize();
-            postprocess::synchronize_lights();
+            postprocess::synchronize_scene();
         }
 
         ::render::frame_scheduler::ticket active{};
@@ -371,14 +371,23 @@ namespace clt::renderer
         data.passes.record(active.command,active.image,{
             {"geometry",{},[image=active.image,render_camera](vk::CommandBuffer cmd)
                 {scene_renderer::draw(cmd,image,render_camera);}},
-            {"indirect",{gpu::access::for_image(target.indirect,range,
-                vk::ImageLayout::eGeneral,
+            {"point-cloud",{gpu::access::for_buffer(target.points,
                 vk::PipelineStageFlagBits::eComputeShader,
                 vk::AccessFlagBits::eShaderWrite,true)},
-                [image=active.image,render_camera](vk::CommandBuffer cmd)
-                {postprocess::gi(cmd,image,render_camera);}},
+                [image=active.image](vk::CommandBuffer cmd)
+                {postprocess::cloud(cmd,image);}},
+            {"probe-grid",{
+                gpu::access::for_buffer(target.points,
+                    vk::PipelineStageFlagBits::eComputeShader,
+                    vk::AccessFlagBits::eShaderRead,false),
+                gpu::access::for_image(target.grid,range,
+                    vk::ImageLayout::eGeneral,
+                    vk::PipelineStageFlagBits::eComputeShader,
+                    vk::AccessFlagBits::eShaderWrite,true)},
+                [image=active.image](vk::CommandBuffer cmd)
+                {postprocess::gi(cmd,image);}},
             {"lighting",{
-                gpu::access::for_image(target.indirect,range,
+                gpu::access::for_image(target.grid,range,
                     vk::ImageLayout::eGeneral,
                     vk::PipelineStageFlagBits::eComputeShader,
                     vk::AccessFlagBits::eShaderRead,false),
@@ -410,6 +419,8 @@ namespace clt::renderer
         try
         {
             auto result = data.frames.submit(active);
+            if(result==vk::Result::eSuccess || result==vk::Result::eSuboptimalKHR)
+                postprocess::updated();
 
             if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR)
             {
