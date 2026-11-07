@@ -14,11 +14,17 @@ struct Light {
 layout(std430,set=0,binding=0) buffer Points { CloudPoint points[]; };
 layout(std430,set=0,binding=1) readonly buffer Geometry { vec4 vertices[]; };
 layout(std430,set=0,binding=2) readonly buffer Lights { Light lights[]; };
+struct ShadowNode {
+    vec4 minimum;
+    vec4 maximum;
+    uvec4 info; // next node after subtree, first triangle, triangle count
+};
+layout(std430,set=0,binding=3) readonly buffer ShadowTree { ShadowNode nodes[]; };
 layout(push_constant) uniform Counts {
     uint point_count;
     uint vertex_count;
     uint light_count;
-    uint padding;
+    uint node_count;
 } pc;
 
 bool triangle_hit(vec3 origin,vec3 ray,float far_distance,vec3 a,vec3 b,vec3 c)
@@ -38,15 +44,48 @@ bool triangle_hit(vec3 origin,vec3 ray,float far_distance,vec3 a,vec3 b,vec3 c)
     return distance>0.001 && distance<far_distance;
 }
 
-bool any_hit(vec3 origin,vec3 ray,float far_distance)
+bool shadow_box(vec3 origin,vec3 direction,float distance,ShadowNode node)
 {
-    for(uint i=0u;i+2u<pc.vertex_count;i+=3u)
-        if(triangle_hit(origin,ray,far_distance,
-                        vertices[i].xyz,vertices[i+1].xyz,vertices[i+2].xyz))
-            return true;
-    return false;
+    vec3 safe=vec3(
+        abs(direction.x)<1e-7?(direction.x<0.0?-1e-7:1e-7):direction.x,
+        abs(direction.y)<1e-7?(direction.y<0.0?-1e-7:1e-7):direction.y,
+        abs(direction.z)<1e-7?(direction.z<0.0?-1e-7:1e-7):direction.z);
+    vec3 p=(node.minimum.xyz-origin)/safe;
+    vec3 q=(node.maximum.xyz-origin)/safe;
+    vec3 lo=min(p,q),hi=max(p,q);
+    float t0=max(max(lo.x,lo.y),max(lo.z,0.0));
+    float t1=min(min(hi.x,hi.y),min(hi.z,distance));
+    return t0<=t1;
 }
 
+bool any_hit(vec3 origin,vec3 ray,float distance)
+{
+    uint total=min(pc.node_count,uint(nodes.length()));
+    uint vertex_count=min(pc.vertex_count,uint(vertices.length()));
+    uint index=0u;
+    while(index<total)
+    {
+        ShadowNode node=nodes[index];
+        if(!shadow_box(origin,ray,distance,node))
+        {
+            index=max(node.info.x,index+1u);
+            continue;
+        }
+        if(node.info.z>0u)
+        {
+            uint first=node.info.y, end=min(first+node.info.z,vertex_count/3u);
+            for(uint i=first;i<end;++i)
+            {
+                uint v=i*3u;
+                if(triangle_hit(origin,ray,distance,
+                    vertices[v].xyz,vertices[v+1u].xyz,vertices[v+2u].xyz))
+                    return true;
+            }
+        }
+        ++index;
+    }
+    return false;
+}
 void main()
 {
     uint id=gl_GlobalInvocationID.x;
