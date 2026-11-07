@@ -59,18 +59,35 @@ void build(C_Build* b)
     c_dep_cbuild(engine, "VulkanEngine", C_TARGET_STATIC_LIBRARY);
     c_dep_include(engine, ".");
 
-    C_Dependency* systems =
-        c_git(b, "VulkanSystems", "https://github.com/xt9y/vulkan-systems.git", "a5e3b61e6995892e9c65c009e0b75c0316327903");
-    c_dep_cbuild(systems, "VulkanSystems", C_TARGET_STATIC_LIBRARY);
-    c_dep_include(systems, "gpu");
-    c_dep_include(systems, "render");
-    c_dep_include(systems, "bvh");
+    // Each VulkanSystems module is fetched through its own standalone build.
+    // Never rely on vulkan-systems/build.c or link a monolithic VulkanSystems.
+    C_Dependency* gpu =
+        c_git(b, "VulkanGPU", "https://github.com/xt9y/vulkan-systems.git", "main");
+    c_dep_subdir(gpu, "gpu");
+    c_dep_cbuild(gpu, "VulkanGPU", C_TARGET_STATIC_LIBRARY);
+    c_dep_include(gpu, ".");
 
-    // Independent CPU/network libraries: server does not use a graphics device.
+    C_Dependency* render =
+        c_git(b, "VulkanRender", "https://github.com/xt9y/vulkan-systems.git", "main");
+    c_dep_subdir(render, "render");
+    c_dep_cbuild(render, "VulkanRender", C_TARGET_STATIC_LIBRARY);
+    c_dep_include(render, ".");
+    // VulkanRender includes headers from the sibling VulkanGPU module.
+    c_dep_include(render, "../gpu");
+
+    C_Dependency* bvh =
+        c_git(b, "VulkanBVH", "https://github.com/xt9y/vulkan-systems.git", "main");
+    c_dep_subdir(bvh, "bvh");
+    c_dep_cbuild(bvh, "VulkanBVH", C_TARGET_STATIC_LIBRARY);
+    c_dep_include(bvh, ".");
+
+    // The dedicated server needs no GPU, BVH or presentation dependencies.
     C_Dependency* network =
-        c_git(b, "VulkanNetwork", "https://github.com/xt9y/vulkan-systems.git", "a5e3b61e6995892e9c65c009e0b75c0316327903");
+        c_git(b, "VulkanNetwork", "https://github.com/xt9y/vulkan-systems.git", "main");
+    c_dep_subdir(network, "network");
     c_dep_cbuild(network, "VulkanNetwork", C_TARGET_STATIC_LIBRARY);
-    c_dep_include(network, "network");
+    c_dep_include(network, ".");
+
     C_Dependency* crypto =
         c_git(b, "MbedTLS", "https://github.com/Mbed-TLS/mbedtls.git",
               "068ff080b369adfac81509f9b57b2afabaf82dc5");
@@ -82,13 +99,16 @@ void build(C_Build* b)
     c_dep_link(crypto, "mbedcrypto");
 
     C_Dependency* spatial =
-        c_git(b, "VulkanSpatial", "https://github.com/xt9y/vulkan-systems.git", "a5e3b61e6995892e9c65c009e0b75c0316327903");
+        c_git(b, "VulkanSpatial", "https://github.com/xt9y/vulkan-systems.git", "main");
+    c_dep_subdir(spatial, "spatial");
     c_dep_cbuild(spatial, "VulkanSpatial", C_TARGET_STATIC_LIBRARY);
-    c_dep_include(spatial, "spatial");
+    c_dep_include(spatial, ".");
+
     C_Dependency* jobs =
-        c_git(b, "VulkanJobs", "https://github.com/xt9y/vulkan-systems.git", "a5e3b61e6995892e9c65c009e0b75c0316327903");
+        c_git(b, "VulkanJobs", "https://github.com/xt9y/vulkan-systems.git", "main");
+    c_dep_subdir(jobs, "jobs");
     c_dep_cbuild(jobs, "VulkanJobs", C_TARGET_STATIC_LIBRARY);
-    c_dep_include(jobs, "jobs");
+    c_dep_include(jobs, ".");
 
     C_Dependency* headers =
         c_git(b, "VulkanHeaders", "https://github.com/KhronosGroup/Vulkan-Headers.git", "9fbc2a782ee3f8a4db64e7d991e23da75e893f44");
@@ -153,11 +173,11 @@ void build(C_Build* b)
     c_include(server, ".");
     c_warnings_strict(server);
     c_flag(server, "-std=c++20");
-    c_use(server, engine);
     c_use(server, network);
     c_use(server, crypto);
     c_use(server, spatial);
     c_use(server, jobs);
+    c_use(server, engine);
     c_use(server, headers);
     c_use(server, fastgltf);
     c_use(server, ozz);
@@ -188,11 +208,14 @@ void build(C_Build* b)
     c_include(client, ".");
     c_warnings_strict(client);
     c_flag(client, "-std=c++20");
-    c_use(client, engine);
-    c_use(client, systems);
+    // Dependents first, providers after: Render -> GPU -> Engine.
+    c_use(client, render);
+    c_use(client, bvh);
+    c_use(client, gpu);
     c_use(client, network);
     c_use(client, crypto);
     c_use(client, spatial);
+    c_use(client, engine);
     c_use(client, headers);
     c_use(client, glfw);
     c_use(client, fastgltf);
