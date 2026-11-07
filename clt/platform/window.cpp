@@ -89,13 +89,6 @@ namespace clt::window
         update_framebuffer_size();
     }
 
-    void set_connected(bool connected)
-    {
-        get()->title = game::options::get()->graphics.title +
-            (connected ? " | connected" : " | connecting");
-        glfwSetWindowTitle(get()->handle, get()->title.c_str());
-    }
-
     void shutdown() noexcept
     {
         if (!get()->initialized)
