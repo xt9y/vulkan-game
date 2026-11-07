@@ -3,7 +3,6 @@
 #include "scene_renderer.hpp"
 #include "clt/network/connection.hpp"
 #include "clt/view/camera.hpp"
-#include "util/math/quaternion.hpp"
 #include <render/renderer.hpp>
 #include <render/pipeline.hpp>
 #include <gpu/compute.hpp>
@@ -19,6 +18,8 @@
 #include <stdexcept>
 #include <vector>
 #include <cstdint>
+#include <utility>
+#include <iostream>
 
 namespace clt::postprocess
 {
@@ -331,10 +332,9 @@ namespace clt::postprocess
         }
     }
 
-    // The original Rogue backend samples static triangle surfaces every
-    // 0.3 units. World-space positions use the same instance transforms
-    // as the raster geometry; skinned surfaces were not included in Rogue's
-    // shadow/point-cloud generation either.
+    // Rogue derives its point cloud from static floor/wall geometry.
+    // Reuse the server's world-space collision surfaces without expanding
+    // arbitrary imported mesh polygons into brute-force visibility rays.
     void synchronize_scene()
     {
         auto& data=get();
@@ -374,23 +374,25 @@ namespace clt::postprocess
                 const float lu=length(u),lv=length(v);
                 if(lu<=0.0f || lv<=0.0f)return;
                 const vec3 U=u/lu,V=v/lv;
-                const auto interval=[&](vec3 axis,float side)
+                const int nu=std::max(1,int(std::ceil(lu/0.3f)));
+                const int nv=std::max(1,int(std::ceil(lv/0.3f)));
+                const float du=lu/float(nu),dv=lv/float(nv);
+                const auto interval=[&](vec3 axis,float step,int count)
                 {
                     float lo=dot(grid_origin-base,axis);
                     float hi=dot(limit-base,axis);
                     if(lo>hi)std::swap(lo,hi);
-                    const int begin=std::max(0,int(std::ceil(lo/0.3f-0.5f)));
-                    const int finish=std::min(int(std::ceil(side/0.3f)),
-                                              int(std::ceil(hi/0.3f+0.5f)));
+                    const int begin=std::clamp(int(std::ceil(lo/step-0.5f)),0,count);
+                    const int finish=std::clamp(int(std::ceil(hi/step+0.5f)),0,count);
                     return std::pair{begin,finish};
                 };
-                const auto [u0,u1]=interval(U,lu);
-                const auto [v0,v1]=interval(V,lv);
+                const auto [u0,u1]=interval(U,du,nu);
+                const auto [v0,v1]=interval(V,dv,nv);
                 for(int i=u0;i<u1;++i)
                 for(int j=v0;j<v1;++j)
                 {
-                    const vec3 p=base+U*((float(i)+0.5f)*0.3f)
-                                     +V*((float(j)+0.5f)*0.3f);
+                    const vec3 p=base+U*((float(i)+0.5f)*du)
+                                     +V*((float(j)+0.5f)*dv);
                     if(p.x<grid_origin.x || p.y<grid_origin.y ||
                        p.z<grid_origin.z || p.x>=limit.x ||
                        p.y>=limit.y || p.z>=limit.z)continue;
@@ -437,6 +439,9 @@ namespace clt::postprocess
                 face({b.x,a.y,a.z},{-dx,0,0},{0,dy,0},{0,0,-1});
             }
         }
+        std::clog << "clt: Rogue lighting geometry: "
+                  << points.size() << " points, "
+                  << triangles.size()/3 << " triangles from static collision surfaces\n";
 
         const auto storage=vk::BufferUsageFlagBits::eStorageBuffer;
         const auto memory=vk::MemoryPropertyFlagBits::eHostVisible |
