@@ -44,12 +44,21 @@ namespace scene
         vk::util::math::vec3 maximum{};
     };
 
+    struct point_light
+    {
+        vk::util::math::vec3 position{};
+        float radius=1.0f;
+        vk::util::math::vec3 color{1.0f,1.0f,1.0f};
+        float strength=1.0f;
+    };
+
     struct state {
         std::vector<mesh> meshes;
         std::vector<texture> textures;
         std::vector<skin> skins;
         std::vector<instance> instances;
         std::vector<collision_box> collision_boxes;
+        std::vector<point_light> lights;
     };
 
     inline bool same_instance(const instance& a, const instance& b)
