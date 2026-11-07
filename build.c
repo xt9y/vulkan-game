@@ -57,7 +57,6 @@ static void compile_shaders(void)
 // No font decoding occurs in build.c or on the render thread.
 static void prepare_editor_font(void)
 {
-    static const char* root="build/editor-font-repository";
     struct stat info;
     if(stat("build/editor-font-repository/Rogue/Rogue/res/textures/font/char_90.png",
             &info)==0)
