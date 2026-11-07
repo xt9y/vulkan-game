@@ -115,7 +115,7 @@ namespace clt::camera
             std::sin(camera.pitch),
             -std::cos(camera.yaw) * std::cos(camera.pitch)
         };
-        return {camera, look_at(eye, eye + direction)};
+        return {camera, look_at(eye, eye + direction), eye};
     }
 
     mat4 view()
