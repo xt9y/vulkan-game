@@ -254,7 +254,7 @@ void main()
     }
     if(depth>=0.999999)
     {
-        imageStore(hdr,p,vec4(0.035,0.045,0.065,1.0));
+        imageStore(hdr,p,vec4(0.0,0.0,0.0,1.0));
         return;
     }
     vec4 albedo=texelFetch(g_albedo,p,0);
