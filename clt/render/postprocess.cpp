@@ -218,8 +218,6 @@ namespace clt::postprocess
             // Static light data is set by client.cpp. The scene does not yet
             // transmit dynamic lights; retain a valid descriptor if empty.
             const auto& source_lights=game::options::get()->graphics.point_lights;
-            if(source_lights.size()>64)
-                throw std::invalid_argument("At most 64 client point lights are supported");
             std::vector<point_light> lights(std::max<std::size_t>(1,source_lights.size()));
             for(std::size_t i=0;i<source_lights.size();++i)
             {
