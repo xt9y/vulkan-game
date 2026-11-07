@@ -15,48 +15,42 @@ ECDHE-AES-GCM cipher suites. All gameplay, movement, weapon and reliable scene
 packets use the DTLS socket; there is no plaintext application fallback.
 The game owns its scene and authority protocols; network/session is reusable.
 
-Before launching either executable, provision the following environment:
-  VULKAN_NET_CA                PEM certificate of the trusted issuing CA
-  VULKAN_NET_CERT              PEM certificate of this server/client
-  VULKAN_NET_KEY               matching PEM private key of this process
-  VULKAN_NET_SERVER_NAME       optional hostname/SAN expected by the client;
-                               defaults to the game server hostname.
+Networking (automatic by default):
+  c build run vulkan-server
+  c build run vulkan-client --host 127.0.0.1 --port 27015
+  c build run vulkan-client --host YOUR_PUBLIC_IP --port 27015
 
-The CA must sign both the server certificate (serverAuth) and the separate
-per-client certificate (clientAuth). The server certificate must have a SAN
-matching VULKAN_NET_SERVER_NAME (or the host used in client.cpp). Client
-private keys MUST NOT be shared across users. Keep CA and private keys outside
-the source tree. Certificates without valid chains or server identities are
-rejected. Missing credentials cause startup failure rather than fallback.
+  The server binds UDP 0.0.0.0:27015 by default. For another server use its
+  public IP or DNS name; forward UDP 27015 on its router and allow inbound UDP
+  27015 in the host firewall. The client automatically starts the DTLS
+  handshake and uses the same protocol on localhost, LAN and WAN.
 
-Development-only credential example, on a machine with OpenSSL:
-  mkdir -p "$HOME/.config/vulkan-game/tls"
-  cd "$HOME/.config/vulkan-game/tls"
-  openssl req -new -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-    -nodes -sha256 -days 365 -subj "/CN=Vulkan Development CA" \
-    -addext "basicConstraints=critical,CA:TRUE" \
-    -keyout ca.key -out ca.crt
-  openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-    -nodes -subj "/CN=localhost" -keyout server.key -out server.csr
-  printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' > server.ext
-  openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
-    -out server.crt -days 30 -sha256 -extfile server.ext
-  openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-    -nodes -subj "/CN=development-client" -keyout client.key -out client.csr
-  printf 'extendedKeyUsage=clientAuth\n' > client.ext
-  openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
-    -out client.crt -days 30 -sha256 -extfile client.ext
-  chmod 600 *.key
+  No manual OpenSSL steps, CA distribution or client certificates are required
+  by the automatic mode. VulkanNetwork creates a persistent P-256 server key in
+  the OS user config folder. It generates a new self-signed X.509 certificate
+  from that key at startup. The client pins the server's SubjectPublicKeyInfo
+  fingerprint separately for each configured host:port after the first DTLS
+  handshake; subsequent connections reject a changed server key.
 
-Use separate process environments:
-  server: VULKAN_NET_CA=.../ca.crt VULKAN_NET_CERT=.../server.crt
-          VULKAN_NET_KEY=.../server.key
-  client: VULKAN_NET_CA=.../ca.crt VULKAN_NET_CERT=.../client.crt
-          VULKAN_NET_KEY=.../client.key VULKAN_NET_SERVER_NAME=localhost
+  SECURITY: automatic TOFU does not authenticate an entirely new server during
+  the first connection. An active on-path attacker can impersonate that initial
+  server. For strongly authenticated remote servers use a trusted CA or verify
+  the logged server fingerprint independently. Do not silently re-pin a changed
+  server after reinstalling; restore the original key or explicitly re-enroll
+  the endpoint. TOFU authenticates the server after pinning, NOT players:
+  client admission and game account security remain separate.
 
-This is a LOCAL-DEVELOPMENT example only; for deployed servers use a properly
-managed CA and unique client credentials with issuance, expiration, revocation
-and access control. No sample private key or certificate is stored in Git.
+  Existing explicitly provisioned mutual TLS remains supported when ALL
+  VULKAN_NET_CA, VULKAN_NET_CERT and VULKAN_NET_KEY are set. In that mode
+  VULKAN_NET_SERVER_NAME optionally overrides the expected server identity.
+  A partial set of credential environment variables is rejected.
+
+  The server automatically discovers neither clients nor a public address.
+  Across the internet, the client must know the host/IP and UDP port.
+  Router port forwarding is only effective when the server has a reachable
+  public IP (or suitable IPv6 firewall allowance). CGNAT may require a relay,
+  VPN or publicly reachable VPS. LAN discovery and NAT traversal are separate
+  optional features.
 
 Security and deployment limits:
   Certificates authenticate transport peers, not game accounts or permissions.
