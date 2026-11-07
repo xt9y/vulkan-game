@@ -288,7 +288,7 @@ namespace clt::connection
                 const auto server=net::endpoint::resolve(host,port);
                 data.socket=net::secure::create(
                     net::secure::role::client,
-                    game::secure_config::load(net::secure::role::client,host),0,
+                    game::secure_config::load(net::secure::role::client,host,port),0,
                     server.address.ss_family==AF_INET6?"::":"0.0.0.0");
                 net::secure::connect(data.socket,server);
                 net::session::settings transport_settings;
