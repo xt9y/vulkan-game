@@ -127,6 +127,18 @@ void main()
         vec3 delta=Q-P;
         float d2=dot(delta,delta);
         if(d2<0.0025 || d2>81.0)continue;
+        // Reject a bounce if another visible surface lies between the patches.
+        ivec2 middle_pixel;
+        float middle_z;
+        if(projected(P+delta*0.5,size,middle_pixel,middle_z))
+        {
+            float middle_depth=texelFetch(g_depth,middle_pixel,0).r;
+            if(middle_depth>=0.1 && middle_depth<0.999999)
+            {
+                float gap=middle_z-linear_depth(middle_depth);
+                if(gap>0.05 && gap<0.25)continue;
+            }
+        }
         vec3 L=delta*inversesqrt(d2);
         vec3 M=normalize(texelFetch(g_normal,q,0).rgb*2.0-1.0);
         float receiver=max(dot(N,L),0.0);
