@@ -380,6 +380,83 @@ namespace clt::postprocess
         }
     }
 
+    // Scene streaming may append instances that cannot influence any existing
+    // point light. In that case the previous shadow BVH and radiance grid are
+    // still exact; avoid rebuilding either one.
+    bool lighting_unchanged(const ::scene::state& previous,
+                            const ::scene::state& incoming)
+    {
+        if(incoming.instances.size()<previous.instances.size() ||
+           incoming.meshes.size()!=previous.meshes.size() ||
+           incoming.lights.size()!=previous.lights.size() ||
+           incoming.collision_boxes.size()!=previous.collision_boxes.size() ||
+           incoming.skins.size()!=previous.skins.size())
+            return false;
+        for(std::size_t i=0;i<previous.lights.size();++i)
+        {
+            const auto& a=previous.lights[i],&b=incoming.lights[i];
+            if(a.position.x!=b.position.x || a.position.y!=b.position.y ||
+               a.position.z!=b.position.z || a.radius!=b.radius ||
+               a.color.x!=b.color.x || a.color.y!=b.color.y ||
+               a.color.z!=b.color.z || a.strength!=b.strength)
+                return false;
+        }
+        for(std::size_t i=0;i<previous.collision_boxes.size();++i)
+        {
+            const auto& a=previous.collision_boxes[i],&b=incoming.collision_boxes[i];
+            if(a.minimum.x!=b.minimum.x || a.minimum.y!=b.minimum.y ||
+               a.minimum.z!=b.minimum.z || a.maximum.x!=b.maximum.x ||
+               a.maximum.y!=b.maximum.y || a.maximum.z!=b.maximum.z)
+                return false;
+        }
+        for(std::size_t i=0;i<previous.meshes.size();++i)
+            if(!::scene::same_mesh(previous.meshes[i],incoming.meshes[i]))
+                return false;
+        for(std::size_t i=0;i<previous.skins.size();++i)
+        {
+            const auto& a=previous.skins[i],&b=incoming.skins[i];
+            if(a.id!=b.id || a.skeleton!=b.skeleton ||
+               a.inverse_bind!=b.inverse_bind || a.clips.size()!=b.clips.size())
+                return false;
+            for(std::size_t j=0;j<a.clips.size();++j)
+                if(a.clips[j].name!=b.clips[j].name ||
+                   a.clips[j].bytes!=b.clips[j].bytes)
+                    return false;
+        }
+        if(!std::equal(previous.instances.begin(),previous.instances.end(),
+                       incoming.instances.begin(),::scene::same_instance))
+            return false;
+
+        using namespace vk::util::math;
+        for(std::size_t i=previous.instances.size();i<incoming.instances.size();++i)
+        {
+            const auto& instance=incoming.instances[i];
+            const auto found=std::find_if(incoming.meshes.begin(),incoming.meshes.end(),
+                [&](const ::scene::mesh& mesh){return mesh.id==instance.mesh_id;});
+            if(found==incoming.meshes.end())return false;
+            if(found->surface.alpha_mode==2 || found->indices.empty())continue;
+            // Animated deformation can extend outside the bind-pose bounds.
+            // Conservatively force a rebuild for new skinned instances.
+            if(found->skin_id)return false;
+            float furthest_squared=0.f;
+            for(const auto& vertex:found->vertices)
+                furthest_squared=std::max(furthest_squared,
+                    length_squared(vertex.position));
+            const float scale=std::max({std::abs(instance.pose.scale.x),
+                std::abs(instance.pose.scale.y),std::abs(instance.pose.scale.z)});
+            if(!std::isfinite(scale) || !std::isfinite(furthest_squared))
+                return false;
+            const float radius=std::sqrt(furthest_squared)*scale+0.01f;
+            for(const auto& light:incoming.lights)
+            {
+                const float reach=radius+light.radius;
+                if(length_squared(instance.pose.position-light.position)<=reach*reach)
+                    return false;
+            }
+        }
+        return true;
+    }
+
     // Rogue derives its point cloud from static floor/wall geometry.
     // Reuse the server's world-space collision surfaces without expanding
     // arbitrary imported mesh polygons into brute-force visibility rays.
@@ -388,6 +465,11 @@ namespace clt::postprocess
         auto& data=get();
         const auto source=connection::snapshot();
         if(source==data.snapshot)return;
+        if(source && data.snapshot && lighting_unchanged(*data.snapshot,*source))
+        {
+            data.snapshot=source;
+            return;
+        }
 
         using namespace vk::util::math;
 
