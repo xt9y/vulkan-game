@@ -7,6 +7,14 @@ layout(set=0,binding=2) uniform sampler2D g_material;
 layout(set=0,binding=3) uniform sampler2D g_depth;
 layout(rgba16f,set=0,binding=4) writeonly uniform image2D indirect_shadow;
 
+struct PointLight {
+    vec4 position_range;
+    vec4 color_intensity;
+};
+layout(std430,set=0,binding=5) readonly buffer Lights {
+    PointLight lights[];
+};
+
 layout(push_constant) uniform Controls {
     int enabled;
     float exposure;
@@ -129,6 +137,22 @@ void main()
         float source_sun=max(dot(M,normalize(pc.sun.xyz)),0.0);
         vec3 outgoing=albedo*(1.0-material.g)*
             pc.sun.w*source_sun/PI+emission_at(q);
+        uint count=min(min(uint(max(pc.ambient_count.w,0.0)),
+                           uint(lights.length())),64u);
+        for(uint light=0u;light<count;++light)
+        {
+            vec3 delta=lights[light].position_range.xyz-Q;
+            float d2=dot(delta,delta);
+            float radius=max(lights[light].position_range.w,0.001);
+            float d=sqrt(d2);
+            if(d>=radius || d<1e-4)continue;
+            float falloff=clamp(1.0-pow(d/radius,4.0),0.0,1.0);
+            outgoing+=albedo*(1.0-material.g)*
+                max(dot(M,delta/d),0.0)/PI*
+                lights[light].color_intensity.rgb*
+                (lights[light].color_intensity.w*falloff*falloff/
+                 max(d2,0.01));
+        }
         // Each screen-space tap represents a finite patch of source geometry.
         float size_y=2.0*linear_depth(z)*pc.up_tan.w/float(size.y);
         float area=min(4.0,400.0*size_y*size_y);
