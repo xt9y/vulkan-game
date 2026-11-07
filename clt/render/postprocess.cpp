@@ -41,6 +41,7 @@ namespace clt::postprocess
             std::vector<frame> frames;
             vk::Sampler sampler{};
             gpu::owned_buffer lights;
+            std::uint32_t light_count=0;
             std::unique_ptr<gpu::descriptors> gi_sets;
             std::unique_ptr<gpu::descriptors> lighting_sets;
             std::unique_ptr<gpu::descriptors> tone_sets;
@@ -128,7 +129,7 @@ namespace clt::postprocess
                 {lighting.sun_direction.x,lighting.sun_direction.y,
                  lighting.sun_direction.z,lighting.sun_intensity},
                 {0.0f,0.0f,0.0f,
-                 float(std::min<std::size_t>(lighting.point_lights.size(),64))},
+                 float(get().light_count)},
                 {0.035f,0.045f,0.065f,1.0f}
             };
             const auto width=half?(extent.width+1)/2:extent.width;
@@ -199,21 +200,10 @@ namespace clt::postprocess
                  game::options::get()->graphics.presentation_shader}
             });
 
-            // Static light data is set by client.cpp. The scene does not yet
-            // transmit dynamic lights; retain a valid descriptor if empty.
-            const auto& source_lights=game::options::get()->graphics.point_lights;
-            std::vector<point_light> lights(std::max<std::size_t>(1,source_lights.size()));
-            for(std::size_t i=0;i<source_lights.size();++i)
-            {
-                const auto& src=source_lights[i];
-                lights[i]={{src.position.x,src.position.y,src.position.z,src.range},
-                           {src.color.x,src.color.y,src.color.z,src.intensity}};
-            }
-            data.lights=gpu::create_buffer(lights.size()*sizeof(point_light),
+            data.lights=gpu::create_buffer(64*sizeof(point_light),
                 vk::BufferUsageFlagBits::eStorageBuffer,
                 vk::MemoryPropertyFlagBits::eHostVisible |
                 vk::MemoryPropertyFlagBits::eHostCoherent);
-            vk::buffer::write(data.lights,lights.data(),lights.size()*sizeof(point_light));
 
             data.frames.reserve(count);
             for(std::uint32_t i=0;i<count;++i)
@@ -299,6 +289,28 @@ namespace clt::postprocess
             release();
             throw;
         }
+    }
+
+    // Only called after all previous GPU frames are idle.
+    void synchronize_lights()
+    {
+        auto& data=get();
+        const auto source=connection::snapshot();
+        const auto count=source?source->lights.size():0;
+        if(count>64)
+            throw std::runtime_error("Scene exceeds 64 point lights");
+        if(count)
+        {
+            std::array<point_light,64> payload{};
+            for(std::size_t i=0;i<count;++i)
+            {
+                const auto& light=source->lights[i];
+                payload[i]={{light.position.x,light.position.y,light.position.z,light.radius},
+                            {light.color.x,light.color.y,light.color.z,light.strength}};
+            }
+            vk::buffer::write(data.lights,payload.data(),count*sizeof(point_light));
+        }
+        data.light_count=static_cast<std::uint32_t>(count);
     }
 
     void release()
