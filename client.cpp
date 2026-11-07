@@ -79,8 +79,6 @@ int main(int argc, char** argv)
         settings.graphics.fullscreen_shader = "build/shaders/fullscreen.vert.spv";
         settings.graphics.presentation_shader = "build/shaders/present.frag.spv";
         settings.graphics.exposure = 1.0f;
-        settings.graphics.sun_direction = {0.5f, 1.0f, 0.3f};
-        settings.graphics.sun_intensity = 0.0f; // Global sun disabled
 
         game::options::init(argc, argv, game::options::mode::client_only,
                             std::move(settings));
