@@ -77,7 +77,8 @@ Platform requirements:
 Rendering status:
   The old screen-space GI shader and its 2D target were replaced by the
   Rogue/hellengine-bak world-space approach: a 0.3-unit static-surface point
-  cloud, triangle visibility, and an RGBA16F 32x22x36 probe volume spaced
+  cloud generated from streamed collision boxes rather than high-poly model
+  triangles, triangle visibility, and an RGBA16F 32x22x36 probe volume spaced
   at 0.2 units. The shaders preserve Rogue's 2.6-unit propagation range,
   inverse-distance point contribution, /40 probe scale and eight-neighbour
   normal-oriented interpolation. Space toggles spherical visualization of
@@ -88,8 +89,8 @@ Rendering status:
   for point shadows rather than Rogue's OpenGL depth-cubemap PCF path.
   This is not a literal 1:1 raster pipeline port: the OpenGL framebuffer,
   presentation, animated-geometry and weapon code cannot be copied into
-  Vulkan unchanged. Probe generation excludes animated/skinned triangles
-  as the original static point-cloud/shadow source did. The volume covers
+  Vulkan unchanged. Probe geometry uses static collision boxes, so imported
+  characters without such boxes do not cast detailed mesh shadows. The volume covers
   only the region around the demo center; objects outside that region
   receive direct lighting but no probe contribution.
   Probe updates are triggered by new scene snapshots and tracked per
