@@ -15,6 +15,7 @@ namespace clt::camera
     {
         state pose;
         vk::util::math::mat4 view;
+        vk::util::math::vec3 eye;
     };
 
     state* get();
