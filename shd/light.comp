@@ -24,8 +24,7 @@ layout(push_constant) uniform Controls {
     vec4 forward_far;
     vec4 right_tan;
     vec4 up_tan;
-    vec4 sun;
-    vec4 ambient_count;
+    vec4 light_count;
     vec4 sky;
 } pc;
 
@@ -131,10 +130,9 @@ void main()
 
     vec4 bounce_shadow=viewmodel?vec4(0.0,0.0,0.0,1.0)
                                   :filtered_indirect(p,N,depth);
-    vec3 color=brdf(a.rgb,metallic,roughness,N,V,normalize(pc.sun.xyz))*
-               pc.sun.w*clamp(bounce_shadow.a,0.0,1.0);
+    vec3 color=vec3(0.0);
 
-    uint count=min(min(uint(max(pc.ambient_count.w,0.0)),
+    uint count=min(min(uint(max(pc.light_count.x,0.0)),
                        uint(lights.length())),64u);
     // Viewmodel receives nearby point lights, but no screen-space world GI.
     for(uint i=0u;i<count;++i)
@@ -152,8 +150,7 @@ void main()
                (lights[i].color_intensity.w*attenuation);
     }
     color+=a.rgb*(1.0-metallic)*ao*
-           (max(bounce_shadow.rgb,vec3(0.0))/PI+
-            pc.ambient_count.rgb);
+           max(bounce_shadow.rgb,vec3(0.0))/PI;
     vec3 packed=vec3(a.a,n.a,m.a);
     color+=packed/max(vec3(1.0)-packed,vec3(1.0/255.0));
     imageStore(hdr,p,vec4(max(color,vec3(0.0)),1.0));
