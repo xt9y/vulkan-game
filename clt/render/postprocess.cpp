@@ -251,7 +251,7 @@ namespace clt::postprocess
                 current.presentation=data.present_sets->set(i);
 
                 const auto g = scene_renderer::outputs(i);
-                std::vector<vk::DescriptorImageInfo> gi(5);
+                std::array<vk::DescriptorImageInfo,5> gi{};
                 for(std::size_t j=0;j<g.views.size();++j)
                 {
                     gi[j].sampler=data.sampler;
@@ -267,7 +267,7 @@ namespace clt::postprocess
                 data.gi_sets->write_buffer(i,5,
                     vk::buffer::descriptor(data.lights));
 
-                std::vector<vk::DescriptorImageInfo> lighting(6);
+                std::array<vk::DescriptorImageInfo,6> lighting{};
                 for(std::size_t j=0;j<g.views.size();++j)
                     lighting[j]=gi[j];
                 lighting[4].sampler=data.sampler;
@@ -279,7 +279,7 @@ namespace clt::postprocess
                     data.lighting_sets->write_image(i,j,lighting[j]);
                 data.lighting_sets->write_buffer(i,6,
                     vk::buffer::descriptor(data.lights));
-                std::vector<vk::DescriptorImageInfo> tone(2);
+                std::array<vk::DescriptorImageInfo,2> tone{};
                 tone[0].sampler = data.sampler;
                 tone[0].imageView = current.hdr.view;
                 tone[0].imageLayout = vk::ImageLayout::eGeneral;
@@ -287,7 +287,7 @@ namespace clt::postprocess
                 tone[1].imageLayout = vk::ImageLayout::eGeneral;
                 for(std::uint32_t j=0;j<tone.size();++j)
                     data.tone_sets->write_image(i,j,tone[j]);
-                std::vector<vk::DescriptorImageInfo> presented(1);
+                std::array<vk::DescriptorImageInfo,1> presented{};
                 presented[0].sampler = data.sampler;
                 presented[0].imageView = current.ldr.view;
                 presented[0].imageLayout = vk::ImageLayout::eGeneral;
