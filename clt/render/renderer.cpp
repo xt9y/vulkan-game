@@ -15,6 +15,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <stdexcept>
+#include <iostream>
 #include <thread>
 
 namespace clt::renderer
@@ -219,6 +220,9 @@ namespace clt::renderer
             vk::device::init(device_info);
             vk::queue::init(family);
             vk::command::init(family);
+            get()->timestamps_supported=
+                vk::physical_device::get()->handle
+                    .getQueueFamilyProperties()[family].timestampValidBits>0;
 
             get()->frames.create(2);
                 
@@ -239,6 +243,7 @@ namespace clt::renderer
 
 
         vk::device::idle();
+        data.timings.reset();
         gpu::upload::retire(true);
 
         data.passes.reset();
@@ -310,6 +315,9 @@ namespace clt::renderer
         data.passes.resize(vk::swapchain::get()->images.size());
 
         data.frames.resize(vk::swapchain::get()->size);
+        data.timings.create(
+            static_cast<std::uint32_t>(vk::swapchain::get()->images.size()),
+            6,data.timestamps_supported);
     }
 
     void draw_frame()
@@ -334,6 +342,23 @@ namespace clt::renderer
         }
 
         data.frames.wait();
+
+        // Poll without waiting on GPU queries. Each image owns its own pool.
+        for(std::uint32_t image=0;image<vk::swapchain::get()->images.size();++image)
+        {
+            auto values=data.timings.read(image);
+            if(values.size()==data.gpu_ms.size())
+                std::copy(values.begin(),values.end(),data.gpu_ms.begin());
+        }
+        if(++data.profile_frames%120==0 && data.timings.supported())
+        {
+            std::clog << "gpu(ms): geometry=" << data.gpu_ms[0]
+                      << " cloud=" << data.gpu_ms[1]
+                      << " gi=" << data.gpu_ms[2]
+                      << " lighting=" << data.gpu_ms[3]
+                      << " tonemap=" << data.gpu_ms[4]
+                      << " present=" << data.gpu_ms[5] << '\n';
+        }
 
         // Resource replacements are only applied once all older submissions
         // have finished. Never block the render thread waiting on every frame.
@@ -368,14 +393,26 @@ namespace clt::renderer
         const vk::ImageSubresourceRange range{
             vk::ImageAspectFlagBits::eColor,0,1,0,1
         };
+        data.timings.begin_frame(active.command,active.image);
+        const auto measure=[&](std::uint32_t index,gpu::graph::callback callback)
+            ->gpu::graph::callback
+        {
+            return [timings=&data.timings,image=active.image,index,
+                    callback=std::move(callback)](vk::CommandBuffer command)
+            {
+                timings->start(command,image,index);
+                callback(command);
+                timings->end(command,image,index);
+            };
+        };
         data.passes.record(active.command,active.image,{
-            {"geometry",{},[image=active.image,render_camera](vk::CommandBuffer cmd)
-                {scene_renderer::draw(cmd,image,render_camera);}},
+            {"geometry",{},measure(0,[image=active.image,render_camera](vk::CommandBuffer cmd)
+                {scene_renderer::draw(cmd,image,render_camera);})},
             {"point-cloud",{gpu::access::for_buffer(target.points,
                 vk::PipelineStageFlagBits::eComputeShader,
                 vk::AccessFlagBits::eShaderWrite,true)},
-                [image=active.image](vk::CommandBuffer cmd)
-                {postprocess::cloud(cmd,image);}},
+                measure(1,[image=active.image](vk::CommandBuffer cmd)
+                {postprocess::cloud(cmd,image);})},
             {"probe-grid",{
                 gpu::access::for_buffer(target.points,
                     vk::PipelineStageFlagBits::eComputeShader,
@@ -384,8 +421,8 @@ namespace clt::renderer
                     vk::ImageLayout::eGeneral,
                     vk::PipelineStageFlagBits::eComputeShader,
                     vk::AccessFlagBits::eShaderWrite,true)},
-                [image=active.image](vk::CommandBuffer cmd)
-                {postprocess::gi(cmd,image);}},
+                measure(2,[image=active.image](vk::CommandBuffer cmd)
+                {postprocess::gi(cmd,image);})},
             {"lighting",{
                 gpu::access::for_image(target.grid,range,
                     vk::ImageLayout::eGeneral,
@@ -395,8 +432,8 @@ namespace clt::renderer
                     vk::ImageLayout::eGeneral,
                     vk::PipelineStageFlagBits::eComputeShader,
                     vk::AccessFlagBits::eShaderWrite,true)},
-                [image=active.image,render_camera](vk::CommandBuffer cmd)
-                {postprocess::lighting(cmd,image,render_camera);}},
+                measure(3,[image=active.image,render_camera](vk::CommandBuffer cmd)
+                {postprocess::lighting(cmd,image,render_camera);})},
             {"tonemapping",{
                 gpu::access::for_image(target.hdr,range,
                     vk::ImageLayout::eGeneral,
@@ -406,19 +443,20 @@ namespace clt::renderer
                     vk::ImageLayout::eGeneral,
                     vk::PipelineStageFlagBits::eComputeShader,
                     vk::AccessFlagBits::eShaderWrite,true)},
-                [image=active.image,render_camera](vk::CommandBuffer cmd)
-                {postprocess::tonemap(cmd,image,render_camera);}},
+                measure(4,[image=active.image,render_camera](vk::CommandBuffer cmd)
+                {postprocess::tonemap(cmd,image,render_camera);})},
             {"presentation",{gpu::access::for_image(target.ldr,range,
                 vk::ImageLayout::eGeneral,
                 vk::PipelineStageFlagBits::eFragmentShader,
                 vk::AccessFlagBits::eShaderRead,false)},
-                [image=active.image](vk::CommandBuffer cmd)
-                {postprocess::present(cmd,image);}}
+                measure(5,[image=active.image](vk::CommandBuffer cmd)
+                {postprocess::present(cmd,image);})}
         });
 
         try
         {
             auto result = data.frames.submit(active);
+            data.timings.submitted(active.image);
             if(result==vk::Result::eSuccess || result==vk::Result::eSuboptimalKHR)
                 postprocess::updated(active.image);
 
@@ -456,6 +494,7 @@ namespace clt::renderer
 
             get()->frames.reset();
             get()->passes.reset();
+            get()->timings.reset();
             postprocess::release();
             scene_renderer::shutdown();
 
