@@ -170,7 +170,11 @@ void build(C_Build* b)
     c_sources(client, "clt/app/*.cpp");
     c_sources(client, "clt/network/*.cpp");
     c_sources(client, "clt/platform/*.cpp");
-    c_sources(client, "clt/render/*.cpp");
+    // Compile exactly one renderer. Local experimental .cpp files are not linked.
+    c_sources(client, "clt/render/renderer.cpp");
+    c_sources(client, "clt/render/scene_renderer.cpp");
+    c_sources(client, "clt/render/postprocess.cpp");
+    c_sources(client, "clt/render/texture.cpp");
     c_sources(client, "clt/animation/*.cpp");
     c_sources(client, "clt/input/*.cpp");
     c_sources(client, "clt/view/*.cpp");
