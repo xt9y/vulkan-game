@@ -56,8 +56,6 @@ namespace clt::postprocess
             return data;
         }
 
-        std::atomic<bool> use_lighting{true};
-        std::atomic<bool> use_tonemapping{true};
         std::atomic<float> exposure_value{};
 
         struct push {
@@ -65,10 +63,13 @@ namespace clt::postprocess
             float exposure;
             std::array<float, 2> padding{};
             std::array<float, 4> view_direction{};
+            std::array<float, 4> view_right{};
+            std::array<float, 4> view_up{};
             std::array<float, 4> sun{};
             std::array<float, 4> ambient{};
             std::array<float, 4> sky{};
         };
+        static_assert(sizeof(push)<=128);
 
         std::vector<vk::DescriptorSetLayoutBinding> bindings(
             std::uint32_t sampled,std::uint32_t storage,vk::ShaderStageFlags stages)
@@ -104,17 +105,21 @@ namespace clt::postprocess
         }
 
         void compute(vk::CommandBuffer command, const gpu::compute& program,
-                     vk::DescriptorSet set, bool enabled)
+                     vk::DescriptorSet set)
         {
             const auto extent = vk::swapchain::get()->extent;
             const auto view = camera::snapshot();
+            const float sin_yaw=std::sin(view.yaw),cos_yaw=std::cos(view.yaw);
+            const float sin_pitch=std::sin(view.pitch),cos_pitch=std::cos(view.pitch);
+            const float tan_half=std::tan(view.fov*0.5f);
+            const float aspect=float(extent.width)/float(extent.height);
             const auto& lighting = game::options::get()->graphics;
             const push controls{
-                enabled ? 1 : 0, exposure_value.load(std::memory_order_relaxed),
+                1, exposure_value.load(std::memory_order_relaxed),
                 {},
-                {-std::sin(view.yaw) * std::cos(view.pitch),
-                 -std::sin(view.pitch),
-                 std::cos(view.yaw) * std::cos(view.pitch), 0},
+                {-sin_yaw*cos_pitch,-sin_pitch,cos_yaw*cos_pitch,0},
+                {cos_yaw,0,sin_yaw,tan_half*aspect},
+                {-sin_yaw*sin_pitch,cos_pitch,-cos_yaw*sin_pitch,tan_half},
                 {lighting.sun_direction.x, lighting.sun_direction.y,
                  lighting.sun_direction.z, lighting.sun_intensity},
                 {0.08f, 0.02f, 0, 0},
@@ -124,23 +129,6 @@ namespace clt::postprocess
                 command, (extent.width + 7) / 8, (extent.height + 7) / 8, 1,
                 {set}, &controls, sizeof(controls));
         }
-    }
-
-    bool enabled(effect value)
-    {
-        return (value == effect::lighting ? use_lighting : use_tonemapping)
-            .load(std::memory_order_relaxed);
-    }
-
-    void set(effect value, bool active)
-    {
-        (value == effect::lighting ? use_lighting : use_tonemapping)
-            .store(active, std::memory_order_relaxed);
-    }
-
-    void toggle(effect value)
-    {
-        set(value, !enabled(value));
     }
 
     void set_exposure(float exposure)
@@ -254,10 +242,6 @@ namespace clt::postprocess
     {
         auto& data = get();
         const auto device = vk::device::get()->handle;
-        for (auto& frame : data.frames)
-        {
-
-        }
         data.frames.clear();
 
         data.lighting_program.reset();
@@ -280,28 +264,18 @@ namespace clt::postprocess
         return {frame.hdr.image, frame.ldr.image};
     }
 
-    vk::ImageView hdr_view(std::uint32_t image)
-    {
-        return get().frames.at(image).hdr.view;
-    }
-
-    vk::Sampler sampler()
-    {
-        return get().sampler;
-    }
-
     void lighting(vk::CommandBuffer command, std::uint32_t image)
     {
         const auto& current = get().frames.at(image);
         compute(command, *get().lighting_program,
-                current.lighting, enabled(effect::lighting));
+                current.lighting);
     }
 
     void tonemap(vk::CommandBuffer command, std::uint32_t image)
     {
         const auto& current = get().frames.at(image);
         compute(command, *get().tone_program,
-                current.tone, enabled(effect::tonemapping));
+                current.tone);
     }
 
     void present(vk::CommandBuffer command, std::uint32_t image)

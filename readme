@@ -69,3 +69,20 @@ Security and deployment limits:
 
 Native compilation, handshake interoperability and platform/runtime regression
 testing are required before treating this revision as a release.
+
+Rendering and reusable systems:
+  VulkanSystems/render owns general indexed geometry buffers, sampled G-buffer
+  attachment images, render target/frame boilerplate and ordered GPU graph
+  recording. The client supplies scene snapshots, material/animation payloads,
+  GPU draw parameters, game-specific deferred shaders and presentation policy.
+  clt/render/passes.* is removed: clt/render/renderer.cpp submits its four
+  callbacks through render::sequence. No new GI renderer or global lighting
+  policy is embedded in VulkanSystems. The existing game uses GPU culling and
+  streamed indexed meshes through render::geometry with nonblocking uploads.
+
+  Emissive RGB is packed through the otherwise unused alpha channels of the
+  existing three G-buffer targets, avoiding a fourth target. The light pass
+  computes per-pixel view rays using the camera FOV and basis vectors.
+  BVH TLAS/BLAS ray queries are an optional VulkanSystems capability and are
+  not dispatched by the normal rasterization path; no BVH work is performed
+  without a consumer requiring ray/visibility queries.

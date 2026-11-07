@@ -3,7 +3,7 @@
 
 #include "scene_renderer.hpp"
 #include "postprocess.hpp"
-#include "passes.hpp"
+#include <gpu/graph.hpp>
 #include <gpu/upload.hpp>
 
 #include "clt/platform/vulkan_loader.hpp"
@@ -240,7 +240,7 @@ namespace clt::renderer
         vk::device::idle();
         gpu::upload::retire(true);
 
-        passes::release();
+        data.passes.reset();
         postprocess::release();
         scene_renderer::release_frame_resources();
         scene_renderer::reset_scene();
@@ -297,7 +297,7 @@ namespace clt::renderer
         vk::swapchain::init(info);
         scene_renderer::create_frame_resources();
         postprocess::create();
-        passes::create();
+        data.passes.resize(vk::swapchain::get()->images.size());
 
         data.frames.resize(vk::swapchain::get()->size);
     }
@@ -350,7 +350,39 @@ namespace clt::renderer
             return;
         }
 
-        passes::record(active.command, active.image);
+        // Geometry retains its render-pass external dependency into compute.
+        // All subsequent image hazards are tracked by the reusable GPU graph.
+        const auto target=postprocess::images(active.image);
+        const vk::ImageSubresourceRange range{
+            vk::ImageAspectFlagBits::eColor,0,1,0,1
+        };
+        data.passes.record(active.command,active.image,{
+            {"geometry",{},[image=active.image](vk::CommandBuffer cmd)
+                {scene_renderer::draw(cmd,image);}},
+            {"lighting",{gpu::access::for_image(target.hdr,range,
+                vk::ImageLayout::eGeneral,
+                vk::PipelineStageFlagBits::eComputeShader,
+                vk::AccessFlagBits::eShaderWrite,true)},
+                [image=active.image](vk::CommandBuffer cmd)
+                {postprocess::lighting(cmd,image);}},
+            {"tonemapping",{
+                gpu::access::for_image(target.hdr,range,
+                    vk::ImageLayout::eGeneral,
+                    vk::PipelineStageFlagBits::eComputeShader,
+                    vk::AccessFlagBits::eShaderRead,false),
+                gpu::access::for_image(target.ldr,range,
+                    vk::ImageLayout::eGeneral,
+                    vk::PipelineStageFlagBits::eComputeShader,
+                    vk::AccessFlagBits::eShaderWrite,true)},
+                [image=active.image](vk::CommandBuffer cmd)
+                {postprocess::tonemap(cmd,image);}},
+            {"presentation",{gpu::access::for_image(target.ldr,range,
+                vk::ImageLayout::eGeneral,
+                vk::PipelineStageFlagBits::eFragmentShader,
+                vk::AccessFlagBits::eShaderRead,false)},
+                [image=active.image](vk::CommandBuffer cmd)
+                {postprocess::present(cmd,image);}}
+        });
 
         try
         {
@@ -389,7 +421,7 @@ namespace clt::renderer
             }
 
             get()->frames.reset();
-            passes::release();
+            get()->passes.reset();
             postprocess::release();
             scene_renderer::shutdown();
 

@@ -84,12 +84,17 @@ void main()
     if ((flags & 16) != 0)
         emission *= linear_color(texture(emissive_texture, uv).rgb);
 
-    out_albedo = base;
-    out_normal = vec4(N * 0.5 + 0.5, 1.0);
+    // Alpha was consumed by the opaque/masked test above. The lighting pass
+    // has no need for it, so pack RGB emission across the three spare alphas.
+    // e/(1+e) maps HDR emissive strengths to the existing RGBA8 G-buffer.
+    vec3 encoded_emission = max(emission, vec3(0.0));
+    encoded_emission /= 1.0 + encoded_emission;
+    out_albedo = vec4(base.rgb, encoded_emission.r);
+    out_normal = vec4(N * 0.5 + 0.5, encoded_emission.g);
     out_material = vec4(
         clamp(roughness, 0.045, 1.0),
         clamp(metallic, 0.0, 1.0),
         clamp(ao, 0.0, 1.0),
-        clamp(dot(emission, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0)
+        encoded_emission.b
     );
 }

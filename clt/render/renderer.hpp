@@ -1,9 +1,11 @@
 #pragma once
 #include <render/frame.hpp>
+#include <render/sequence.hpp>
 
 namespace clt::renderer {
     struct state {
         ::render::frame_scheduler frames;
+        ::render::sequence passes;
         bool initialized=false;
     };
     state* get();

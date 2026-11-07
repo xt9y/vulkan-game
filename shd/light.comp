@@ -11,6 +11,8 @@ layout(push_constant) uniform Controls
     float exposure;
     vec2 padding;
     vec4 view_direction;
+    vec4 view_right;
+    vec4 view_up;
     vec4 sun;
     vec4 ambient;
     vec4 sky;
@@ -53,18 +55,25 @@ void main()
         return;
     }
 
-    vec3 albedo = texelFetch(g_albedo, p, 0).rgb;
+    vec4 albedo_emission = texelFetch(g_albedo, p, 0);
+    vec3 albedo = albedo_emission.rgb;
     if (pc.enabled == 0)
     {
         imageStore(hdr, p, vec4(albedo, 1.0));
         return;
     }
-    vec3 N = normalize(texelFetch(g_normal, p, 0).rgb * 2.0 - 1.0);
+    vec4 normal_emission = texelFetch(g_normal, p, 0);
+    vec3 N = normalize(normal_emission.rgb * 2.0 - 1.0);
     vec4 surface = texelFetch(g_material, p, 0);
     float roughness = clamp(surface.r, 0.045, 1.0);
     float metallic = clamp(surface.g, 0.0, 1.0);
     float ao = surface.b;
-    vec3 V = normalize(pc.view_direction.xyz);
+    // A single view vector per frame is incorrect for wide-FOV specular.
+    // The ray is independent of depth, so no matrix inverse or extra target.
+    vec2 ndc = (vec2(p) + 0.5) / vec2(size) * 2.0 - 1.0;
+    vec3 V = normalize(pc.view_direction.xyz
+        - ndc.x * pc.view_right.xyz * pc.view_right.w
+        + ndc.y * pc.view_up.xyz * pc.view_up.w);
     vec3 L = normalize(pc.sun.xyz);
     vec3 H = normalize(L + V);
     float nv = max(dot(N, V), 0.001);
@@ -80,6 +89,8 @@ void main()
     vec3 diffuse = (1.0 - F) * (1.0 - metallic) * albedo / PI;
     vec3 direct = (diffuse + specular) * nl * pc.sun.w;
     vec3 ambient = albedo * (1.0 - metallic) * pc.ambient.x * ao + f0 * pc.ambient.y * ao;
-    vec3 color = ambient + direct + vec3(surface.a);
+    vec3 e = vec3(albedo_emission.a,normal_emission.a,surface.a);
+    vec3 emission = e / max(vec3(1.0)-e,vec3(1.0/255.0));
+    vec3 color = ambient + direct + emission;
     imageStore(hdr, p, vec4(color, 1.0));
 }

@@ -60,22 +60,23 @@ void build(C_Build* b)
     c_dep_include(engine, ".");
 
     C_Dependency* systems =
-        c_git(b, "VulkanSystems", "https://github.com/xt9y/vulkan-systems.git", "58ca90258fc5a660792b73ec8111b1a13457a953");
+        c_git(b, "VulkanSystems", "https://github.com/xt9y/vulkan-systems.git", "3f20e71ef20bb84ba8b6bd23a9c6fe1d3ba55369");
     c_dep_cbuild(systems, "VulkanSystems", C_TARGET_STATIC_LIBRARY);
     c_dep_include(systems, "gpu");
     c_dep_include(systems, "render");
+    c_dep_include(systems, "bvh");
 
     // Independent CPU/network libraries: server does not use a graphics device.
     C_Dependency* network =
-        c_git(b, "VulkanNetwork", "https://github.com/xt9y/vulkan-systems.git", "58ca90258fc5a660792b73ec8111b1a13457a953");
+        c_git(b, "VulkanNetwork", "https://github.com/xt9y/vulkan-systems.git", "3f20e71ef20bb84ba8b6bd23a9c6fe1d3ba55369");
     c_dep_cbuild(network, "VulkanNetwork", C_TARGET_STATIC_LIBRARY);
     c_dep_include(network, "network");
     C_Dependency* spatial =
-        c_git(b, "VulkanSpatial", "https://github.com/xt9y/vulkan-systems.git", "58ca90258fc5a660792b73ec8111b1a13457a953");
+        c_git(b, "VulkanSpatial", "https://github.com/xt9y/vulkan-systems.git", "3f20e71ef20bb84ba8b6bd23a9c6fe1d3ba55369");
     c_dep_cbuild(spatial, "VulkanSpatial", C_TARGET_STATIC_LIBRARY);
     c_dep_include(spatial, "spatial");
     C_Dependency* jobs =
-        c_git(b, "VulkanJobs", "https://github.com/xt9y/vulkan-systems.git", "58ca90258fc5a660792b73ec8111b1a13457a953");
+        c_git(b, "VulkanJobs", "https://github.com/xt9y/vulkan-systems.git", "3f20e71ef20bb84ba8b6bd23a9c6fe1d3ba55369");
     c_dep_cbuild(jobs, "VulkanJobs", C_TARGET_STATIC_LIBRARY);
     c_dep_include(jobs, "jobs");
 
@@ -132,7 +133,6 @@ void build(C_Build* b)
     C_Target* server = c_executable(b, "vulkan-server");
     c_sources(server, "server.cpp");
     c_sources(server, "weapons.cpp");
-    c_sources(server, "srv/jobs/worker.cpp");
     c_sources(server, "srv/assets/*.cpp");
     c_sources(server, "srv/app/*.cpp");
     c_sources(server, "srv/network/*.cpp");

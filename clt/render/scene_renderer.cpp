@@ -8,8 +8,10 @@
 #include <gpu/resource.hpp>
 #include <gpu/descriptors.hpp>
 #include <render/renderer.hpp>
+#include <render/geometry.hpp>
 #include <render/pipeline.hpp>
 #include <render/target.hpp>
+#include <render/attachments.hpp>
 #include "clt/view/camera.hpp"
 #include "clt/weapon/weapon.hpp"
 #include "srv/game/options.hpp"
@@ -53,8 +55,7 @@ namespace clt::scene_renderer
             ::scene::material surface;
             std::uint32_t skin_id = 0;
             std::uint32_t joint_count = 0;
-            gpu::owned_buffer vertices;
-            gpu::owned_buffer indices;
+            ::render::geometry geometry;
             gpu::owned_buffer instance_buffer;
             gpu::owned_buffer bounds_buffer;
 
@@ -92,9 +93,6 @@ namespace clt::scene_renderer
             vk::DescriptorSetLayout instance_layout{};
             std::unique_ptr<gpu::descriptors> instance_sets;
             gpu::culler cull;
-            std::array<vec4, 6> last_gpu_planes{};
-            bool gpu_planes_valid = false;
-            std::uint32_t last_image = 0;
             std::uint32_t last_animation_tick = UINT32_MAX;
             std::chrono::steady_clock::time_point animation_received{};
 
@@ -103,17 +101,13 @@ namespace clt::scene_renderer
             ::render::pipeline pipeline;
 
             struct target {
-                std::array<gpu::owned_image, 3> color;
-                std::array<vk::ImageView, 3> views{};
-                gpu::owned_image depth;
-                vk::ImageView depth_view{};
+                ::render::attachments images;
                 std::unique_ptr<::render::target> framebuffer;
             };
 
             std::vector<target> targets;
 
             std::array<std::string, 2> shaders;
-            mat4 current_world_view_projection = mat4::identity();
         };
 
         state& get()
@@ -151,13 +145,8 @@ namespace clt::scene_renderer
                        const draw_parameters& params, bool indirect,
                        std::uint32_t instances)
         {
-            ::render::mesh geometry{};
-            geometry.streams = {
-                {0, mesh.vertices.handle, 0},
-                {1, frame.visible.handle, 0}
-            };
-            geometry.index_buffer = mesh.indices.handle;
-            geometry.index_count = mesh.index_count;
+            ::render::mesh geometry = mesh.geometry.view();
+            geometry.streams.push_back({1,frame.visible.handle,0});
 
             ::render::material surface{};
             surface.pipeline = get().pipeline.handle();
@@ -174,12 +163,31 @@ namespace clt::scene_renderer
                 graphics.draw(geometry, surface, instances);
         }
 
+        draw_parameters material_parameters(const ::scene::material& m,
+                                           const mat4& view_projection,
+                                           std::uint32_t joints)
+        {
+            const auto flags =
+                (m.base_color_texture ? 1u : 0u) |
+                (m.metallic_roughness_texture ? 2u : 0u) |
+                (m.normal_texture ? 4u : 0u) |
+                (m.occlusion_texture ? 8u : 0u) |
+                (m.emissive_texture ? 16u : 0u) |
+                (m.alpha_mode << 5) |
+                (m.procedural_pattern == 1u ? 128u : 0u);
+            return {
+                view_projection,m.base_color,
+                {m.metallic,m.roughness,m.occlusion,m.alpha_cutoff},
+                {m.emissive[0],m.emissive[1],m.emissive[2],float(flags)},
+                joints
+            };
+        }
+
         void destroy_meshes(std::vector<gpu_mesh>& meshes)
         {
             for (auto& mesh : meshes)
             {
-                mesh.vertices.reset();
-                mesh.indices.reset();
+                mesh.geometry.reset();
                 if (mesh.instance_buffer.handle)
                 {
                     mesh.instance_buffer.reset();
@@ -363,82 +371,19 @@ namespace clt::scene_renderer
 
         void create_target()
         {
-            auto& data = get();
-            const auto extent = vk::swapchain::get()->extent;
+            auto& data=get();
+            const auto extent=vk::swapchain::get()->extent;
+            const auto formats=color_formats();
             state::target target{};
-            try
-            {
-                for (std::size_t i = 0; i < color_formats().size(); ++i)
-                {
-                    const auto features = vk::physical_device::get()->handle
-                        .getFormatProperties(color_formats()[i]).optimalTilingFeatures;
-                    const auto needed = vk::FormatFeatureFlagBits::eColorAttachment |
-                        vk::FormatFeatureFlagBits::eSampledImage;
-                    if ((features & needed) != needed)
-                    {
-                        throw std::runtime_error("Required G-buffer format unsupported");
-                    }
-
-                    vk::ImageCreateInfo image{};
-                    image.imageType = vk::ImageType::e2D;
-                    image.format = color_formats()[i];
-                    image.extent = vk::Extent3D{extent.width, extent.height, 1};
-                    image.mipLevels = 1;
-                    image.arrayLayers = 1;
-                    image.samples = vk::SampleCountFlagBits::e1;
-                    image.tiling = vk::ImageTiling::eOptimal;
-                    image.usage = vk::ImageUsageFlagBits::eColorAttachment |
-                        vk::ImageUsageFlagBits::eSampled;
-                    target.color[i] = gpu::create_image(
-                        image, vk::MemoryPropertyFlagBits::eDeviceLocal
-                    );
-
-                    vk::ImageViewCreateInfo view{};
-                    view.image = target.color[i].handle;
-                    view.viewType = vk::ImageViewType::e2D;
-                    view.format = image.format;
-                    view.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-                    target.views[i] = vk::image_view::create(view);
-                }
-
-                vk::ImageCreateInfo depth{};
-                depth.imageType = vk::ImageType::e2D;
-                depth.format = depth_format();
-                depth.extent = vk::Extent3D{extent.width, extent.height, 1};
-                depth.mipLevels = 1;
-                depth.arrayLayers = 1;
-                depth.samples = vk::SampleCountFlagBits::e1;
-                depth.tiling = vk::ImageTiling::eOptimal;
-                depth.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment |
-                    vk::ImageUsageFlagBits::eSampled;
-                target.depth = gpu::create_image(depth, vk::MemoryPropertyFlagBits::eDeviceLocal);
-
-                vk::ImageViewCreateInfo depth_view{};
-                depth_view.image = target.depth.handle;
-                depth_view.viewType = vk::ImageViewType::e2D;
-                depth_view.format = depth.format;
-                depth_view.subresourceRange = {vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1};
-                target.depth_view = vk::image_view::create(depth_view);
-
-                target.framebuffer=std::make_unique<::render::target>();
-                target.framebuffer->create_framebuffer(
-                    data.render_pass,
-                    {target.views[0],target.views[1],target.views[2],target.depth_view},
-                    extent);
-                data.targets.push_back(std::move(target));
-            }
-            catch (...)
-            {
-                target.framebuffer.reset();
-                if (target.depth_view) vk::image_view::destroy(target.depth_view);
-                if (target.depth.handle) target.depth.reset();
-                for (std::size_t i = 0; i < target.color.size(); ++i)
-                {
-                    if (target.views[i]) vk::image_view::destroy(target.views[i]);
-                    if (target.color[i].handle) target.color[i].reset();
-                }
-                throw;
-            }
+            target.images.create(extent,
+                std::vector<vk::Format>(formats.begin(),formats.end()),depth_format());
+            target.framebuffer=std::make_unique<::render::target>();
+            target.framebuffer->create_framebuffer(
+                data.render_pass,
+                {target.images.color(0),target.images.color(1),
+                 target.images.color(2),target.images.depth()},
+                extent);
+            data.targets.push_back(std::move(target));
         }
     } // namespace
 
@@ -467,40 +412,13 @@ namespace clt::scene_renderer
                          data.instance_layout);
     }
 
-    culling_readback culling_data()
-    {
-        auto& data = get();
-        culling_readback result;
-        result.planes = data.last_gpu_planes;
-        result.valid = data.gpu_planes_valid;
-        result.meshes.reserve(data.meshes.size());
-
-        for (auto& mesh : data.meshes)
-        {
-            if (!mesh.transforms.empty() && data.last_image < mesh.frames.size())
-            {
-                auto& frame = mesh.frames[data.last_image];
-                result.meshes.push_back({
-                    &mesh.bounds, &frame.visible,
-                    &frame.indirect, mesh.index_count
-                });
-            }
-        }
-        return result;
-    }
-
-
-    vk::util::math::mat4 world_view_projection()
-    {
-        return get().current_world_view_projection;
-    }
-
     gbuffer outputs(std::uint32_t image)
     {
         const auto& target = get().targets.at(image);
         return {{
-            target.views[0], target.views[1], target.views[2], target.depth_view
-        }, vk::swapchain::get()->extent};
+            target.images.color(0),target.images.color(1),
+            target.images.color(2),target.images.depth()
+        },vk::swapchain::get()->extent};
     }
 
     void release_local_frames()
@@ -547,16 +465,12 @@ namespace clt::scene_renderer
                 output.joint_count = animation::joints(mesh.skin_id);
                 output.surface = mesh.surface;
                 output.index_count = mesh.indices.size();
-                output.vertices = transfers.add(
+                output.geometry.upload(transfers,
                     mesh.vertices.data(),
                     mesh.vertices.size() * sizeof(::scene::vertex),
-                    vk::BufferUsageFlagBits::eVertexBuffer
-                );
-                output.indices = transfers.add(
                     mesh.indices.data(),
                     mesh.indices.size() * sizeof(std::uint32_t),
-                    vk::BufferUsageFlagBits::eIndexBuffer
-                );
+                    output.index_count);
                 data.local_meshes.push_back(std::move(output));
             }
             transfers.finish();
@@ -623,17 +537,7 @@ namespace clt::scene_renderer
         vk::pipeline_layout::destroy(data.layout);
         data.layout = nullptr;
 
-        for (auto& target : data.targets)
-        {
-            target.framebuffer.reset();
-            if (target.depth_view) vk::image_view::destroy(target.depth_view);
-            if (target.depth.handle) target.depth.reset();
-            for (std::size_t i = 0; i < target.color.size(); ++i)
-            {
-                if (target.views[i]) vk::image_view::destroy(target.views[i]);
-                if (target.color[i].handle) target.color[i].reset();
-            }
-        }
+        // Framebuffer handles must die before their attachment image views.
         data.targets.clear();
         vk::render_pass::destroy(data.render_pass);
         data.render_pass = nullptr;
@@ -845,7 +749,6 @@ namespace clt::scene_renderer
         animation::synchronize(weapon::assets());
         data.instance_sets.reset();
         data.snapshot.reset();
-        data.gpu_planes_valid = false;
     }
 
     void synchronize()
@@ -963,17 +866,9 @@ namespace clt::scene_renderer
                         const auto index_bytes =
                             mesh.indices.size() * sizeof(std::uint32_t);
 
-                        result.vertices = transfers.add(
-                            mesh.vertices.data(),
-                            vertex_bytes,
-                            vk::BufferUsageFlagBits::eVertexBuffer
-                        );
-
-                        result.indices = transfers.add(
-                            mesh.indices.data(),
-                            index_bytes,
-                            vk::BufferUsageFlagBits::eIndexBuffer
-                        );
+                        result.geometry.upload(transfers,
+                            mesh.vertices.data(),vertex_bytes,
+                            mesh.indices.data(),index_bytes,result.index_count);
 
                         if (!mesh.vertices.empty())
                         {
@@ -993,16 +888,7 @@ namespace clt::scene_renderer
                     }
                     catch (...)
                     {
-                        if (result.vertices.handle)
-                        {
-                            result.vertices.reset();
-                        }
-
-                        if (result.indices.handle)
-                        {
-                            result.indices.reset();
-                        }
-
+                        // The geometry owner releases both buffers on unwinding.
                         destroy_meshes(meshes);
                         throw;
                     }
@@ -1086,11 +972,9 @@ namespace clt::scene_renderer
         const auto camera = camera::capture();
         const auto& weapon_draws = weapon::update(camera.view);
         const auto extent = vk::swapchain::get()->extent;
-        data.last_image = image;
         const float aspect = float(extent.width) / float(extent.height);
         const auto view_projection =
             perspective(camera.pose.fov, aspect, 0.1f, 1000.0f) * camera.view;
-        data.current_world_view_projection = view_projection;
         const auto weapon_view_projection = weapon::view_projection(aspect, camera.view);
 
         std::array<vk::ClearValue, 4> clear{};
@@ -1125,9 +1009,6 @@ namespace clt::scene_renderer
                     plane.offset * inverse
                 };
             }
-
-            data.last_gpu_planes = params.planes;
-            data.gpu_planes_valid = true;
 
             std::vector<vk::Buffer> indirects;
             indirects.reserve(data.meshes.size());
@@ -1234,22 +1115,7 @@ namespace clt::scene_renderer
                 }
 
                 const auto& m = mesh.surface;
-                const auto flags =
-                    (m.base_color_texture ? 1u : 0u) |
-                    (m.metallic_roughness_texture ? 2u : 0u) |
-                    (m.normal_texture ? 4u : 0u) |
-                    (m.occlusion_texture ? 8u : 0u) |
-                    (m.emissive_texture ? 16u : 0u) |
-                    (m.alpha_mode << 5) |
-                    (m.procedural_pattern == 1u ? 128u : 0u);
-                draw_parameters params{
-                    view_projection,
-                    m.base_color,
-                    {m.metallic, m.roughness, m.occlusion, m.alpha_cutoff},
-                    {m.emissive[0], m.emissive[1],
-                     m.emissive[2], float(flags)},
-                    mesh.joint_count
-                };
+                const auto params=material_parameters(m,view_projection,mesh.joint_count);
                 draw_mesh(graphics, mesh, mesh.frames.at(image), params, true, 1);
             }
         }
@@ -1286,18 +1152,8 @@ namespace clt::scene_renderer
                 const auto& mesh = *found;
                 const auto& frame = mesh.frames.at(image);
                 const auto& m = mesh.surface;
-                const auto flags = (m.base_color_texture ? 1u : 0u) |
-                                   (m.metallic_roughness_texture ? 2u : 0u) |
-                                   (m.normal_texture ? 4u : 0u) | (m.occlusion_texture ? 8u : 0u) |
-                                   (m.emissive_texture ? 16u : 0u) | (m.alpha_mode << 5) |
-                                   (m.procedural_pattern == 1u ? 128u : 0u);
-                draw_parameters params{
-                    viewmodel ? weapon_view_projection : view_projection,
-                    m.base_color,
-                    {m.metallic, m.roughness, m.occlusion, m.alpha_cutoff},
-                    {m.emissive[0], m.emissive[1], m.emissive[2], float(flags)},
-                    mesh.joint_count
-                };
+                const auto params=material_parameters(m,
+                    viewmodel?weapon_view_projection:view_projection,mesh.joint_count);
                 draw_mesh(graphics, mesh, frame, params, false,
                           static_cast<std::uint32_t>(item.instances.size()));
             }

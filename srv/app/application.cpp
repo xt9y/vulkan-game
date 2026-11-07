@@ -2,7 +2,7 @@
 
 #include "srv/assets/model.hpp"
 #include "srv/game/application.hpp"
-#include "srv/jobs/worker.hpp"
+#include <jobs/pool.hpp>
 #include "srv/network/session.hpp"
 #include "srv/shared/net/animation.hpp"
 #include <network/endpoint.hpp>
@@ -33,6 +33,12 @@ namespace srv::application
 
     namespace
     {
+        jobs::pool& generation_jobs()
+        {
+            static jobs::pool worker;
+            return worker;
+        }
+
         void receive_messages();
         void send_scene_batches();
         void send_animation_states();
@@ -119,7 +125,7 @@ namespace srv::application
         get()->colliders = player::build_colliders(get()->scene);
         get()->collision_index = player::build_index(get()->colliders);
         get()->weapon_world.append(get()->scene.meshes, get()->scene.instances);
-        srv::generation::init();
+        generation_jobs().start(1,64);
         get()->scene_batches = {{net::scene_stream::serialize(get()->scene),true}};
         get()->tick = 0;
         get()->initialized = true;
@@ -130,7 +136,7 @@ namespace srv::application
         if (!requests.empty())
         {
             begin_stream();
-            if (!generation::submit([requests = std::move(requests)]() -> generation::completion
+            if (!generation_jobs().submit([requests = std::move(requests)]() -> jobs::completion
             {
                 ::scene::state combined;
                 auto mesh_id = std::uint32_t(1);
@@ -444,7 +450,7 @@ namespace srv::application
                 next + interval ||
                 get()->tick % net::limits::generation_commit_ticks == 0)
             {
-                generation::commit();
+                generation_jobs().commit(2);
             }
 
             next += interval;
@@ -470,7 +476,7 @@ namespace srv::application
         get()->scene_transport.reset();
         net::secure::destroy(get()->socket);
         session::shutdown();
-        generation::shutdown();
+        generation_jobs().stop();
         get()->scene_batches.clear();
         get()->colliders.clear();
         get()->weapon_world = {};
