@@ -17,51 +17,50 @@ All gameplay, movement, weapon and reliable scene packets use the DTLS
 socket; there is no plaintext application fallback.
 The game owns its scene and authority protocols; network/session is reusable.
 
-Networking (automatic by default):
+Networking (only one encrypted path):
   c build run vulkan-server
   c build run vulkan-client --host 127.0.0.1 --port 27015
-  c build run vulkan-client --host YOUR_PUBLIC_IP --port 27015
+  c build run vulkan-client --host SERVER_PUBLIC_IP --port 27015
 
-  The server binds UDP 0.0.0.0:27015 by default. For another server use its
-  public IP or DNS name; forward UDP 27015 on its router and allow inbound UDP
-  27015 in the host firewall. The client automatically starts the DTLS
-  handshake and uses the same protocol on localhost, LAN and WAN.
+  The server listens on UDP 0.0.0.0:27015 by default, accepts both LAN and
+  remote clients, and generates/loads its server private key automatically.
+  Forward UDP 27015 from the router to the server and allow it in the
+  server firewall. If running on a VPS, open its cloud firewall for UDP.
+  The client always uses DTLS (no raw-UDP gameplay or plaintext fallback).
+  The game uses the same code path for local, LAN, and Internet sessions.
 
-  No manual OpenSSL steps, CA distribution or client certificates are required
-  by the automatic mode. VulkanNetwork creates a persistent P-256 server key in
-  the OS user config folder. It generates a new self-signed X.509 certificate
-  from that key at startup. The client pins the server's SubjectPublicKeyInfo
-  fingerprint separately for each configured host:port after the first DTLS
-  handshake; subsequent connections reject a changed server key.
+  On first contact the client automatically records the server's public
+  key fingerprint for the configured host:port. Later connections require
+  that same key. A changed key fails closed, and the client must not silently
+  overwrite its stored pin. Automatic reconnect re-handshakes using the
+  established identity, with no user intervention after the initial IP entry.
 
-  SECURITY: automatic TOFU does not authenticate an entirely new server during
-  the first connection. An active on-path attacker can impersonate that initial
-  server. For strongly authenticated remote servers use a trusted CA or verify
-  the logged server fingerprint independently. Do not silently re-pin a changed
-  server after reinstalling; restore the original key or explicitly re-enroll
-  the endpoint. TOFU authenticates the server after pinning, NOT players:
-  client admission and game account security remain separate.
+  Trust-on-first-use (TOFU) cannot independently establish the authenticity
+  of a first-ever Internet connection against an active on-path attacker.
+  The server logs a fingerprint which users can compare through a trusted
+  channel when stronger first-contact authentication is required. Automatic
+  TOFU authenticates servers after pinning, NOT individual game accounts.
+  Use an application-level admission and permissions layer for private servers.
+  Back up the server identity before moving/reinstalling the server machine.
 
-  Existing explicitly provisioned mutual TLS remains supported when ALL
-  VULKAN_NET_CA, VULKAN_NET_CERT and VULKAN_NET_KEY are set. In that mode
-  VULKAN_NET_SERVER_NAME optionally overrides the expected server identity.
-  A partial set of credential environment variables is rejected.
+  Credentials/pins live under the current user's OS config directory,
+  not in the game repo. No CA, certificate file, key environment variables,
+  pre-shared client keys, OpenSSL commands or alternative transport modes.
+  IPv6 works when the server is bound to a compatible IPv6 address.
 
-  The server automatically discovers neither clients nor a public address.
-  Across the internet, the client must know the host/IP and UDP port.
-  Router port forwarding is only effective when the server has a reachable
-  public IP (or suitable IPv6 firewall allowance). CGNAT may require a relay,
-  VPN or publicly reachable VPS. LAN discovery and NAT traversal are separate
-  optional features.
+  The client must know the server IP or DNS name and UDP port. Server
+  discovery, automatic router port forwarding, NAT traversal and relays
+  are not performed. When the server is behind CGNAT, ordinary inbound
+  port forwarding cannot expose it without a public endpoint or relay.
 
 Security and deployment limits:
-  Certificates authenticate transport peers, not game accounts or permissions.
-  Production deployments need admission controls, certificate revocation,
-  rate limiting, incident response, NAT traversal and packet-loss testing.
+  TOFU pins a server public key; it does not authenticate clients or players.
+  Production deployments need admission controls, permissions, rate limits,
+  flood protection, incident response and packet-loss testing.
   The transport is DTLS 1.2, not QUIC/DTLS 1.3. DTLS protects packet
-  confidentiality, integrity and replay; reliable ordering-independent bulk
-  scene messages are handled separately by network/session. There is no
-  guarantee of fixed bandwidth, latency or GPU frame time.
+  confidentiality, integrity and replay; reliable bulk scene transfer is
+  handled separately by network/session. No bandwidth, latency or GPU
+  frame-time guarantee is implied.
 
 Native compilation, handshake interoperability and platform/runtime regression
 testing are required before treating this revision as a release.
