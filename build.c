@@ -51,9 +51,37 @@ static void compile_shaders(void)
     }
 }
 
+// The original Rogue editor stores each glyph as a tiny PNG instead of a
+// font atlas. Sparse checkout fetches only 90 small textures, not the many
+// large assets in hellengine-bak. This is optional; fallback glyphs are built
+// into VulkanEditor and work without network access.
+static void prepare_editor_font(void)
+{
+    struct stat info;
+    if(stat("build/editor-font-repository/Rogue/Rogue/res/textures/font/char_90.png",
+            &info)==0)
+        return;
+    const char* skip=getenv("VULKAN_EDITOR_FONT_SKIP_DOWNLOAD");
+    if(skip && strcmp(skip,"1")==0)return;
+    if(stat("build/editor-font-repository/.git",&info)!=0)
+    {
+        if(system("git clone -q --depth 1 --filter=blob:none --sparse "
+                  "https://github.com/xt9y/hellengine-bak.git "
+                  "build/editor-font-repository")!=0)
+        {
+            fprintf(stderr,"editor: original font download failed; using fallback\\n");
+            return;
+        }
+    }
+    if(system("git -C build/editor-font-repository sparse-checkout set "
+              "Rogue/Rogue/res/textures/font")!=0)
+        fprintf(stderr,"editor: font asset checkout failed; using fallback\\n");
+}
+
 void build(C_Build* b)
 {
     compile_shaders();
+    prepare_editor_font();
     C_Dependency* engine =
         c_git(b, "VulkanEngine", "https://github.com/xt9y/vulkan-engine.git", "4b792b574727115d7478f414e11e9540e848404e");
     c_dep_cbuild(engine, "VulkanEngine", C_TARGET_STATIC_LIBRARY);
