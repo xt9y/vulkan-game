@@ -5,12 +5,14 @@
 #include "postprocess.hpp"
 #include <gpu/graph.hpp>
 #include <gpu/upload.hpp>
+#include <editor/editor.hpp>
 
 #include "clt/platform/vulkan_loader.hpp"
 #include "clt/platform/window.hpp"
 #include "clt/view/camera.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
@@ -322,6 +324,14 @@ namespace clt::renderer
 
     void draw_frame()
     {
+        using clock=std::chrono::steady_clock;
+        static auto previous=clock::now();
+        const auto now=clock::now();
+        const double elapsed=std::chrono::duration<double,std::milli>(
+            now-previous).count();
+        previous=now;
+        if(editor::instance().visible())
+            editor::instance().set_frame_time(elapsed);
         auto& data = *get();
 
 
