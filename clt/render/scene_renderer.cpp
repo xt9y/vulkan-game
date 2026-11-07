@@ -533,6 +533,11 @@ namespace clt::scene_renderer
     {
         auto& data = get();
         release_local_frames();
+        // Keep immutable scene geometry across swapchain recreation.
+        // Only the per-image culling, skinning and descriptor data changes.
+        for(auto& mesh : data.meshes)
+            mesh.frames.clear();
+        data.instance_sets.reset();
         data.pipeline.reset();
         vk::pipeline_layout::destroy(data.layout);
         data.layout = nullptr;
@@ -543,6 +548,8 @@ namespace clt::scene_renderer
         data.render_pass = nullptr;
         
     }
+
+    void rebuild_instance_frames();
 
     void create_frame_resources()
     {
@@ -555,6 +562,7 @@ namespace clt::scene_renderer
             }
             create_pipeline();
             create_local_frames();
+            rebuild_instance_frames();
         }
         catch (...)
         {
@@ -734,21 +742,34 @@ namespace clt::scene_renderer
         bind_instances(mesh);
     }
 
+    void rebuild_instance_frames()
+    {
+        auto& data = get();
+        if(data.meshes.empty()) return;
+
+        const auto count = std::max<std::size_t>(1, data.meshes.size()) *
+            std::max<std::size_t>(1, vk::swapchain::get()->images.size());
+        const auto schema = instance_bindings();
+        data.instance_sets = std::make_unique<gpu::descriptors>();
+        data.instance_sets->create(
+            std::vector<vk::DescriptorSetLayoutBinding>(schema.begin(), schema.end()),
+            static_cast<std::uint32_t>(count));
+
+        std::uint32_t index = 0;
+        for(auto& mesh : data.meshes)
+        {
+            if(mesh.transforms.empty()) continue;
+            // Existing instance and geometry buffers remain GPU-resident.
+            refresh_instances(mesh, mesh.transforms.size());
+            for(auto& frame : mesh.frames)
+                frame.set = data.instance_sets->set(index++);
+            bind_instances(mesh);
+        }
+    }
+
     bool needs_sync()
     {
         return connection::snapshot() != get().snapshot;
-    }
-
-    void reset_scene()
-    {
-        auto& data = get();
-        destroy_meshes(data.meshes);
-        texture::reset();
-        texture::synchronize(::scene::state{});
-        animation::reset();
-        animation::synchronize(weapon::assets());
-        data.instance_sets.reset();
-        data.snapshot.reset();
     }
 
     void synchronize()
