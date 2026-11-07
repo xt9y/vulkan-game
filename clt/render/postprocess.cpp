@@ -2,8 +2,6 @@
 #include "srv/game/options.hpp"
 #include "scene_renderer.hpp"
 #include "clt/view/camera.hpp"
-#include "clt/player/prediction.hpp"
-#include "clt/network/connection.hpp"
 #include <render/renderer.hpp>
 #include <render/pipeline.hpp>
 #include <gpu/compute.hpp>
@@ -123,21 +121,20 @@ namespace clt::postprocess
         }
 
         void compute(vk::CommandBuffer command,const gpu::compute& program,
-                     vk::DescriptorSet set,bool half=false)
+                     vk::DescriptorSet set,const camera::frame& frame,
+                     bool half=false)
         {
             const auto extent=vk::swapchain::get()->extent;
-            const auto view=camera::snapshot();
+            const auto& view=frame.pose;
             const float sy=std::sin(view.yaw),cy=std::cos(view.yaw);
             const float sp=std::sin(view.pitch),cp=std::cos(view.pitch);
             const float tan_half=std::tan(view.fov*0.5f);
             const float aspect=float(extent.width)/float(extent.height);
-            const auto movement=connection::movement_parameters();
-            const auto position=prediction::position();
-            const float eye_height=movement?movement->height:0.0f;
+            const auto& position=frame.eye;
             const auto& lighting=game::options::get()->graphics;
             const push controls{
                 1,exposure_value.load(std::memory_order_relaxed),{},
-                {position.x,position.y+eye_height,position.z,0.1f},
+                {position.x,position.y,position.z,0.1f},
                 {sy*cp,sp,-cy*cp,1000.0f},
                 {cy,0,sy,tan_half*aspect},
                 {-sy*sp,cp,cy*sp,tan_half},
@@ -353,24 +350,25 @@ namespace clt::postprocess
         return {frame.indirect.handle,frame.hdr.image,frame.ldr.image};
     }
 
-    void gi(vk::CommandBuffer command,std::uint32_t image)
+    void gi(vk::CommandBuffer command,std::uint32_t image,
+            const camera::frame& frame)
     {
         const auto& current=get().frames.at(image);
-        compute(command,*get().gi_program,current.gi,true);
+        compute(command,*get().gi_program,current.gi,frame,true);
     }
 
-    void lighting(vk::CommandBuffer command, std::uint32_t image)
+    void lighting(vk::CommandBuffer command, std::uint32_t image,
+                  const camera::frame& frame)
     {
         const auto& current = get().frames.at(image);
-        compute(command, *get().lighting_program,
-                current.lighting);
+        compute(command,*get().lighting_program,current.lighting,frame);
     }
 
-    void tonemap(vk::CommandBuffer command, std::uint32_t image)
+    void tonemap(vk::CommandBuffer command, std::uint32_t image,
+                 const camera::frame& frame)
     {
         const auto& current = get().frames.at(image);
-        compute(command, *get().tone_program,
-                current.tone);
+        compute(command,*get().tone_program,current.tone,frame);
     }
 
     void present(vk::CommandBuffer command, std::uint32_t image)
