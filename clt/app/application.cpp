@@ -9,8 +9,12 @@
 #include "clt/render/renderer.hpp"
 #include "clt/view/camera.hpp"
 #include "srv/game/application.hpp"
+#include <editor/editor.hpp>
+#include <GLFW/glfw3.h>
+#include <array>
 
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <stdexcept>
@@ -18,6 +22,18 @@
 
 namespace clt::application
 {
+    namespace
+    {
+        // Character events avoid keyboard-layout-specific physical slash keys:
+        // German layouts must toggle with the typed '?' just like US layouts.
+        std::atomic<bool> typed_question{false};
+        void editor_character(GLFWwindow*,unsigned int codepoint)
+        {
+            if(codepoint==static_cast<unsigned int>('?'))
+                typed_question.store(true,std::memory_order_relaxed);
+        }
+    }
+
     state* get()
     {
         static state data;
@@ -91,6 +107,7 @@ namespace clt::application
         }
 
         window::init();
+        glfwSetCharCallback(window::get()->handle,editor_character);
 
         input::init();
         camera::init();
@@ -134,12 +151,69 @@ namespace clt::application
                 window::poll_events();
 
                 const auto frame = input::poll();
-                camera::look(frame.mouse_x, frame.mouse_y);
-                prediction::controls(frame.buttons, camera::snapshot().yaw);
-                if (get()->hooks.on_input)
+
+                // GLFW is only the current host input adapter. VulkanEditor
+                // consumes platform-independent key press events and mouse
+                // pixel coordinates, leaving all editor hotkeys in one module.
+                static std::array<bool,8> held{};
+                const auto pressed=[](int key,std::size_t index)
                 {
-                    get()->hooks.on_input(frame);
+                    const bool down=input::key_down(key);
+                    const bool edge=down && !held[index];
+                    held[index]=down;
+                    return edge;
+                };
+                editor::input events{};
+                events.question=typed_question.exchange(false,
+                    std::memory_order_relaxed);
+                events.tab=pressed(GLFW_KEY_TAB,0);
+                events.enter=pressed(GLFW_KEY_ENTER,1) |
+                             pressed(GLFW_KEY_KP_ENTER,2);
+                events.escape=pressed(GLFW_KEY_ESCAPE,3);
+                events.up=pressed(GLFW_KEY_UP,4);
+                events.down=pressed(GLFW_KEY_DOWN,5);
+                events.left=pressed(GLFW_KEY_LEFT,6);
+                events.right=pressed(GLFW_KEY_RIGHT,7);
+                static bool mouse_held=false;
+                const bool mouse_down=input::mouse_down(GLFW_MOUSE_BUTTON_LEFT);
+                events.click=mouse_down && !mouse_held;
+                mouse_held=mouse_down;
+
+                auto* handle=window::get()->handle;
+                double cursor_x=0,cursor_y=0;
+                int window_width=0,window_height=0;
+                int display_width=0,display_height=0;
+                glfwGetCursorPos(handle,&cursor_x,&cursor_y);
+                glfwGetWindowSize(handle,&window_width,&window_height);
+                window::framebuffer_size(display_width,display_height);
+                events.viewport_width=display_width;
+                events.viewport_height=display_height;
+                events.mouse_x=int(cursor_x*double(display_width)/
+                    double(std::max(1,window_width)));
+                events.mouse_y=int(cursor_y*double(display_height)/
+                    double(std::max(1,window_height)));
+                editor::instance().handle(events);
+
+                if(events.tab)
+                {
+                    const bool free_cursor=editor::instance().cursor_free();
+                    glfwSetInputMode(handle,GLFW_CURSOR,free_cursor?
+                        GLFW_CURSOR_NORMAL:GLFW_CURSOR_DISABLED);
+                    if(glfwRawMouseMotionSupported())
+                        glfwSetInputMode(handle,GLFW_RAW_MOUSE_MOTION,
+                            free_cursor?GLFW_FALSE:GLFW_TRUE);
                 }
+
+                const bool captured=editor::instance().captures_input();
+                if(!captured && !events.tab)
+                    camera::look(frame.mouse_x,frame.mouse_y);
+                prediction::controls(captured?0u:frame.buttons,
+                                     camera::snapshot().yaw);
+                if(get()->hooks.on_input)
+                    get()->hooks.on_input(frame);
+                for(const auto& action:editor::instance().take_actions())
+                    if(get()->hooks.on_editor_action)
+                        get()->hooks.on_editor_action(action);
 
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
