@@ -29,7 +29,9 @@ const ivec2 taps[8]=ivec2[8](
 float linear_depth(float depth)
 {
     float n=pc.eye_near.w,f=pc.forward_far.w;
-    return n*f/max(f-depth*(f-n),1e-6);
+    // The scene render pass maps world depth into the 0.1..1.0 viewport.
+    float d=clamp((depth-0.1)/0.9,0.0,1.0);
+    return n*f/max(f-d*(f-n),1e-6);
 }
 
 vec3 ray(ivec2 pixel,ivec2 size)
@@ -72,7 +74,7 @@ float sun_visibility(vec3 p,vec3 n,ivec2 size)
         float expected;
         if(!projected(p+n*0.045+l*t,size,sample_pixel,expected))break;
         float depth=texelFetch(g_depth,sample_pixel,0).r;
-        if(depth>=0.999999)continue;
+        if(depth>=0.999999 || depth<0.1)continue;
         float gap=expected-linear_depth(depth);
         if(gap>0.025 && gap<0.2+0.07*t)return 0.0;
     }
@@ -97,7 +99,8 @@ void main()
     ivec2 size=textureSize(g_depth,0);
     ivec2 p=min(half*2+ivec2(1),size-1);
     float depth=texelFetch(g_depth,p,0).r;
-    if(depth>=0.999999)
+    // First-person weapon depth is mapped to 0..0.099; it is not world geometry.
+    if(depth>=0.999999 || depth<0.1)
     {
         imageStore(indirect_shadow,half,vec4(0.0,0.0,0.0,1.0));
         return;
@@ -111,7 +114,7 @@ void main()
     {
         ivec2 q=clamp(p+taps[i],ivec2(0),size-1);
         float z=texelFetch(g_depth,q,0).r;
-        if(z>=0.999999)continue;
+        if(z>=0.999999 || z<0.1)continue;
         vec3 Q=position(q,size,z);
         vec3 delta=Q-P;
         float d2=dot(delta,delta);
