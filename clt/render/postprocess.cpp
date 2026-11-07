@@ -355,59 +355,88 @@ namespace clt::postprocess
                     {light.color.x,light.color.y,light.color.z,light.strength}
                 });
 
+            // Rogue's probe cloud is built from static room surfaces, not
+            // every polygon of imported character/prop meshes. The server
+            // already streams those static surfaces as collision boxes.
             const vec3 limit{
                 grid_origin.x+grid_width*grid_spacing,
                 grid_origin.y+grid_height*grid_spacing,
                 grid_origin.z+grid_depth*grid_spacing
             };
-            for(const auto& instance:source->instances)
+            const auto face=[&](vec3 base,vec3 u,vec3 v,vec3 normal)
             {
-                const auto mesh=std::find_if(source->meshes.begin(),source->meshes.end(),
-                    [&](const ::scene::mesh& item){return item.id==instance.mesh_id;});
-                if(mesh==source->meshes.end() || mesh->skin_id)continue;
-                const auto transform=[&](vec3 position) {
-                    const auto scale=instance.pose.scale;
-                    return instance.pose.position+rotate(instance.pose.rotation,
-                        vec3{position.x*scale.x,position.y*scale.y,position.z*scale.z});
-                };
-                for(std::size_t i=0;i+2<mesh->indices.size();i+=3)
+                const vec3 b=base+u,c=b+v,d=base+v;
+                for(const auto& p:{base,b,c,base,c,d})
+                    triangles.push_back({p.x,p.y,p.z,0.0f});
+
+                // Samples use the original 0.3-unit surface spacing.
+                // Restrict iteration to the probe volume, even for a huge floor.
+                const float lu=length(u),lv=length(v);
+                if(lu<=0.0f || lv<=0.0f)return;
+                const vec3 U=u/lu,V=v/lv;
+                const auto interval=[&](vec3 axis,float side)
                 {
-                    const auto& a=mesh->vertices.at(mesh->indices[i]);
-                    const auto& b=mesh->vertices.at(mesh->indices[i+1]);
-                    const auto& c=mesh->vertices.at(mesh->indices[i+2]);
-                    const vec3 A=transform(a.position);
-                    const vec3 B=transform(b.position);
-                    const vec3 C=transform(c.position);
-                    for(const auto& p:{A,B,C})
-                        triangles.push_back({p.x,p.y,p.z,0.0f});
-                    const vec3 e1=B-A,e2=C-A;
-                    const vec3 normal=normalize(rotate(instance.pose.rotation,
-                        a.normal+b.normal+c.normal));
-                    if(length_squared(normal)<0.5f)continue;
-                    const int nu=std::max(1,int(std::ceil(length(e1)/0.3f)));
-                    const int nv=std::max(1,int(std::ceil(length(e2)/0.3f)));
-                    for(int j=0;j<nv;++j)
-                    for(int k=0;k<nu;++k)
+                    float lo=dot(grid_origin-base,axis);
+                    float hi=dot(limit-base,axis);
+                    if(lo>hi)std::swap(lo,hi);
+                    const int begin=std::max(0,int(std::ceil(lo/0.3f-0.5f)));
+                    const int finish=std::min(int(std::ceil(side/0.3f)),
+                                              int(std::ceil(hi/0.3f+0.5f)));
+                    return std::pair{begin,finish};
+                };
+                const auto [u0,u1]=interval(U,lu);
+                const auto [v0,v1]=interval(V,lv);
+                for(int i=u0;i<u1;++i)
+                for(int j=v0;j<v1;++j)
+                {
+                    const vec3 p=base+U*((float(i)+0.5f)*0.3f)
+                                     +V*((float(j)+0.5f)*0.3f);
+                    if(p.x<grid_origin.x || p.y<grid_origin.y ||
+                       p.z<grid_origin.z || p.x>=limit.x ||
+                       p.y>=limit.y || p.z>=limit.z)continue;
+                    points.push_back({
+                        {p.x,p.y,p.z,0.0f},
+                        {normal.x,normal.y,normal.z,0.0f},{}
+                    });
+                }
+            };
+
+            for(const auto& box:source->collision_boxes)
+            {
+                // Keep all casters that can intersect a light's radius,
+                // including those just outside the probe volume.
+                const bool inside=
+                    box.maximum.x>=grid_origin.x-2.6f &&
+                    box.maximum.y>=grid_origin.y-2.6f &&
+                    box.maximum.z>=grid_origin.z-2.6f &&
+                    box.minimum.x<=limit.x+2.6f &&
+                    box.minimum.y<=limit.y+2.6f &&
+                    box.minimum.z<=limit.z+2.6f;
+                bool near_light=false;
+                for(const auto& light:source->lights)
+                {
+                    const vec3 c{
+                        std::clamp(light.position.x,box.minimum.x,box.maximum.x),
+                        std::clamp(light.position.y,box.minimum.y,box.maximum.y),
+                        std::clamp(light.position.z,box.minimum.z,box.maximum.z)
+                    };
+                    if(length_squared(c-light.position)<=light.radius*light.radius)
                     {
-                        const float u=(float(k)+0.5f)/float(nu);
-                        const float v=(float(j)+0.5f)/float(nv);
-                        if(u+v>=1.0f)continue;
-                        const vec3 p=A+e1*u+e2*v;
-                        if(p.x<grid_origin.x || p.y<grid_origin.y ||
-                           p.z<grid_origin.z || p.x>=limit.x ||
-                           p.y>=limit.y || p.z>=limit.z)continue;
-                        points.push_back({
-                            {p.x,p.y,p.z,0.0f},
-                            {normal.x,normal.y,normal.z,0.0f},
-                            {}
-                        });
+                        near_light=true;
+                        break;
                     }
                 }
+                if(!inside && !near_light)continue;
+                const auto a=box.minimum,b=box.maximum;
+                const float dx=b.x-a.x,dy=b.y-a.y,dz=b.z-a.z;
+                face({b.x,a.y,a.z},{0,dy,0},{0,0,dz},{1,0,0});
+                face({a.x,a.y,b.z},{0,dy,0},{0,0,-dz},{-1,0,0});
+                face({a.x,b.y,b.z},{dx,0,0},{0,0,-dz},{0,1,0});
+                face({a.x,a.y,a.z},{dx,0,0},{0,0,dz},{0,-1,0});
+                face({a.x,a.y,b.z},{dx,0,0},{0,dy,0},{0,0,1});
+                face({b.x,a.y,a.z},{-dx,0,0},{0,dy,0},{0,0,-1});
             }
         }
-        // Avoid silently discarding the geometry required for shadows.
-        if(points.size()>65536 || triangles.size()>196608)
-            throw std::runtime_error("Rogue probe volume scene exceeds supported geometry budget");
 
         const auto storage=vk::BufferUsageFlagBits::eStorageBuffer;
         const auto memory=vk::MemoryPropertyFlagBits::eHostVisible |
