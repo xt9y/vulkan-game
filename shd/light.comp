@@ -143,9 +143,9 @@ void main()
         float range=max(lights[i].position_range.w,0.001);
         float d=sqrt(d2);
         if(d>=range || d<1e-4)continue;
-        float q=d/range;
-        float fade=clamp(1.0-q*q*q*q,0.0,1.0);
-        float attenuation=fade*fade/max(d2,0.01);
+        // Hell-style radius falloff, defined without reversed smoothstep edges.
+        float q=clamp(d/range,0.0,1.0);
+        float attenuation=1.0-q*q*(3.0-2.0*q);
         color+=brdf(a.rgb,metallic,roughness,N,V,delta/d)*
                lights[i].color_intensity.rgb*
                (lights[i].color_intensity.w*attenuation);
