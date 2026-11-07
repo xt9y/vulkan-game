@@ -449,7 +449,8 @@ namespace clt::postprocess
             const float radius=std::sqrt(furthest_squared)*scale+0.01f;
             for(const auto& light:incoming.lights)
             {
-                const float reach=radius+light.radius;
+                // Indirect rays can travel bounce_reach past the lit surface.
+                const float reach=radius+light.radius+bounce_reach;
                 if(length_squared(instance.pose.position-light.position)<=reach*reach)
                     return false;
             }
