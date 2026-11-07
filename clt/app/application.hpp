@@ -2,6 +2,7 @@
 
 #include "clt/input/input.hpp"
 #include "srv/game/options.hpp"
+#include <editor/editor.hpp>
 
 namespace clt::application
 {
@@ -9,6 +10,8 @@ namespace clt::application
     {
         // Main-thread game controls, after mouse look and movement prediction.
         void (*on_input)(const input::frame&) = nullptr;
+        // Game owns spawning/property writes; editor only emits requests.
+        void (*on_editor_action)(const ::editor::action&) = nullptr;
     };
 
     struct state
