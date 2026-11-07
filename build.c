@@ -5,34 +5,7 @@
 #include <sys/stat.h>
 #ifdef _WIN32
 #include <direct.h>
-#else
-#include <unistd.h>
 #endif
-// Mbed TLS links into executables, not into the VulkanNetwork archive.
-// c_dep_cbuild imports a static archive without its transitive CMake link
-// interface, so link the same pinned crypto libraries directly here.
-static void prepare_mbedtls(C_Dependency* dependency)
-{
-    char cwd[4096], option[4608];
-#ifdef _WIN32
-    if(!_getcwd(cwd,sizeof(cwd))) {
-#else
-    if(!getcwd(cwd,sizeof(cwd))) {
-#endif
-        fprintf(stderr,"Cannot resolve Mbed TLS build configuration path\n");
-        exit(1);
-    }
-    for(char* p=cwd;*p;++p)if(*p=='\\')*p='/';
-    const int n=snprintf(option,sizeof(option),
-        "-DCMAKE_PROJECT_INCLUDE=%s/mbedtls_prepare.cmake",cwd);
-    if(n<0 || (size_t)n>=sizeof(option)) {
-        fprintf(stderr,"Mbed TLS preparation path too long\n");
-        exit(1);
-    }
-    c_dep_cmake_option(dependency,option);
-}
-
-
 
 static void compile_shaders(void)
 {
@@ -98,18 +71,12 @@ void build(C_Build* b)
         c_git(b, "VulkanNetwork", "https://github.com/xt9y/vulkan-systems.git", "c9b3b74549fe197b898be3731101352275d7afc3");
     c_dep_cbuild(network, "VulkanNetwork", C_TARGET_STATIC_LIBRARY);
     c_dep_include(network, "network");
-    // Final-link dependency of VulkanNetwork: the c build dependency export
-    // currently provides the archive, not Mbed TLS' transitive link targets.
     C_Dependency* crypto =
         c_git(b, "MbedTLS", "https://github.com/Mbed-TLS/mbedtls.git",
               "068ff080b369adfac81509f9b57b2afabaf82dc5");
     c_dep_cmake(crypto);
-    prepare_mbedtls(crypto);
-    c_dep_cmake_option(crypto, "-DUSE_SHARED_MBEDTLS_LIBRARY=OFF");
-    c_dep_cmake_option(crypto, "-DUSE_STATIC_MBEDTLS_LIBRARY=ON");
     c_dep_cmake_option(crypto, "-DENABLE_TESTING=OFF");
     c_dep_cmake_option(crypto, "-DENABLE_PROGRAMS=OFF");
-    c_dep_include(crypto, "include");
     c_dep_link(crypto, "mbedtls");
     c_dep_link(crypto, "mbedx509");
     c_dep_link(crypto, "mbedcrypto");
