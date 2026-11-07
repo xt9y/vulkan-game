@@ -20,6 +20,9 @@
 #include <cstdint>
 #include <utility>
 #include <iostream>
+#include <numeric>
+#include <functional>
+#include "clt/animation/animation.hpp"
 
 namespace clt::postprocess
 {
@@ -49,8 +52,9 @@ namespace clt::postprocess
             vk::Sampler sampler{};
             gpu::owned_buffer lights;
             gpu::owned_buffer triangles;
+            gpu::owned_buffer nodes;
             std::shared_ptr<const ::scene::state> snapshot;
-            std::uint32_t light_count=0, point_count=0, vertex_count=0;
+            std::uint32_t light_count=0, point_count=0, vertex_count=0, node_count=0;
             std::unique_ptr<gpu::descriptors> cloud_sets;
             std::unique_ptr<gpu::descriptors> gi_sets;
             std::unique_ptr<gpu::descriptors> lighting_sets;
@@ -89,12 +93,18 @@ namespace clt::postprocess
             std::array<float,4> radiance{};
         };
         static_assert(sizeof(probe_point)==48);
+        // Preorder, stackless shadow BVH: skip index, triangle start, triangle count.
+        struct alignas(16) shadow_node {
+            std::array<float,4> minimum{};
+            std::array<float,4> maximum{};
+            std::array<std::uint32_t,4> info{};
+        };
+        static_assert(sizeof(shadow_node)==48);
         struct cloud_push {
-            std::uint32_t points,vertices,lights,padding=0;
+            std::uint32_t points,vertices,lights,nodes;
         };
         struct grid_push {
-            std::uint32_t points,vertices;
-            std::array<float,2> padding{};
+            std::uint32_t points,vertices,nodes,padding=0;
             std::array<float,4> origin_spacing{};
         };
         static_assert(sizeof(grid_push)==32);
@@ -154,7 +164,7 @@ namespace clt::postprocess
                 {cy,0,sy,tan_half*aspect},
                 {-sy*sp,cp,cy*sp,tan_half},
                 {float(get().light_count),draw_probes.load(std::memory_order_relaxed)?1.0f:0.0f,
-                 float(get().vertex_count),0.0f},
+                 float(get().vertex_count),float(get().node_count)},
                 {grid_origin.x,grid_origin.y,grid_origin.z,grid_spacing}
             };
             const auto width=extent.width;
@@ -202,11 +212,11 @@ namespace clt::postprocess
             data.presentation->create(vk::swapchain::get()->images,
                 vk::swapchain::get()->format,vk::swapchain::get()->extent);
             data.cloud_sets=std::make_unique<gpu::descriptors>();
-            data.cloud_sets->create(bindings(0,0,vk::ShaderStageFlagBits::eCompute,3),count);
+            data.cloud_sets->create(bindings(0,0,vk::ShaderStageFlagBits::eCompute,4),count);
             data.gi_sets=std::make_unique<gpu::descriptors>();
-            data.gi_sets->create(bindings(0,1,vk::ShaderStageFlagBits::eCompute,2),count);
+            data.gi_sets->create(bindings(0,1,vk::ShaderStageFlagBits::eCompute,3),count);
             data.lighting_sets=std::make_unique<gpu::descriptors>();
-            data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,2),count);
+            data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,3),count);
             data.tone_sets=std::make_unique<gpu::descriptors>();
             data.tone_sets->create(bindings(1,1,vk::ShaderStageFlagBits::eCompute),count);
             data.present_sets=std::make_unique<gpu::descriptors>();
@@ -246,6 +256,7 @@ namespace clt::postprocess
                               vk::MemoryPropertyFlagBits::eHostCoherent;
             data.lights=gpu::create_buffer(64*sizeof(point_light),storage,memory);
             data.triangles=gpu::create_buffer(3*sizeof(std::array<float,4>),storage,memory);
+            data.nodes=gpu::create_buffer(sizeof(shadow_node),storage,memory);
 
             data.frames.reserve(count);
             for(std::uint32_t i=0;i<count;++i)
@@ -289,8 +300,10 @@ namespace clt::postprocess
                 data.cloud_sets->write_buffer(i,0,vk::buffer::descriptor(current.points));
                 data.cloud_sets->write_buffer(i,1,vk::buffer::descriptor(data.triangles));
                 data.cloud_sets->write_buffer(i,2,vk::buffer::descriptor(data.lights));
+                data.cloud_sets->write_buffer(i,3,vk::buffer::descriptor(data.nodes));
                 data.gi_sets->write_buffer(i,1,vk::buffer::descriptor(current.points));
                 data.gi_sets->write_buffer(i,2,vk::buffer::descriptor(data.triangles));
+                data.gi_sets->write_buffer(i,3,vk::buffer::descriptor(data.nodes));
 
                 std::array<vk::DescriptorImageInfo,6> lighting{};
                 for(std::size_t j=0;j<g.views.size();++j)
@@ -310,6 +323,7 @@ namespace clt::postprocess
                     data.lighting_sets->write_image(i,j,lighting[j]);
                 data.lighting_sets->write_buffer(i,6,vk::buffer::descriptor(data.lights));
                 data.lighting_sets->write_buffer(i,7,vk::buffer::descriptor(data.triangles));
+                data.lighting_sets->write_buffer(i,8,vk::buffer::descriptor(data.nodes));
                 std::array<vk::DescriptorImageInfo,2> tone{};
                 tone[0].sampler = data.sampler;
                 tone[0].imageView = current.hdr.view;
@@ -504,6 +518,7 @@ namespace clt::postprocess
         data.targets.reset();
         data.lights.reset();
         data.triangles.reset();
+        data.nodes.reset();
         if (data.sampler) device.destroySampler(data.sampler);
 
         data = {};
@@ -518,7 +533,7 @@ namespace clt::postprocess
     void cloud(vk::CommandBuffer command,std::uint32_t image)
     {
         if(!get().frames.at(image).dirty || !get().point_count)return;
-        const cloud_push push{get().point_count,get().vertex_count,get().light_count,0};
+        const cloud_push push{get().point_count,get().vertex_count,get().light_count,get().node_count};
         get().cloud_program->dispatch(command,(get().point_count+63)/64,1,1,
                                       {get().frames.at(image).cloud},&push,sizeof(push));
     }
@@ -527,7 +542,7 @@ namespace clt::postprocess
     {
         if(!get().frames.at(image).dirty)return;
         const grid_push push{
-            get().point_count,get().vertex_count,{},
+            get().point_count,get().vertex_count,get().node_count,0,
             {grid_origin.x,grid_origin.y,grid_origin.z,grid_spacing}
         };
         get().gi_program->dispatch(command,
