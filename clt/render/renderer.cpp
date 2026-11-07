@@ -373,6 +373,7 @@ namespace clt::renderer
             }
             scene_renderer::synchronize();
             postprocess::synchronize_scene();
+            data.passes.invalidate();
         }
 
         ::render::frame_scheduler::ticket active{};
