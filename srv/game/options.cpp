@@ -119,6 +119,21 @@ namespace game::options
                 g.presentation_shader.empty() || g.exposure < 0 || g.sun_intensity < 0 ||
                 (g.sun_direction.x == 0 && g.sun_direction.y == 0 && g.sun_direction.z == 0))
                 throw std::invalid_argument("Client graphics configuration is incomplete");
+            if(g.point_lights.size()>64)
+                throw std::invalid_argument("Only 64 point lights are supported");
+            for(const auto& light:g.point_lights)
+            {
+                if(!std::isfinite(light.position.x) ||
+                   !std::isfinite(light.position.y) ||
+                   !std::isfinite(light.position.z) ||
+                   !std::isfinite(light.color.x) ||
+                   !std::isfinite(light.color.y) ||
+                   !std::isfinite(light.color.z) ||
+                   !std::isfinite(light.range) || light.range<=0 ||
+                   !std::isfinite(light.intensity) || light.intensity<0 ||
+                   light.color.x<0 || light.color.y<0 || light.color.z<0)
+                    throw std::invalid_argument("Invalid point light");
+            }
         }
         *get() = std::move(result);
     }
