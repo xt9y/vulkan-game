@@ -108,7 +108,7 @@ namespace clt::postprocess
             std::uint32_t points,vertices,lights,nodes;
         };
         struct grid_push {
-            std::uint32_t points,vertices,nodes,padding=0;
+            std::uint32_t points,vertices,nodes,lights=0;
             std::array<float,4> origin_spacing{};
         };
         static_assert(sizeof(grid_push)==32);
@@ -389,6 +389,12 @@ namespace clt::postprocess
             bool any=false;
             for(const auto& light:source->lights)
             {
+                if(!std::isfinite(light.position.x) ||
+                   !std::isfinite(light.position.y) ||
+                   !std::isfinite(light.position.z) ||
+                   !std::isfinite(light.radius) || light.radius<=0.0f ||
+                   !std::isfinite(light.strength))
+                    throw std::runtime_error("Invalid streamed light bounds");
                 if(light.strength<=0.0f)continue;
                 const float reach=light.radius+bounce_reach;
                 const vec3 low=light.position-vec3{reach,reach,reach};
