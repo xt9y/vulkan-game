@@ -83,9 +83,9 @@ vec3 world_position(ivec2 pixel,ivec2 extent,float depth)
 
 // Original Rogue point-light shadow test was a cubemap PCF pass.
 // This uses the same world triangles for explicit visibility on Vulkan.
-bool triangle_hit(vec3 origin,vec3 ray,float far_distance,vec3 a,vec3 b,vec3 c)
+bool triangle_hit(vec3 origin,vec3 ray,float far_distance,vec3 a,vec3 e1,vec3 e2)
 {
-    vec3 e1=b-a,e2=c-a,p=cross(ray,e2);
+    vec3 p=cross(ray,e2);
     float det=dot(e1,p);
     if(abs(det)<0.00001)return false;
     float inv=1.0/det;
