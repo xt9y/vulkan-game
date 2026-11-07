@@ -148,7 +148,7 @@ void build(C_Build* b)
 
     // Optional, renderer-independent editor: no scene or server dependencies.
     C_Dependency* editor =
-        c_git(b, "VulkanEditor", "https://github.com/xt9y/vulkan-systems.git", "3246a3c0beb3b87d5c50bf52df44020cdce92a3d");
+        c_git(b, "VulkanEditor", "https://github.com/xt9y/vulkan-systems.git", "e8f0d0a1952f4280097f933bab6d5d64d3fdf984");
     c_dep_subdir(editor, "editor");
     c_dep_cbuild(editor, "VulkanEditor", C_TARGET_STATIC_LIBRARY);
     c_dep_include(editor, ".");
