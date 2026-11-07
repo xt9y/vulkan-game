@@ -10,6 +10,7 @@
 #include <gpu/resource.hpp>
 #include <bvh/stackless.hpp>
 #include <spatial/bricks.hpp>
+#include <jobs/pool.hpp>
 #include <render/postprocess.hpp>
 #include <memory>
 
@@ -26,6 +27,7 @@
 #include <functional>
 #include <limits>
 #include <unordered_map>
+#include <optional>
 #include "clt/animation/animation.hpp"
 
 namespace clt::postprocess
@@ -718,18 +720,36 @@ namespace clt::postprocess
                 }
             }
         }
-        // Shared deterministic builder retains the original shader node layout.
-        auto nodes=bvh::build_stackless(triangles);
+        // Build independent CPU acceleration structures concurrently.
+        // Only immutable point coordinates cross to the job; GPU resources
+        // and descriptor writes remain owned by the render thread.
         std::vector<vec3> surface_positions;
         surface_positions.reserve(points.size());
         for(const auto& point:points)
             surface_positions.push_back({
                 point.position[0],point.position[1],point.position[2]
             });
-        const auto neighborhoods=spatial::build_bricked_neighborhood(
-            surface_positions,origin,spacing,
-            {extent.width,extent.height,extent.depth},
-            bounce_reach+0.0001f);
+        jobs::pool preparation;
+        preparation.start(1);
+        std::optional<spatial::bricked_neighborhood> indexed;
+        if(!preparation.submit(
+            [positions=std::move(surface_positions),origin,spacing,extent,
+             &indexed]() mutable ->jobs::completion
+            {
+                auto result=spatial::build_bricked_neighborhood(
+                    positions,origin,spacing,
+                    {extent.width,extent.height,extent.depth},
+                    bounce_reach+0.0001f);
+                return [&indexed,result=std::move(result)]() mutable
+                {
+                    indexed=std::move(result);
+                };
+            }))
+            throw std::runtime_error("Failed to schedule lighting preparation");
+        auto nodes=bvh::build_stackless(triangles);
+        preparation.wait_idle();
+        preparation.commit(1);
+        auto neighborhoods=std::move(indexed.value());
         std::clog << "clt: Rogue lighting geometry: "
                   << points.size() << " probes, "
                   << triangles.size()/3 << " mesh triangles, "
