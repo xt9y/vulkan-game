@@ -60,7 +60,9 @@ vec3 brdf(vec3 albedo,float metallic,float roughness,
 float linear_depth(float depth)
 {
     float n=pc.eye_near.w,f=pc.forward_far.w;
-    return n*f/max(f-depth*(f-n),1e-6);
+    // The scene render pass maps world depth into the 0.1..1.0 viewport.
+    float d=clamp((depth-0.1)/0.9,0.0,1.0);
+    return n*f/max(f-d*(f-n),1e-6);
 }
 
 vec3 world_position(ivec2 pixel,ivec2 extent,float depth)
@@ -123,19 +125,23 @@ void main()
     vec4 n=texelFetch(g_normal,p,0);
     vec4 m=texelFetch(g_material,p,0);
     vec3 N=normalize(n.rgb*2.0-1.0);
-    vec3 P=world_position(p,size,depth);
+    const bool viewmodel=depth<0.1;
+    vec3 P=viewmodel
+        ? pc.eye_near.xyz+normalize(world_position(p,size,0.18)-pc.eye_near.xyz)*0.5
+        : world_position(p,size,depth);
     vec3 V=normalize(pc.eye_near.xyz-P);
     float roughness=clamp(m.r,0.045,1.0);
     float metallic=clamp(m.g,0.0,1.0);
     float ao=clamp(m.b,0.0,1.0);
 
-    vec4 bounce_shadow=filtered_indirect(p,N,depth);
+    vec4 bounce_shadow=viewmodel?vec4(0.0,0.0,0.0,1.0)
+                                  :filtered_indirect(p,N,depth);
     vec3 color=brdf(a.rgb,metallic,roughness,N,V,normalize(pc.sun.xyz))*
                pc.sun.w*clamp(bounce_shadow.a,0.0,1.0);
 
     uint count=min(min(uint(max(pc.ambient_count.w,0.0)),
                        uint(lights.length())),64u);
-    for(uint i=0u;i<count;++i)
+    for(uint i=0u;i<(viewmodel?0u:count);++i)
     {
         vec3 delta=lights[i].position_range.xyz-P;
         float d2=dot(delta,delta);
