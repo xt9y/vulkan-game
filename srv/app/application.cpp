@@ -269,6 +269,8 @@ namespace srv::application
         {
             data.scene.collision_boxes.push_back(std::move(box));
         }
+        for(auto& light:patch.lights)
+            data.scene.lights.push_back(std::move(light));
         data.colliders.insert(
             data.colliders.end(), added_colliders.begin(), added_colliders.end()
         );
