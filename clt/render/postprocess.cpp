@@ -12,12 +12,9 @@
 
 #include <algorithm>
 #include <atomic>
-#include <mutex>
 #include <array>
-#include <cstdlib>
 #include <cmath>
 #include <stdexcept>
-#include <string>
 #include <vector>
 
 namespace clt::postprocess
@@ -103,20 +100,11 @@ namespace clt::postprocess
             return result;
         }
 
-        vk::PipelineLayout pipeline_layout(vk::DescriptorSetLayout set, bool compute)
+        vk::PipelineLayout pipeline_layout(vk::DescriptorSetLayout set)
         {
             vk::PipelineLayoutCreateInfo info{};
-            info.setLayoutCount = 1;
-            info.pSetLayouts = &set;
-            vk::PushConstantRange constants{};
-            if (compute)
-            {
-                constants.offset = 0;
-                constants.size = sizeof(push);
-                constants.stageFlags = vk::ShaderStageFlagBits::eCompute;
-                info.pushConstantRangeCount = 1;
-                info.pPushConstantRanges = &constants;
-            }
+            info.setLayoutCount=1;
+            info.pSetLayouts=&set;
             return vk::device::get()->handle.createPipelineLayout(info);
         }
 
@@ -185,7 +173,7 @@ namespace clt::postprocess
             data.tone_sets->create(bindings(1,1,vk::ShaderStageFlagBits::eCompute),count);
             data.present_sets=std::make_unique<gpu::descriptors>();
             data.present_sets->create(bindings(1,0,vk::ShaderStageFlagBits::eFragment),count);
-            data.present_layout=pipeline_layout(data.present_sets->layout(),false);
+            data.present_layout=pipeline_layout(data.present_sets->layout());
             data.gi_program=std::make_unique<gpu::compute>();
             data.gi_program->create("build/shaders/gi.comp.spv",
                                     {data.gi_sets->layout()},sizeof(push));
