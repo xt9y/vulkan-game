@@ -1,155 +1,67 @@
 #version 450
-layout(local_size_x=8,local_size_y=8) in;
+layout(local_size_x=4,local_size_y=4,local_size_z=4) in;
 
-layout(set=0,binding=0) uniform sampler2D g_albedo;
-layout(set=0,binding=1) uniform sampler2D g_normal;
-layout(set=0,binding=2) uniform sampler2D g_material;
-layout(set=0,binding=3) uniform sampler2D g_depth;
-layout(rgba16f,set=0,binding=4) writeonly uniform image2D indirect_shadow;
-
-struct PointLight {
-    vec4 position_range;
-    vec4 color_intensity;
+// Port of Rogue's propogate_light.comp: radiance from visible surface
+// points, stored on the same 0.2-unit uniform 3D probe lattice.
+layout(rgba16f,set=0,binding=0) writeonly uniform image3D grid;
+struct CloudPoint {
+    vec4 position;
+    vec4 normal;
+    vec4 radiance;
 };
-layout(std430,set=0,binding=5) readonly buffer Lights {
-    PointLight lights[];
-};
-
-layout(push_constant) uniform Controls {
-    float exposure;
-    float reserved0;
-    vec2 reserved1;
-    vec4 eye_near;
-    vec4 forward_far;
-    vec4 right_tan;
-    vec4 up_tan;
-    vec4 light_count;
-    vec4 sky;
+layout(std430,set=0,binding=1) readonly buffer Points { CloudPoint points[]; };
+layout(std430,set=0,binding=2) readonly buffer Geometry { vec4 vertices[]; };
+layout(push_constant) uniform Settings {
+    uint point_count;
+    uint vertex_count;
+    vec2 unused;
+    vec4 grid_origin_spacing;
 } pc;
 
-const float PI=3.14159265359;
-const ivec2 taps[8]=ivec2[8](
-    ivec2( 9, 6),ivec2(-11, 8),ivec2( 7,-13),ivec2(-8,-10),
-    ivec2(21, 2),ivec2(-19,-3),ivec2( 2, 22),ivec2(-3,-21)
-);
-
-float linear_depth(float depth)
+bool triangle_hit(vec3 origin,vec3 ray,float far_distance,vec3 a,vec3 b,vec3 c)
 {
-    float n=pc.eye_near.w,f=pc.forward_far.w;
-    // The scene render pass maps world depth into the 0.1..1.0 viewport.
-    float d=clamp((depth-0.1)/0.9,0.0,1.0);
-    return n*f/max(f-d*(f-n),1e-6);
+    vec3 e1=b-a,e2=c-a;
+    vec3 p=cross(ray,e2);
+    float det=dot(e1,p);
+    if(det<=0.00001)return false; // Legacy: ignore back faces.
+    float inverse=1.0/det;
+    vec3 t=origin-a;
+    float u=dot(t,p)*inverse;
+    if(u<0.0 || u>1.0)return false;
+    vec3 q=cross(t,e1);
+    float v=dot(ray,q)*inverse;
+    if(v<0.0 || u+v>1.0)return false;
+    float distance=dot(e2,q)*inverse;
+    return distance>0.001 && distance<far_distance;
 }
-
-vec3 ray(ivec2 pixel,ivec2 size)
+bool any_hit(vec3 origin,vec3 direction,float distance)
 {
-    vec2 ndc=(vec2(pixel)+0.5)/vec2(size)*2.0-1.0;
-    return pc.forward_far.xyz
-        +ndc.x*pc.right_tan.xyz*pc.right_tan.w
-        -ndc.y*pc.up_tan.xyz*pc.up_tan.w;
-}
-
-vec3 position(ivec2 pixel,ivec2 size,float depth)
-{
-    return pc.eye_near.xyz+ray(pixel,size)*linear_depth(depth);
-}
-
-bool projected(vec3 p,ivec2 size,out ivec2 pixel,out float view_depth)
-{
-    vec3 relative=p-pc.eye_near.xyz;
-    view_depth=dot(relative,pc.forward_far.xyz);
-    if(view_depth<=pc.eye_near.w)return false;
-    vec2 ndc=vec2(
-        dot(relative,pc.right_tan.xyz)/(view_depth*pc.right_tan.w),
-        -dot(relative,pc.up_tan.xyz)/(view_depth*pc.up_tan.w));
-    vec2 uv=ndc*0.5+0.5;
-    if(any(lessThan(uv,vec2(0.0))) ||
-       any(greaterThanEqual(uv,vec2(1.0))))return false;
-    pixel=clamp(ivec2(uv*vec2(size)),ivec2(0),size-1);
-    return true;
-}
-
-vec3 emission_at(ivec2 pixel)
-{
-    vec3 packed=vec3(
-        texelFetch(g_albedo,pixel,0).a,
-        texelFetch(g_normal,pixel,0).a,
-        texelFetch(g_material,pixel,0).a);
-    return packed/max(vec3(1.0)-packed,vec3(1.0/255.0));
+    for(uint i=0u;i+2u<pc.vertex_count;i+=3u)
+        if(triangle_hit(origin,direction,distance,
+                        vertices[i].xyz,vertices[i+1].xyz,vertices[i+2].xyz))
+            return true;
+    return false;
 }
 
 void main()
 {
-    ivec2 pixel=ivec2(gl_GlobalInvocationID.xy);
-    ivec2 extent=imageSize(indirect_shadow);
-    if(any(greaterThanEqual(pixel,extent)))return;
-
-    ivec2 size=textureSize(g_depth,0);
-    ivec2 p=min(pixel*2+ivec2(1),size-1);
-    float depth=texelFetch(g_depth,p,0).r;
-    // First-person weapon depth is mapped to 0..0.099; it is not world geometry.
-    if(depth>=0.999999 || depth<0.1)
-    {
-        imageStore(indirect_shadow,pixel,vec4(0.0,0.0,0.0,1.0));
-        return;
-    }
-    vec3 P=position(p,size,depth);
-    vec3 N=normalize(texelFetch(g_normal,p,0).rgb*2.0-1.0);
-
-
+    ivec3 cell=ivec3(gl_GlobalInvocationID.xyz);
+    if(any(greaterThanEqual(cell,imageSize(grid))))return;
+    vec3 position=pc.grid_origin_spacing.xyz+
+                  vec3(cell)*pc.grid_origin_spacing.w;
     vec3 indirect=vec3(0.0);
-    uint light_count=min(min(uint(max(pc.light_count.x,0.0)),
-                             uint(lights.length())),64u);
-    for(int i=0;i<8;++i)
+    const float max_distance=2.6; // Rogue's original probe range
+    for(uint i=0u;i<pc.point_count;++i)
     {
-        ivec2 q=clamp(p+taps[i],ivec2(0),size-1);
-        float z=texelFetch(g_depth,q,0).r;
-        if(z>=0.999999 || z<0.1)continue;
-        vec3 Q=position(q,size,z);
-        vec3 delta=Q-P;
-        float d2=dot(delta,delta);
-        if(d2<0.0025 || d2>81.0)continue;
-        // Reject a bounce if another visible surface lies between the patches.
-        ivec2 middle_pixel;
-        float middle_z;
-        if(projected(P+delta*0.5,size,middle_pixel,middle_z))
-        {
-            float middle_depth=texelFetch(g_depth,middle_pixel,0).r;
-            if(middle_depth>=0.1 && middle_depth<0.999999)
-            {
-                float gap=middle_z-linear_depth(middle_depth);
-                if(gap>0.05 && gap<0.25)continue;
-            }
-        }
-        vec3 L=delta*inversesqrt(d2);
-        vec3 M=normalize(texelFetch(g_normal,q,0).rgb*2.0-1.0);
-        float receiver=max(dot(N,L),0.0);
-        float emitter=max(dot(M,-L),0.0);
-        if(receiver<=0.0 || emitter<=0.0)continue;
-        vec3 albedo=texelFetch(g_albedo,q,0).rgb;
-        vec4 material=texelFetch(g_material,q,0);
-        vec3 outgoing=emission_at(q);
-        for(uint light=0u;light<light_count;++light)
-        {
-            vec3 delta=lights[light].position_range.xyz-Q;
-            float d2=dot(delta,delta);
-            float radius=max(lights[light].position_range.w,0.001);
-            float d=sqrt(d2);
-            if(d>=radius || d<1e-4)continue;
-            float q=clamp(d/radius,0.0,1.0);
-            float attenuation=1.0-q*q*(3.0-2.0*q);
-            outgoing+=albedo*(1.0-material.g)*
-                max(dot(M,delta/d),0.0)/PI*
-                lights[light].color_intensity.rgb*
-                (lights[light].color_intensity.w*attenuation);
-        }
-        // Each screen-space tap represents a finite patch of source geometry.
-        float size_y=2.0*linear_depth(z)*pc.up_tan.w/float(size.y);
-        float area=min(4.0,400.0*size_y*size_y);
-        float weight=min(0.75,area*receiver*emitter/
-                         (PI*(d2+0.02)));
-        indirect+=outgoing*weight;
+        vec3 value=points[i].radiance.rgb;
+        if(dot(value,value)<=0.0)continue;
+        vec3 delta=position-points[i].position.xyz;
+        float distance=length(delta);
+        if(distance<=0.02 || distance>=max_distance)continue;
+        vec3 ray=delta/distance;
+        if(dot(points[i].normal.xyz,ray)<=0.0)continue;
+        if(!any_hit(points[i].position.xyz+ray*0.003,ray,distance-0.006))
+            indirect+=value/distance;
     }
-    // Fixed pattern avoids stochastic flicker; estimated bounce is local only.
-    imageStore(indirect_shadow,pixel,vec4(max(indirect,vec3(0.0)),1.0));
+    imageStore(grid,cell,vec4(indirect/40.0,1.0));
 }
