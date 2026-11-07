@@ -65,6 +65,19 @@ Security and deployment limits:
 Native compilation, handshake interoperability and platform/runtime regression
 testing are required before treating this revision as a release.
 
+Platform requirements:
+  macOS: Vulkan via MoltenVK; Linux: Vulkan driver and X11/XWayland;
+  Windows: Vulkan driver and GLFW Win32. The shader compiler
+  glslangValidator must be on PATH. VulkanEngine's generated API needs
+  Python 3 (python3 on Unix, python on Windows). Platform builds and
+  runtime compatibility still require verification on each OS.
+
+Rendering status:
+  Current main has deferred GGX direct sunlight and constant ambient light.
+  It does not render directional shadows, point-light shadows or true GI.
+  VulkanSystems supplies BVH code, but the game has not connected it to
+  visibility queries, irradiance probes or bounce-light accumulation.
+
 Rendering and reusable systems:
   VulkanSystems/render owns general indexed geometry buffers, sampled G-buffer
   attachment images, render target/frame boilerplate and ordered GPU graph
