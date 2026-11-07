@@ -51,37 +51,52 @@ static void compile_shaders(void)
     }
 }
 
-// The original Rogue editor stores each glyph as a tiny PNG instead of a
-// font atlas. Sparse checkout fetches only 90 small textures, not the many
-// large assets in hellengine-bak. This is optional; fallback glyphs are built
-// into VulkanEditor and work without network access.
+// Fetch just the original 90 glyph PNGs once. Configure the sparse working
+// tree BEFORE fetching the source commit to avoid downloading large game
+// models/textures from the private HellEngine backup repository.
+// No font decoding occurs in build.c or on the render thread.
 static void prepare_editor_font(void)
 {
+    static const char* root="build/editor-font-repository";
     struct stat info;
     if(stat("build/editor-font-repository/Rogue/Rogue/res/textures/font/char_90.png",
             &info)==0)
         return;
+
     const char* skip=getenv("VULKAN_EDITOR_FONT_SKIP_DOWNLOAD");
     if(skip && strcmp(skip,"1")==0)return;
+
     if(stat("build/editor-font-repository/.git",&info)!=0)
     {
-        if(system("git clone -q --depth 1 --filter=blob:none --sparse "
-                  "https://github.com/xt9y/hellengine-bak.git "
-                  "build/editor-font-repository")!=0)
+        if(system("git init -q build/editor-font-repository && "
+                  "git -C build/editor-font-repository remote add origin "
+                  "https://github.com/xt9y/hellengine-bak.git && "
+                  "git -C build/editor-font-repository sparse-checkout init --cone && "
+                  "git -C build/editor-font-repository sparse-checkout set "
+                  "Rogue/Rogue/res/textures/font")!=0)
         {
-            fprintf(stderr,"editor: original font download failed; using fallback\n");
+            fprintf(stderr,
+                    "editor: unable to initialize sparse original-font checkout\n");
             return;
         }
     }
-    // Keep the original pixel-font revision reproducible.
+
+    // Also specify the blob filter on each FETCH: older configurations can
+    // otherwise transfer the complete private backup (hundreds of MB).
     if(system("git -C build/editor-font-repository fetch -q --depth 1 "
-              "origin 2ab96641cc98912ffcdcae67c77a10de5e0fdc7d && "
-              "git -C build/editor-font-repository checkout -q --detach "
+              "--filter=blob:none origin "
               "2ab96641cc98912ffcdcae67c77a10de5e0fdc7d && "
-              "git -C build/editor-font-repository sparse-checkout set "
-              "Rogue/Rogue/res/textures/font")!=0)
-        fprintf(stderr,"editor: original font checkout requires GitHub "
-                       "access to xt9y/hellengine-bak; using fallback\n");
+              "git -C build/editor-font-repository checkout -q --detach FETCH_HEAD")!=0)
+    {
+        fprintf(stderr,
+                "editor: font checkout failed; client requires access to "
+                "xt9y/hellengine-bak (no fallback font)\n");
+        return;
+    }
+    if(stat("build/editor-font-repository/Rogue/Rogue/res/textures/font/char_90.png",
+            &info)!=0)
+        fprintf(stderr,
+                "editor: incomplete original font checkout; client startup will fail\n");
 }
 
 void build(C_Build* b)
