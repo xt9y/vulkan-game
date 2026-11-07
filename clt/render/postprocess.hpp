@@ -16,8 +16,8 @@ namespace clt::postprocess
     targets images(std::uint32_t image);
     void create();
     void synchronize_scene();
-    bool needs_update();
-    void updated();
+    bool needs_update(std::uint32_t image);
+    void updated(std::uint32_t image);
     void toggle_probes();
     void release();
     void cloud(vk::CommandBuffer command,std::uint32_t image);
