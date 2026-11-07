@@ -127,7 +127,11 @@ vec4 debug_sphere(vec3 eye,vec3 direction,float max_distance)
     float spacing=pc.sky.w;
     vec3 box_min=pc.sky.xyz-vec3(spacing*0.5);
     vec3 box_max=box_min+vec3(dims)*spacing;
-    vec3 inv=1.0/max(abs(direction),vec3(1e-6))*sign(direction);
+    vec3 safe=vec3(
+        abs(direction.x)<1e-6?(direction.x<0.0?-1e-6:1e-6):direction.x,
+        abs(direction.y)<1e-6?(direction.y<0.0?-1e-6:1e-6):direction.y,
+        abs(direction.z)<1e-6?(direction.z<0.0?-1e-6:1e-6):direction.z);
+    vec3 inv=1.0/safe;
     vec3 near_axis=min((box_min-eye)*inv,(box_max-eye)*inv);
     vec3 far_axis=max((box_min-eye)*inv,(box_max-eye)*inv);
     float start=max(max(near_axis.x,near_axis.y),max(near_axis.z,0.0));
