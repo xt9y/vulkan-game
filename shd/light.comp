@@ -40,7 +40,11 @@ layout(push_constant) uniform Controls {
 const float PI=3.14159265359;
 vec3 fresnel(float cosine,vec3 f0)
 {
-    return f0+(1.0-f0)*pow(1.0-clamp(cosine,0.0,1.0),5.0);
+    // Schlick's exact fifth-order polynomial; avoids the GPU's general
+    // pow/log/exp path for every surviving point-light evaluation.
+    float m=1.0-clamp(cosine,0.0,1.0);
+    float m2=m*m;
+    return f0+(1.0-f0)*(m2*m2*m);
 }
 vec3 brdf(vec3 albedo,float metallic,float roughness,vec3 N,vec3 V,vec3 L)
 {
