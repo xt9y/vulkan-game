@@ -116,8 +116,7 @@ namespace game::options
                 g.present == presentation::unspecified ||
                 g.culling_shader.empty() || g.lighting_shader.empty() ||
                 g.tonemap_shader.empty() || g.fullscreen_shader.empty() ||
-                g.presentation_shader.empty() || g.exposure < 0 || g.sun_intensity < 0 ||
-                (g.sun_direction.x == 0 && g.sun_direction.y == 0 && g.sun_direction.z == 0))
+                g.presentation_shader.empty() || g.exposure < 0)
                 throw std::invalid_argument("Client graphics configuration is incomplete");
         }
         *get() = std::move(result);
