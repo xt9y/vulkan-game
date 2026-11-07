@@ -127,7 +127,7 @@ namespace clt::postprocess
                 {-sy*sp,cp,cy*sp,tan_half},
                 {lighting.sun_direction.x,lighting.sun_direction.y,
                  lighting.sun_direction.z,lighting.sun_intensity},
-                {0.01f,0.015f,0.02f,
+                {0.0f,0.0f,0.0f,
                  float(std::min<std::size_t>(lighting.point_lights.size(),64))},
                 {0.035f,0.045f,0.065f,1.0f}
             };
