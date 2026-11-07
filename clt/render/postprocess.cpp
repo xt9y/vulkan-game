@@ -379,10 +379,6 @@ namespace clt::postprocess
             };
             const auto face=[&](vec3 base,vec3 u,vec3 v,vec3 normal)
             {
-                const vec3 b=base+u,c=b+v,d=base+v;
-                for(const auto& p:{base,b,c,base,c,d})
-                    triangles.push_back({p.x,p.y,p.z,0.0f});
-
                 // Samples use the original 0.3-unit surface spacing.
                 // Restrict iteration to the probe volume, even for a huge floor.
                 const float lu=length(u),lv=length(v);
@@ -451,6 +447,82 @@ namespace clt::postprocess
                 face({a.x,a.y,a.z},{dx,0,0},{0,0,dz},{0,-1,0});
                 face({a.x,a.y,b.z},{dx,0,0},{0,dy,0},{0,0,1});
                 face({b.x,a.y,a.z},{-dx,0,0},{0,dy,0},{0,0,-1});
+            }
+            // Shadow casters use rendered mesh triangles, not collision proxies.
+            // Transform each streamed instance into the same world coordinates
+            // used by mesh.vert; alpha-blended surfaces do not occlude light.
+            for(const auto& instance:source->instances)
+            {
+                const auto mesh=std::find_if(source->meshes.begin(),source->meshes.end(),
+                    [&](const ::scene::mesh& m){return m.id==instance.mesh_id;});
+                if(mesh==source->meshes.end() || mesh->surface.alpha_mode==2)continue;
+                std::vector<animation::matrix> palette;
+                if(mesh->skin_id && !animation::sample(
+                       mesh->skin_id,instance.animation,0.0f,palette,
+                       instance.overlay_animation,instance.overlay_weight,
+                       instance.overlay_root))
+                    throw std::runtime_error("Cannot sample imported shadow caster skin");
+
+                const auto transformed=[&](const ::scene::vertex& v) {
+                    vec3 local=v.position;
+                    if(!palette.empty())
+                    {
+                        local={};
+                        for(std::size_t j=0;j<4;++j)
+                        {
+                            if(v.weights[j]<=0.0f)continue;
+                            if(v.joints[j]>=palette.size())
+                                throw std::runtime_error("Shadow caster joint index invalid");
+                            const auto& m=palette[v.joints[j]];
+                            const vec3 p=v.position;
+                            local=local+vec3{
+                                m[0]*p.x+m[4]*p.y+m[8]*p.z+m[12],
+                                m[1]*p.x+m[5]*p.y+m[9]*p.z+m[13],
+                                m[2]*p.x+m[6]*p.y+m[10]*p.z+m[14]
+                            }*v.weights[j];
+                        }
+                    }
+                    const auto& scale=instance.pose.scale;
+                    return instance.pose.position+rotate(instance.pose.rotation,{
+                        local.x*scale.x,local.y*scale.y,local.z*scale.z
+                    });
+                };
+                std::vector<vec3> positions;
+                positions.reserve(mesh->vertices.size());
+                for(const auto& vertex:mesh->vertices)
+                    positions.push_back(transformed(vertex));
+                for(std::size_t i=0;i+2<mesh->indices.size();i+=3)
+                {
+                    const vec3 a=positions.at(mesh->indices[i]);
+                    const vec3 b=positions.at(mesh->indices[i+1]);
+                    const vec3 c=positions.at(mesh->indices[i+2]);
+                    if(length_squared(cross(b-a,c-a))<1e-12f)continue;
+
+                    // Geometry outside every point light cannot cast its shadows.
+                    const vec3 lo{std::min({a.x,b.x,c.x}),
+                                  std::min({a.y,b.y,c.y}),
+                                  std::min({a.z,b.z,c.z})};
+                    const vec3 hi{std::max({a.x,b.x,c.x}),
+                                  std::max({a.y,b.y,c.y}),
+                                  std::max({a.z,b.z,c.z})};
+                    bool relevant=false;
+                    for(const auto& light:source->lights)
+                    {
+                        const vec3 near{
+                            std::clamp(light.position.x,lo.x,hi.x),
+                            std::clamp(light.position.y,lo.y,hi.y),
+                            std::clamp(light.position.z,lo.z,hi.z)
+                        };
+                        if(length_squared(near-light.position)<=light.radius*light.radius)
+                        {
+                            relevant=true;
+                            break;
+                        }
+                    }
+                    if(!relevant)continue;
+                    for(const auto& p:{a,b,c})
+                        triangles.push_back({p.x,p.y,p.z,0.0f});
+                }
             }
         }
         std::clog << "clt: Rogue lighting geometry: "
