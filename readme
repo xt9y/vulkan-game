@@ -76,8 +76,10 @@ Rendering status:
   The game keeps one deferred renderer: geometry -> half-resolution GI/contact
   visibility -> PBR lighting -> tonemapping -> presentation. The half-resolution
   compute pass estimates one local diffuse bounce from other visible G-buffer
-  surfaces and screen-space sun contact shadows. Lighting includes GGX, sun,
-  client-authored point lights, emission and the indirect result.
+  surfaces. Global sunlight and constant ambient fill are disabled in the
+  demo. Lighting includes GGX, server-authored point lights, emission and the
+  indirect result. Point lights travel with scene snapshots (SCNA format);
+  update and restart both client and server together.
   This is screen-space GI (SSGI), not scene-wide DDGI/path tracing. Off-screen
   emitters and occluders cannot contribute, point lights do not cast true
   shadows, and animated or otherwise hidden geometry does not enter GI.
