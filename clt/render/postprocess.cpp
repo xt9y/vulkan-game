@@ -77,11 +77,10 @@ namespace clt::postprocess
             std::array<float,4> forward_far{};
             std::array<float,4> right_tan{};
             std::array<float,4> up_tan{};
-            std::array<float,4> sun{};
-            std::array<float,4> ambient_count{};
+            std::array<float,4> light_count{};
             std::array<float,4> sky{};
         };
-        static_assert(sizeof(push)==128);
+        static_assert(sizeof(push)==112);
 
         std::vector<vk::DescriptorSetLayoutBinding> bindings(
             std::uint32_t sampled,std::uint32_t storage,vk::ShaderStageFlags stages,
@@ -120,17 +119,13 @@ namespace clt::postprocess
             const float tan_half=std::tan(view.fov*0.5f);
             const float aspect=float(extent.width)/float(extent.height);
             const auto& position=frame.eye;
-            const auto& lighting=game::options::get()->graphics;
             const push controls{
                 exposure_value.load(std::memory_order_relaxed),{},
                 {position.x,position.y,position.z,0.1f},
                 {sy*cp,sp,-cy*cp,1000.0f},
                 {cy,0,sy,tan_half*aspect},
                 {-sy*sp,cp,cy*sp,tan_half},
-                {lighting.sun_direction.x,lighting.sun_direction.y,
-                 lighting.sun_direction.z,lighting.sun_intensity},
-                {0.0f,0.0f,0.0f,
-                 float(get().light_count)},
+                {float(get().light_count),0.0f,0.0f,0.0f},
                 {0.035f,0.045f,0.065f,1.0f}
             };
             const auto width=half?(extent.width+1)/2:extent.width;
