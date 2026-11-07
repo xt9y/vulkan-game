@@ -64,7 +64,7 @@ int main(int argc, char** argv)
     try
     {
         game::options::state settings{};
-        settings.bind_host = "127.0.0.1";
+        settings.bind_host = "0.0.0.0";
         settings.port = 27015;
         settings.duration = 0;
         settings.headless = false;
