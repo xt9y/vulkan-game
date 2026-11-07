@@ -14,10 +14,12 @@ struct Light {
 layout(std430,set=0,binding=0) buffer Points { CloudPoint points[]; };
 layout(std430,set=0,binding=1) readonly buffer Geometry { vec4 vertices[]; };
 layout(std430,set=0,binding=2) readonly buffer Lights { Light lights[]; };
+// Matches VulkanBVH's tightly packed 32-byte std430 node.
 struct ShadowNode {
-    vec4 minimum;
-    vec4 maximum;
-    uvec4 info; // next node after subtree, first triangle, triangle count
+    vec3 minimum;
+    uint next;
+    vec3 maximum;
+    uint first_and_count; // high 28 bits: triangle start; low 4: count
 };
 layout(std430,set=0,binding=3) readonly buffer ShadowTree { ShadowNode nodes[]; };
 layout(push_constant) uniform Counts {
@@ -44,14 +46,10 @@ bool triangle_hit(vec3 origin,vec3 ray,float far_distance,vec3 a,vec3 b,vec3 c)
     return distance>0.001 && distance<far_distance;
 }
 
-bool shadow_box(vec3 origin,vec3 direction,float distance,ShadowNode node)
+bool shadow_box(vec3 origin,vec3 inverse_direction,float distance,ShadowNode node)
 {
-    vec3 safe=vec3(
-        abs(direction.x)<1e-7?(direction.x<0.0?-1e-7:1e-7):direction.x,
-        abs(direction.y)<1e-7?(direction.y<0.0?-1e-7:1e-7):direction.y,
-        abs(direction.z)<1e-7?(direction.z<0.0?-1e-7:1e-7):direction.z);
-    vec3 p=(node.minimum.xyz-origin)/safe;
-    vec3 q=(node.maximum.xyz-origin)/safe;
+    vec3 p=(node.minimum-origin)*inverse_direction;
+    vec3 q=(node.maximum-origin)*inverse_direction;
     vec3 lo=min(p,q),hi=max(p,q);
     float t0=max(max(lo.x,lo.y),max(lo.z,0.0));
     float t1=min(min(hi.x,hi.y),min(hi.z,distance));
@@ -62,18 +60,24 @@ bool any_hit(vec3 origin,vec3 ray,float distance)
 {
     uint total=min(pc.node_count,uint(nodes.length()));
     uint vertex_count=min(pc.vertex_count,uint(vertices.length()));
+    if(total==0u || vertex_count==0u || distance<=0.001)return false;
+    vec3 safe=vec3(
+        abs(ray.x)<1e-7?(ray.x<0.0?-1e-7:1e-7):ray.x,
+        abs(ray.y)<1e-7?(ray.y<0.0?-1e-7:1e-7):ray.y,
+        abs(ray.z)<1e-7?(ray.z<0.0?-1e-7:1e-7):ray.z);
+    vec3 inverse_direction=1.0/safe;
     uint index=0u;
     while(index<total)
     {
         ShadowNode node=nodes[index];
-        if(!shadow_box(origin,ray,distance,node))
+        if(!shadow_box(origin,inverse_direction,distance,node))
         {
-            index=max(node.info.x,index+1u);
+            index=max(node.next,index+1u);
             continue;
         }
-        if(node.info.z>0u)
+        if((node.first_and_count & 15u)>0u)
         {
-            uint first=node.info.y, end=min(first+node.info.z,vertex_count/3u);
+            uint first=(node.first_and_count >> 4u), end=min(first+(node.first_and_count & 15u),vertex_count/3u);
             for(uint i=first;i<end;++i)
             {
                 uint v=i*3u;
