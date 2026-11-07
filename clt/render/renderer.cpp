@@ -255,14 +255,23 @@ namespace clt::renderer
             choice == game::options::surface_format::bgra8_srgb
                 ? vk::Format::eB8G8R8A8Srgb : vk::Format::eR8G8B8A8Srgb;
         const auto formats = vk::surface::formats();
-        const auto selected = std::find_if(formats.begin(), formats.end(),
+        auto selected = std::find_if(formats.begin(), formats.end(),
             [&](const vk::SurfaceFormatKHR& value)
             {
                 return value.format == requested_format &&
                     value.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;
             });
-        if (selected == formats.end())
-            throw std::runtime_error("Configured swapchain format unsupported");
+        // Both common SRGB image formats use the same presentation path.
+        if(selected == formats.end())
+            selected = std::find_if(formats.begin(), formats.end(),
+                [](const vk::SurfaceFormatKHR& value)
+                {
+                    return (value.format == vk::Format::eB8G8R8A8Srgb ||
+                            value.format == vk::Format::eR8G8B8A8Srgb) &&
+                            value.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;
+                });
+        if(selected == formats.end())
+            throw std::runtime_error("No supported SRGB swapchain surface format");
         const auto format = *selected;
 
         vk::SwapchainCreateInfoKHR info{};
