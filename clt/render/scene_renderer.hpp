@@ -17,7 +17,6 @@ namespace clt::scene_renderer
     gbuffer outputs(std::uint32_t image);
 
     bool needs_sync();
-    void reset_scene();
     void create_frame_resources();
     void release_frame_resources();
     
