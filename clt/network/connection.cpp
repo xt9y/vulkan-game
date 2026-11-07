@@ -60,6 +60,7 @@ namespace clt::connection
         std::size_t meshes = data.scene ? data.scene->meshes.size() : 0;
         std::size_t instances = data.scene ? data.scene->instances.size() : 0;
         std::size_t boxes = data.scene ? data.scene->collision_boxes.size() : 0;
+        std::size_t lights = data.scene ? data.scene->lights.size() : 0;
         for (const auto& patch : data.pending_scene)
         {
             skins += patch.skins.size();
@@ -67,12 +68,14 @@ namespace clt::connection
             meshes += patch.meshes.size();
             instances += patch.instances.size();
             boxes += patch.collision_boxes.size();
+            lights += patch.lights.size();
         }
         combined->skins.reserve(skins);
         combined->textures.reserve(textures);
         combined->meshes.reserve(meshes);
         combined->instances.reserve(instances);
         combined->collision_boxes.reserve(boxes);
+        combined->lights.reserve(lights);
         if (data.scene)
         {
             combined->skins = data.scene->skins;
@@ -80,6 +83,7 @@ namespace clt::connection
             combined->meshes = data.scene->meshes;
             combined->instances = data.scene->instances;
             combined->collision_boxes = data.scene->collision_boxes;
+            combined->lights = data.scene->lights;
         }
         for (auto& patch : data.pending_scene)
         {
@@ -107,6 +111,11 @@ namespace clt::connection
                 combined->collision_boxes.end(),
                 std::make_move_iterator(patch.collision_boxes.begin()),
                 std::make_move_iterator(patch.collision_boxes.end())
+            );
+            combined->lights.insert(
+                combined->lights.end(),
+                std::make_move_iterator(patch.lights.begin()),
+                std::make_move_iterator(patch.lights.end())
             );
         }
         data.scene = std::move(combined);
