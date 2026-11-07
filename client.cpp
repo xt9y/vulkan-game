@@ -5,6 +5,7 @@
 #include "srv/game/application.hpp"
 #include "srv/game/options.hpp"
 #include <network/socket.hpp>
+#include <editor/editor.hpp>
 
 #include <GLFW/glfw3.h>
 #include <algorithm>
@@ -28,6 +29,12 @@ namespace
 
     void on_input(const clt::input::frame& frame)
     {
+        // Clicking editor world labels must never fire the active weapon.
+        if(editor::instance().captures_input())
+        {
+            clt::weapon::controls(false,false,false,0u);
+            return;
+        }
         static bool space_held=false;
         const bool space=clt::input::key_down(GLFW_KEY_SPACE);
         if(space && !space_held)clt::postprocess::toggle_probes();
