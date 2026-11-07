@@ -594,6 +594,9 @@ namespace clt::connection
                     {
                         data.connected.store(false, std::memory_order_relaxed);
                         clear_scene();
+                        // Discard the previous DTLS epoch before beginning a fresh
+                        // authenticated handshake. Keep the on-disk server pin.
+                        net::secure::connect(data.socket,server);
 
                         // A reconnect is a new player session. Reset the network token so
                         // the server cannot keep the old input acknowledgement sequence.
