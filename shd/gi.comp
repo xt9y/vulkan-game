@@ -118,6 +118,8 @@ void main()
     float visible=sun_visibility(P,N,size);
 
     vec3 indirect=vec3(0.0);
+    uint light_count=min(min(uint(max(pc.ambient_count.w,0.0)),
+                             uint(lights.length())),64u);
     for(int i=0;i<8;++i)
     {
         ivec2 q=clamp(p+taps[i],ivec2(0),size-1);
@@ -149,9 +151,7 @@ void main()
         float source_sun=max(dot(M,normalize(pc.sun.xyz)),0.0);
         vec3 outgoing=albedo*(1.0-material.g)*
             pc.sun.w*source_sun/PI+emission_at(q);
-        uint count=min(min(uint(max(pc.ambient_count.w,0.0)),
-                           uint(lights.length())),64u);
-        for(uint light=0u;light<count;++light)
+        for(uint light=0u;light<light_count;++light)
         {
             vec3 delta=lights[light].position_range.xyz-Q;
             float d2=dot(delta,delta);
