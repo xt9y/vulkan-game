@@ -6,6 +6,7 @@
 #include <gpu/graph.hpp>
 #include <gpu/upload.hpp>
 #include <editor/editor.hpp>
+#include <editor/vulkan.hpp>
 
 #include "clt/platform/vulkan_loader.hpp"
 #include "clt/platform/window.hpp"
@@ -72,6 +73,9 @@ namespace clt::renderer
 
         try
         {
+            // Decode the original 90-glyph editor font synchronously once,
+            // BEFORE the render thread exists. No first-frame font stall.
+            editor::vulkan::initialize_font();
             if (!glfwVulkanSupported())
             {
 #ifdef __APPLE__
