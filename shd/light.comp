@@ -14,10 +14,12 @@ struct PointLight {
 };
 layout(std430,set=0,binding=6) readonly buffer Lights { PointLight lights[]; };
 layout(std430,set=0,binding=7) readonly buffer Geometry { vec4 vertices[]; };
+// Matches VulkanBVH's tightly packed 32-byte std430 node.
 struct ShadowNode {
-    vec4 minimum;
-    vec4 maximum;
-    uvec4 info; // next node after subtree, first triangle, triangle count
+    vec3 minimum;
+    uint next;
+    vec3 maximum;
+    uint first_and_count; // high 28 bits: triangle start; low 4: count
 };
 layout(std430,set=0,binding=8) readonly buffer ShadowTree { ShadowNode nodes[]; };
 // Conservative 16x16 light lists: [count, indices[0..63]] for each tile.
@@ -117,12 +119,12 @@ bool any_hit(vec3 origin,vec3 ray,float distance)
         ShadowNode node=nodes[index];
         if(!shadow_box(origin,inverse_direction,distance,node))
         {
-            index=max(node.info.x,index+1u);
+            index=max(node.next,index+1u);
             continue;
         }
-        if(node.info.z>0u)
+        if((node.first_and_count & 15u)>0u)
         {
-            uint first=node.info.y, end=min(first+node.info.z,vertex_count/3u);
+            uint first=(node.first_and_count >> 4u), end=min(first+(node.first_and_count & 15u),vertex_count/3u);
             for(uint i=first;i<end;++i)
             {
                 uint v=i*3u;
