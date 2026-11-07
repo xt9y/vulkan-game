@@ -8,6 +8,8 @@
 #include <gpu/compute.hpp>
 #include <gpu/descriptors.hpp>
 #include <gpu/resource.hpp>
+#include <bvh/stackless.hpp>
+#include <spatial/bricks.hpp>
 #include <render/postprocess.hpp>
 #include <memory>
 
@@ -23,6 +25,7 @@
 #include <numeric>
 #include <functional>
 #include <limits>
+#include <unordered_map>
 #include "clt/animation/animation.hpp"
 
 namespace clt::postprocess
@@ -54,6 +57,8 @@ namespace clt::postprocess
             gpu::owned_buffer lights;
             gpu::owned_buffer triangles;
             gpu::owned_buffer nodes;
+            gpu::owned_buffer neighborhood_offsets;
+            gpu::owned_buffer neighborhood_indices;
             std::shared_ptr<const ::scene::state> snapshot;
             std::uint32_t light_count=0, point_count=0, vertex_count=0, node_count=0;
             vk::util::math::vec3 grid_origin{};
@@ -97,13 +102,7 @@ namespace clt::postprocess
             std::array<float,4> radiance{};
         };
         static_assert(sizeof(probe_point)==48);
-        // Preorder, stackless shadow BVH: skip index, triangle start, triangle count.
-        struct alignas(16) shadow_node {
-            std::array<float,4> minimum{};
-            std::array<float,4> maximum{};
-            std::array<std::uint32_t,4> info{};
-        };
-        static_assert(sizeof(shadow_node)==48);
+        using shadow_node=bvh::stackless_node;
         struct cloud_push {
             std::uint32_t points,vertices,lights,nodes;
         };
@@ -248,7 +247,7 @@ namespace clt::postprocess
             data.cloud_sets=std::make_unique<gpu::descriptors>();
             data.cloud_sets->create(bindings(0,0,vk::ShaderStageFlagBits::eCompute,4),count);
             data.gi_sets=std::make_unique<gpu::descriptors>();
-            data.gi_sets->create(bindings(0,1,vk::ShaderStageFlagBits::eCompute,4),count);
+            data.gi_sets->create(bindings(0,1,vk::ShaderStageFlagBits::eCompute,6),count);
             data.lighting_sets=std::make_unique<gpu::descriptors>();
             data.lighting_sets->create(bindings(5,1,vk::ShaderStageFlagBits::eCompute,3),count);
             data.tone_sets=std::make_unique<gpu::descriptors>();
@@ -291,6 +290,8 @@ namespace clt::postprocess
             data.lights=gpu::create_buffer(64*sizeof(point_light),storage,memory);
             data.triangles=gpu::create_buffer(3*sizeof(std::array<float,4>),storage,memory);
             data.nodes=gpu::create_buffer(sizeof(shadow_node),storage,memory);
+            data.neighborhood_offsets=gpu::create_buffer(2*sizeof(std::uint32_t),storage,memory);
+            data.neighborhood_indices=gpu::create_buffer(sizeof(std::uint32_t),storage,memory);
 
             data.frames.reserve(count);
             for(std::uint32_t i=0;i<count;++i)
@@ -323,6 +324,8 @@ namespace clt::postprocess
                 data.gi_sets->write_buffer(i,2,vk::buffer::descriptor(data.triangles));
                 data.gi_sets->write_buffer(i,3,vk::buffer::descriptor(data.nodes));
                 data.gi_sets->write_buffer(i,4,vk::buffer::descriptor(data.lights));
+                data.gi_sets->write_buffer(i,5,vk::buffer::descriptor(data.neighborhood_offsets));
+                data.gi_sets->write_buffer(i,6,vk::buffer::descriptor(data.neighborhood_indices));
 
                 std::array<vk::DescriptorImageInfo,6> lighting{};
                 for(std::size_t j=0;j<g.views.size();++j)
@@ -542,11 +545,15 @@ namespace clt::postprocess
             // Shadow casters use rendered mesh triangles, not collision proxies.
             // Transform each streamed instance into the same world coordinates
             // used by mesh.vert; alpha-blended surfaces do not occlude light.
+            std::unordered_map<std::uint32_t,const ::scene::mesh*> mesh_lookup;
+            mesh_lookup.reserve(source->meshes.size());
+            for(const auto& mesh:source->meshes)mesh_lookup[mesh.id]=&mesh;
             for(const auto& instance:source->instances)
             {
-                const auto mesh=std::find_if(source->meshes.begin(),source->meshes.end(),
-                    [&](const ::scene::mesh& m){return m.id==instance.mesh_id;});
-                if(mesh==source->meshes.end() || mesh->surface.alpha_mode==2)continue;
+                const auto found=mesh_lookup.find(instance.mesh_id);
+                if(found==mesh_lookup.end())continue;
+                const auto* mesh=found->second;
+                if(mesh->surface.alpha_mode==2)continue;
                 std::vector<animation::matrix> palette;
                 if(mesh->skin_id && !animation::sample(
                        mesh->skin_id,instance.animation,0.0f,palette,
@@ -616,81 +623,21 @@ namespace clt::postprocess
                 }
             }
         }
-        // Build a compact, preorder skip-index BVH over the actual world
-        // triangles. Traversal needs no recursion or GPU stack and avoids
-        // scanning high-polygon imported models for every lighting ray.
-        struct primitive {
-            std::array<vec3,3> positions;
-            vec3 lo{},hi{},center{};
-        };
-        std::vector<primitive> primitives;
-        primitives.reserve(triangles.size()/3);
-        for(std::size_t i=0;i+2<triangles.size();i+=3)
-        {
-            const vec3 a{triangles[i][0],triangles[i][1],triangles[i][2]};
-            const vec3 b{triangles[i+1][0],triangles[i+1][1],triangles[i+1][2]};
-            const vec3 c{triangles[i+2][0],triangles[i+2][1],triangles[i+2][2]};
-            const vec3 lo{std::min({a.x,b.x,c.x}),std::min({a.y,b.y,c.y}),
-                          std::min({a.z,b.z,c.z})};
-            const vec3 hi{std::max({a.x,b.x,c.x}),std::max({a.y,b.y,c.y}),
-                          std::max({a.z,b.z,c.z})};
-            primitives.push_back({{a,b,c},lo,hi,(lo+hi)*0.5f});
-        }
-        std::vector<std::uint32_t> order(primitives.size());
-        std::iota(order.begin(),order.end(),0u);
-        std::vector<shadow_node> nodes;
-        std::vector<std::array<float,4>> ordered;
-        ordered.reserve(triangles.size());
-        const auto axis=[](vec3 value,int i)->float {
-            return i==0?value.x:(i==1?value.y:value.z);
-        };
-        std::function<void(std::size_t,std::size_t)> build=
-            [&](std::size_t first,std::size_t end)
-        {
-            const auto infinity=std::numeric_limits<float>::infinity();
-            vec3 lo{infinity,infinity,infinity},hi{-infinity,-infinity,-infinity};
-            for(std::size_t i=first;i<end;++i)
-            {
-                const auto& p=primitives[order[i]];
-                lo={std::min(lo.x,p.lo.x),std::min(lo.y,p.lo.y),std::min(lo.z,p.lo.z)};
-                hi={std::max(hi.x,p.hi.x),std::max(hi.y,p.hi.y),std::max(hi.z,p.hi.z)};
-            }
-            shadow_node node{};
-            node.minimum={lo.x-0.0001f,lo.y-0.0001f,lo.z-0.0001f,0.0f};
-            node.maximum={hi.x+0.0001f,hi.y+0.0001f,hi.z+0.0001f,0.0f};
-            const auto node_index=nodes.size();
-            nodes.push_back(node);
-            if(end-first<=8)
-            {
-                nodes[node_index].info[1]=static_cast<std::uint32_t>(ordered.size()/3);
-                nodes[node_index].info[2]=static_cast<std::uint32_t>(end-first);
-                for(std::size_t i=first;i<end;++i)
-                    for(const auto& p:primitives[order[i]].positions)
-                        ordered.push_back({p.x,p.y,p.z,0.0f});
-            }
-            else
-            {
-                const vec3 span=hi-lo;
-                const int split=span.x>=span.y && span.x>=span.z ? 0
-                    : span.y>=span.z ? 1 : 2;
-                const auto middle=first+(end-first)/2;
-                std::nth_element(order.begin()+first,order.begin()+middle,
-                    order.begin()+end,[&](std::uint32_t a,std::uint32_t b)
-                    {
-                        return axis(primitives[a].center,split)<
-                               axis(primitives[b].center,split);
-                    });
-                build(first,middle);
-                build(middle,end);
-            }
-            nodes[node_index].info[0]=static_cast<std::uint32_t>(nodes.size());
-        };
-        if(!order.empty())build(0,order.size());
-        triangles=std::move(ordered);
-
+        // Shared deterministic builder retains the original shader node layout.
+        auto nodes=bvh::build_stackless(triangles);
+        std::vector<vec3> surface_positions;
+        surface_positions.reserve(points.size());
+        for(const auto& point:points)
+            surface_positions.push_back({
+                point.position[0],point.position[1],point.position[2]
+            });
+        const auto neighborhoods=spatial::build_bricked_neighborhood(
+            surface_positions,origin,spacing,
+            {extent.width,extent.height,extent.depth},
+            bounce_reach+0.0001f);
         std::clog << "clt: Rogue lighting geometry: "
                   << points.size() << " probes, "
-                  << primitives.size() << " mesh triangles, "
+                  << triangles.size()/3 << " mesh triangles, "
                   << nodes.size() << " shadow nodes\n";
 
         const bool new_shape=
@@ -743,6 +690,18 @@ namespace clt::postprocess
 
         data.triangles=std::move(new_triangles);
         data.nodes=std::move(new_nodes);
+        // Ordered candidate lists keep the original sum order for each cell.
+        const auto offset_bytes=neighborhoods.offsets.size()*sizeof(std::uint32_t);
+        const auto candidate_bytes=neighborhoods.indices.size()*sizeof(std::uint32_t);
+        auto new_offsets=gpu::create_buffer(
+            std::max<std::size_t>(2*sizeof(std::uint32_t),offset_bytes),storage,memory);
+        auto new_candidates=gpu::create_buffer(
+            std::max<std::size_t>(sizeof(std::uint32_t),candidate_bytes),storage,memory);
+        vk::buffer::write(new_offsets,neighborhoods.offsets.data(),offset_bytes);
+        if(candidate_bytes)
+            vk::buffer::write(new_candidates,neighborhoods.indices.data(),candidate_bytes);
+        data.neighborhood_offsets=std::move(new_offsets);
+        data.neighborhood_indices=std::move(new_candidates);
         data.node_count=static_cast<std::uint32_t>(nodes.size());
         data.point_count=static_cast<std::uint32_t>(points.size());
         data.vertex_count=static_cast<std::uint32_t>(triangles.size());
@@ -762,6 +721,8 @@ namespace clt::postprocess
             data.lighting_sets->write_buffer(i,7,vk::buffer::descriptor(data.triangles));
             data.cloud_sets->write_buffer(i,3,vk::buffer::descriptor(data.nodes));
             data.gi_sets->write_buffer(i,3,vk::buffer::descriptor(data.nodes));
+            data.gi_sets->write_buffer(i,5,vk::buffer::descriptor(data.neighborhood_offsets));
+            data.gi_sets->write_buffer(i,6,vk::buffer::descriptor(data.neighborhood_indices));
             data.lighting_sets->write_buffer(i,8,vk::buffer::descriptor(data.nodes));
         }
         data.snapshot=source;
@@ -794,6 +755,8 @@ namespace clt::postprocess
         data.lights.reset();
         data.triangles.reset();
         data.nodes.reset();
+        data.neighborhood_offsets.reset();
+        data.neighborhood_indices.reset();
         if (data.sampler) device.destroySampler(data.sampler);
 
         data = {};
