@@ -19,7 +19,6 @@
 #include <stdexcept>
 #include <vector>
 #include <cstdint>
-#include <limits>
 
 namespace clt::postprocess
 {
@@ -168,11 +167,6 @@ namespace clt::postprocess
     {
         draw_probes.store(!draw_probes.load(std::memory_order_relaxed),
                           std::memory_order_relaxed);
-    }
-
-    bool needs_update(std::uint32_t image)
-    {
-        return get().frames.at(image).dirty;
     }
 
     void updated(std::uint32_t image)
