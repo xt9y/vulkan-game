@@ -11,7 +11,7 @@ static void compile_shaders(void)
 {
     static const char* sources[] = {
         "shd/mesh.vert", "shd/mesh.frag", "shd/cull.comp",
-        "shd/gi.comp", "shd/light.comp", "shd/tone.comp",
+        "shd/cloud.comp", "shd/gi.comp", "shd/light.comp", "shd/tone.comp",
         "shd/fullscreen.vert", "shd/present.frag"
     };
 #ifdef _WIN32
