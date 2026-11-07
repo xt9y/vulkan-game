@@ -89,14 +89,12 @@ bool triangle_hit(vec3 origin,vec3 ray,float far_distance,vec3 a,vec3 b,vec3 c)
     float distance=dot(e2,q)*inv;
     return distance>0.001 && distance<far_distance;
 }
-bool shadow_box(vec3 origin,vec3 direction,float distance,ShadowNode node)
+bool shadow_box(vec3 origin,vec3 inverse_direction,float distance,ShadowNode node)
 {
-    vec3 safe=vec3(
-        abs(direction.x)<1e-7?(direction.x<0.0?-1e-7:1e-7):direction.x,
-        abs(direction.y)<1e-7?(direction.y<0.0?-1e-7:1e-7):direction.y,
-        abs(direction.z)<1e-7?(direction.z<0.0?-1e-7:1e-7):direction.z);
-    vec3 p=(node.minimum.xyz-origin)/safe;
-    vec3 q=(node.maximum.xyz-origin)/safe;
+    // Reciprocal ray direction is calculated once per shadow ray, not
+    // six component divisions for every BVH node examined.
+    vec3 p=(node.minimum.xyz-origin)*inverse_direction;
+    vec3 q=(node.maximum.xyz-origin)*inverse_direction;
     vec3 lo=min(p,q),hi=max(p,q);
     float t0=max(max(lo.x,lo.y),max(lo.z,0.0));
     float t1=min(min(hi.x,hi.y),min(hi.z,distance));
@@ -107,11 +105,17 @@ bool any_hit(vec3 origin,vec3 ray,float distance)
 {
     uint total=min(uint(max(pc.light_count.w,0.0)),uint(nodes.length()));
     uint vertex_count=min(uint(max(pc.light_count.z,0.0)),uint(vertices.length()));
+    if(total==0u || vertex_count==0u || distance<=0.001)return false;
+    vec3 safe=vec3(
+        abs(ray.x)<1e-7?(ray.x<0.0?-1e-7:1e-7):ray.x,
+        abs(ray.y)<1e-7?(ray.y<0.0?-1e-7:1e-7):ray.y,
+        abs(ray.z)<1e-7?(ray.z<0.0?-1e-7:1e-7):ray.z);
+    vec3 inverse_direction=1.0/safe;
     uint index=0u;
     while(index<total)
     {
         ShadowNode node=nodes[index];
-        if(!shadow_box(origin,ray,distance,node))
+        if(!shadow_box(origin,inverse_direction,distance,node))
         {
             index=max(node.info.x,index+1u);
             continue;
@@ -274,10 +278,18 @@ void main()
     for(uint candidate=0u;candidate<count;++candidate)
     {
         uint i=tile_lights[offset+1u+candidate];
-        vec3 to_light=lights[i].position_range.xyz-P;
-        float dist=length(to_light);
-        float radius=lights[i].position_range.w;
-        if(dist<0.002 || dist>=radius)continue;
+        PointLight light=lights[i];
+        if(light.color_intensity.w==0.0 || all(equal(light.color_intensity.rgb,vec3(0.0))))
+            continue;
+        vec3 to_light=light.position_range.xyz-P;
+        float radius=light.position_range.w;
+        float distance_squared=dot(to_light,to_light);
+        if(distance_squared<0.000004 || distance_squared>=radius*radius)
+            continue;
+        // BRDF is identically zero for back-facing lights. Avoid the
+        // expensive triangle shadow query (and square root) in that case.
+        if(dot(N,to_light)<=0.0)continue;
+        float dist=sqrt(distance_squared);
         vec3 direction=to_light/dist;
         float q=clamp(dist/radius,0.0,1.0);
         float attenuation=1.0-q*q*(3.0-2.0*q);
@@ -286,8 +298,8 @@ void main()
         if(!viewmodel && any_hit(P+N*0.004,direction,dist-0.008))
             continue;
         color+=brdf(albedo.rgb,metallic,roughness,N,V,direction)*
-            lights[i].color_intensity.rgb*
-            (lights[i].color_intensity.w*attenuation);
+            light.color_intensity.rgb*
+            (light.color_intensity.w*attenuation);
     }
     // Rogue uses a 0.01 diffuse bounce factor after normalized probe sampling.
     if(!viewmodel)
