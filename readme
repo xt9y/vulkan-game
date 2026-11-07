@@ -98,8 +98,9 @@ Rendering and reusable systems:
   attachment images, render target/frame boilerplate and ordered GPU graph
   recording. The client supplies scene snapshots, material/animation payloads,
   GPU draw parameters, game-specific deferred shaders and presentation policy.
-  clt/render/passes.* is removed: clt/render/renderer.cpp submits its five
-  passes through render::sequence. GI policy remains in the game shaders,
+  clt/render/passes.* is removed: clt/render/renderer.cpp submits the six
+  ordered geometry, cloud, probe, light, tone and presentation passes through
+  render::sequence. GI policy remains in the game shaders,
   not in VulkanSystems. The existing game uses GPU culling and
   streamed indexed meshes through render::geometry with nonblocking uploads.
 
