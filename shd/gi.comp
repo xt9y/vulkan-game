@@ -22,6 +22,10 @@ struct Light {
     vec4 color_intensity;
 };
 layout(std430,set=0,binding=4) readonly buffer Lights { Light lights[]; };
+// Per-brick candidate lists supplied by VulkanSpatial. Each source ID appears
+// in its original order; a sentinel enables the exact full-scan fallback.
+layout(std430,set=0,binding=5) readonly buffer BrickOffsets { uint offsets[]; };
+layout(std430,set=0,binding=6) readonly buffer BrickIndices { uint candidates[]; };
 layout(push_constant) uniform Settings {
     uint point_count;
     uint vertex_count;
@@ -113,8 +117,15 @@ void main()
         return;
     }
     vec3 indirect=vec3(0.0);
-    for(uint i=0u;i<pc.point_count;++i)
+    const bool indexed=offsets[0]!=0xffffffffu;
+    ivec3 brick=cell/4;
+    ivec3 brick_dims=(imageSize(grid)+3)/4;
+    uint brick_index=uint((brick.z*brick_dims.y+brick.y)*brick_dims.x+brick.x);
+    uint first=indexed?offsets[brick_index]:0u;
+    uint last=indexed?offsets[brick_index+1u]:pc.point_count;
+    for(uint candidate=first;candidate<last;++candidate)
     {
+        uint i=indexed?candidates[candidate]:candidate;
         vec3 value=points[i].radiance.rgb;
         if(dot(value,value)<=0.0)continue;
         vec3 delta=position-points[i].position.xyz;
