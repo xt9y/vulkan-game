@@ -367,10 +367,21 @@ namespace clt::renderer
         data.passes.record(active.command,active.image,{
             {"geometry",{},[image=active.image](vk::CommandBuffer cmd)
                 {scene_renderer::draw(cmd,image);}},
-            {"lighting",{gpu::access::for_image(target.hdr,range,
+            {"indirect",{gpu::access::for_image(target.indirect,range,
                 vk::ImageLayout::eGeneral,
                 vk::PipelineStageFlagBits::eComputeShader,
                 vk::AccessFlagBits::eShaderWrite,true)},
+                [image=active.image](vk::CommandBuffer cmd)
+                {postprocess::gi(cmd,image);}},
+            {"lighting",{
+                gpu::access::for_image(target.indirect,range,
+                    vk::ImageLayout::eGeneral,
+                    vk::PipelineStageFlagBits::eComputeShader,
+                    vk::AccessFlagBits::eShaderRead,false),
+                gpu::access::for_image(target.hdr,range,
+                    vk::ImageLayout::eGeneral,
+                    vk::PipelineStageFlagBits::eComputeShader,
+                    vk::AccessFlagBits::eShaderWrite,true)},
                 [image=active.image](vk::CommandBuffer cmd)
                 {postprocess::lighting(cmd,image);}},
             {"tonemapping",{
