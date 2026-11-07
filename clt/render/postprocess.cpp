@@ -5,6 +5,8 @@
 #include "clt/view/camera.hpp"
 #include <render/renderer.hpp>
 #include <render/pipeline.hpp>
+#include <editor/editor.hpp>
+#include <editor/vulkan.hpp>
 #include <gpu/compute.hpp>
 #include <gpu/descriptors.hpp>
 #include <gpu/resource.hpp>
@@ -1054,6 +1056,11 @@ namespace clt::postprocess
         surface.layout = get().present_layout;
         surface.sets = {get().frames.at(image).presentation};
         graphics.draw(triangle, surface);
+        // Opaque editor labels/menus are written directly to the swapchain
+        // attachment AFTER tonemapping. No HDR, lighting or PBR shader sees them.
+        editor::vulkan::record(command,
+            editor::instance().paint(int(extent.width),int(extent.height)),
+            extent);
         graphics.end_pass();
     }
 }
