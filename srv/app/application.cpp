@@ -275,7 +275,10 @@ namespace srv::application
             data.scene.collision_boxes.push_back(std::move(box));
         }
         for(auto& light:patch.lights)
+        {
             data.scene.lights.push_back(std::move(light));
+            data.editor_light_versions.push_back(data.editor_light_revision);
+        }
         data.colliders.insert(
             data.colliders.end(), added_colliders.begin(), added_colliders.end()
         );
@@ -543,8 +546,22 @@ namespace srv::application
                     }
                     else if(command.type==net::editor_light::kind::edit)
                     {
-                        if(index>=get()->scene.lights.size())return;
-                        get()->scene.lights[index]=command.light;
+                        if(index>=get()->scene.lights.size() ||
+                           command.revision>7)return;
+                        // Apply only the edited field to avoid reverting other
+                        // properties with a stale client-side light copy.
+                        auto& light=get()->scene.lights[index];
+                        switch(command.revision)
+                        {
+                        case 0:light.position.x=command.light.position.x;break;
+                        case 1:light.position.y=command.light.position.y;break;
+                        case 2:light.position.z=command.light.position.z;break;
+                        case 3:light.color.x=command.light.color.x;break;
+                        case 4:light.color.y=command.light.color.y;break;
+                        case 5:light.color.z=command.light.color.z;break;
+                        case 6:light.radius=command.light.radius;break;
+                        case 7:light.strength=command.light.strength;break;
+                        }
                         get()->editor_light_versions[index]=
                             ++get()->editor_light_revision;
                     }
