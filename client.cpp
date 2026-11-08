@@ -5980,7 +5980,7 @@ namespace clt::texture {
 namespace {
     gpu::texture_cache cache;
     vk::Sampler sampler{};
-    std::vector<::scene::texture> pinned;
+    const ::scene::state* pinned = nullptr;
     std::unordered_set<std::uint32_t> live;
 
     std::uint32_t checksum(const std::vector<std::uint8_t>& bytes) {
@@ -6028,21 +6028,21 @@ void init() {
     } catch(...) {shutdown();throw;}
 }
 
-void pin(const ::scene::state& scene) {pinned=scene.textures;}
+void pin(const ::scene::state& scene) {pinned = &scene;}
 
 void synchronize(const ::scene::state& scene) {
     gpu::upload::batch batch;
     std::unordered_set<std::uint32_t> updated;
-    updated.reserve(scene.textures.size()+pinned.size());
+    updated.reserve(scene.textures.size()+(pinned ? pinned->textures.size() : 0));
     std::vector<std::uint64_t> keep{0};
-    keep.reserve(scene.textures.size()+pinned.size()+1);
+    keep.reserve(scene.textures.size()+(pinned ? pinned->textures.size() : 0)+1);
     const auto process=[&](const ::scene::texture& texture) {
         if(!updated.insert(texture.id).second)return;
         upload(texture,batch);
         keep.push_back(texture.id);
     };
     for(const auto& texture:scene.textures)process(texture);
-    for(const auto& texture:pinned)process(texture);
+    if (pinned) for(const auto& texture:pinned->textures) process(texture);
     batch.finish();
     cache.retain(keep);
     live=std::move(updated);
@@ -6073,7 +6073,7 @@ void reset() {
 }
 void shutdown() {
     reset();
-    pinned.clear();
+    pinned = nullptr;
     cache.clear();
     if(sampler)vk::device::get()->handle.destroySampler(sampler);
     sampler=nullptr;
