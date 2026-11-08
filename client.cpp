@@ -5473,15 +5473,14 @@ void add_impact(const ::weapon::hit& impact, const definition& settings)
                 data.predicted.reload!=::weapon::reload_phase::none))
                 continue;
             net::weapon::command command{};
-            if(!(command.sequence=++data.sequence))command.sequence=++data.sequence;
+            command.sequence=data.sequence+1;
+            if(!command.sequence)++command.sequence;
             command.weapon_id=data.settings.rules.id;
             command.kind=event.action;
             command.yaw=event.yaw;
             command.pitch=event.pitch;
-            if(!connection::send_weapon(command)) {
-                --data.sequence;
-                continue;
-            }
+            if(!connection::send_weapon(command)) continue;
+            data.sequence=command.sequence;
             data.pending.push_back({command,now});
             const auto outcome=::weapon::apply(data.predicted,command.sequence,
                 command.kind,now,data.settings.rules);
