@@ -417,8 +417,9 @@ namespace clt::connection
                     }
                     {
                         std::lock_guard<std::mutex> lock(data.editor_mutex);
+                        // Keep monotonically increasing editor command IDs
+                        // across scene retries with the same DTLS session token.
                         data.editor_outgoing.clear();
-                        data.editor_sequence=0;
                     }
                     transport.clear();
                     transport.open(server);
