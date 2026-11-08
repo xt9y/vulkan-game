@@ -1,157 +1,26 @@
-vulkan-game
-  server.cpp                server application, authoritative world and rules
-  client.cpp                client application and input settings
-  srv/                      game simulation, scene serialization and authority
-  clt/                      client rendering, prediction and weapon presentation
-  shd/                      game shaders
-  assets/                   game art
+# vulkan-game: two-file rewrite (foundation)
 
-Build:
-  git clone --recurse-submodules https://github.com/xt9y/vulkan-game.git
-  cd vulkan-game
-  c build vulkan-server
-  c build vulkan-client
-For an existing checkout, after git pull:
-  git submodule sync --recursive
-  git submodule update --init --recursive
+Only `server.cpp` and `client.cpp` are compiled as application sources.
+No `srv/`, `clt/`, `weapons.cpp` or `weapons.hpp` directories/files remain
+in this branch. The old shaders (`shd/`) are retained for a future renderer.
 
-The three Vulkan source repositories live at fixed revisions under:
-  third-party/vulkan-wrapper/    wrapper and Vulkan API generator
-  third-party/vulkan-systems/    GPU, Render, BVH, Spatial, Jobs, Network, Editor
-  third-party/vulkan-headers/    Khronos Vulkan SDK headers / vk.xml
+The server and client currently implement authenticated DTLS transport,
+reliable scene/movement messages, simple cube scene replication, basic
+movement prediction and correction, and ammo/reloading. The client is
+headless: **this branch does not preserve the old renderer, model import,
+weapon animations or editor. It is not a release-ready replacement.**
 
-build.c compiles the wrapper and the required standalone systems modules
-directly as local static libraries. It does NOT fetch these via c_git,
-create duplicate Vulkan checkouts or rely on a vulkan-systems root build.c.
-It generates the wrapper API in build/generated/ using Python 3.
-The remaining independent GLFW, Mbed TLS, fastgltf, Ozz and stb dependencies
-retain their existing cbuild management. VulkanNetwork uses Mbed TLS
-3.6.7 with DTLS 1.2 and forward-secret ECDHE-AES-GCM cipher suites.
-The single supported transport uses a persistent server identity and
-per-destination trust-on-first-use (TOFU) public-key pinning.
-All gameplay, movement, weapon and reliable scene packets use the DTLS
-socket; there is no plaintext application fallback.
-The game owns its scene and authority protocols; network/session is reusable.
+Source repositories are Git submodules: `vulkan-wrapper`, `vulkan-systems`,
+and `vulkan-headers`. The Vulkan headers and Mbed TLS remain indirect build
+dependencies. There is no GLFW, fastgltf, Ozz, or stb in the app build.
 
-Networking (only one encrypted path):
-  c build run vulkan-server
-  c build run vulkan-client --host 127.0.0.1 --port 27015
-  c build run vulkan-client --host SERVER_PUBLIC_IP --port 27015
+```
+git submodule update --init --recursive
+c build vulkan-server
+c build vulkan-client
+c build run vulkan-server
+c build run vulkan-client -- 127.0.0.1 27015
+```
 
-  The server listens on UDP 0.0.0.0:27015 by default, accepts both LAN and
-  remote clients, and generates/loads its server private key automatically.
-  Forward UDP 27015 from the router to the server and allow it in the
-  server firewall. If running on a VPS, open its cloud firewall for UDP.
-  The client always uses DTLS (no raw-UDP gameplay or plaintext fallback).
-  The game uses the same code path for local, LAN, and Internet sessions.
-
-  On first contact the client automatically records the server's public
-  key fingerprint for the configured host:port. Later connections require
-  that same key. A changed key fails closed, and the client must not silently
-  overwrite its stored pin. Automatic reconnect re-handshakes using the
-  established identity, with no user intervention after the initial IP entry.
-
-  Trust-on-first-use (TOFU) cannot independently establish the authenticity
-  of a first-ever Internet connection against an active on-path attacker.
-  The server logs a fingerprint which users can compare through a trusted
-  channel when stronger first-contact authentication is required. Automatic
-  TOFU authenticates servers after pinning, NOT individual game accounts.
-  Use an application-level admission and permissions layer for private servers.
-  Back up the server identity before moving/reinstalling the server machine.
-
-  Credentials/pins live under the current user's OS config directory,
-  not in the game repo. No CA, certificate file, key environment variables,
-  pre-shared client keys, OpenSSL commands or alternative transport modes.
-  IPv6 works when the server is bound to a compatible IPv6 address.
-
-  The client must know the server IP or DNS name and UDP port. Server
-  discovery, automatic router port forwarding, NAT traversal and relays
-  are not performed. When the server is behind CGNAT, ordinary inbound
-  port forwarding cannot expose it without a public endpoint or relay.
-
-Security and deployment limits:
-  TOFU pins a server public key; it does not authenticate clients or players.
-  Production deployments need admission controls, permissions, rate limits,
-  flood protection, incident response and packet-loss testing.
-  The transport is DTLS 1.2, not QUIC/DTLS 1.3. DTLS protects packet
-  confidentiality, integrity and replay; reliable bulk scene transfer is
-  handled separately by network/session. No bandwidth, latency or GPU
-  frame-time guarantee is implied.
-
-Native compilation, handshake interoperability and platform/runtime regression
-testing are required before treating this revision as a release.
-
-Platform requirements:
-  macOS: Vulkan via MoltenVK; Linux: Vulkan driver and X11/XWayland;
-  Windows: Vulkan driver and GLFW Win32. The shader compiler
-  glslangValidator must be on PATH. VulkanWrapper's generated API needs
-  Python 3 (python3 on Unix, python on Windows). Platform builds and
-  runtime compatibility still require verification on each OS.
-
-Rendering status:
-  Rendering uses Rogue/hellengine-bak's world-space point-cloud and 3D probe
-  approach: static collision surfaces provide 0.3-unit lighting samples.
-  The RGBA16F 3D irradiance grid now derives its origin and extent from the
-  union of server-authored point-light spheres, including 2.6 units of bounce
-  reach. Probe spacing starts at 0.2 units and increases only when necessary
-  to fit a 32,768-cell GPU-work budget and the Vulkan 3D-image size limit.
-  Cells outside the light-influenced spheres are zeroed. Space draws every
-  third nonzero probe as a sphere, not a fixed rectangular debug block.
-  Updating server light positions or radii repositions/reallocates the GI
-  volume when the client receives a new scene snapshot. The image is still
-  one rectangular 3D allocation: distant separate lights may lower effective
-  probe density because their union contains empty space.
-  Point-light shadows and probe visibility now trace the actual streamed
-  mesh triangles (including imported models) through a compact stackless BVH
-  built when a scene snapshot changes. This replaces the old collision-box
-  shadow silhouettes and brute-force per-ray triangle scans.
-  Skinned meshes are sampled at their initial pose for shadow construction;
-  continuous animation-driven BVH updates are not implemented.
-  Alpha-blended surfaces do not cast opaque shadows; masked materials still
-  use triangle silhouettes, not texture-based alpha tests.
-  Space visualizes every third probe as a sphere without changing GI.
-  Vulkan shaders, static light positions and level configuration remain
-  game-specific; reusable Vulkan modules stay generic.
-
-  The adaptive probe volume follows the currently streamed light locations
-  instead of the demo center. This is not a literal OpenGL cubemap-PCF port;
-  native compilation, rendering accuracy, and performance remain unverified
-  on macOS/Linux/Windows.
-
-Rendering and reusable systems:
-  VulkanRender owns general indexed geometry buffers, sampled G-buffer
-  attachment images, render target/frame boilerplate and ordered GPU graph
-  recording. The client supplies scene snapshots, material/animation payloads,
-  GPU draw parameters, game-specific deferred shaders and presentation policy.
-  clt/render/passes.* is removed: clt/render/renderer.cpp submits the six
-  ordered geometry, cloud, probe, light, tone and presentation passes through
-  render::sequence. GI policy remains in the game shaders,
-  not in the shared VulkanGPU/Render libraries. The existing game uses GPU culling and
-  streamed indexed meshes through render::geometry with nonblocking uploads.
-
-  Emissive RGB is packed through the otherwise unused alpha channels of the
-  existing three G-buffer targets, avoiding a fourth target. The light pass
-  computes per-pixel view rays using the camera FOV and basis vectors.
-  BVH TLAS/BLAS ray queries remain an optional VulkanBVH capability and are
-  not dispatched by the normal rasterization path; no BVH work is performed
-  without a consumer requiring ray/visibility queries.
-
-## PCloud lighting system
-
-All original GPU point-cloud lighting passes now live inside the
-`third-party/vulkan-systems/pcloud/` submodule and use namespace `pc::`.
-This includes the original point-cloud sampling, BVH shadows, GI grid,
-direct-lighting shader, tile light lists, tonemapping, and presentation
-raster pass. `clt/render/postprocess.cpp` is only a renderer/game adapter
-that flattens the server's animated mesh instances into world-space
-triangles and provides the existing G-buffer views, camera and editor
-overlay. It does **not** own point-cloud shaders or illumination algorithms.
-
-A compatible engine can reuse `#include <pcloud/pcloud.hpp>`, supply a
-`pc::world` (lights, collision boxes, world-space triangles) and a
-four-attachment `pc::gbuffer`, and schedule `pc::cloud`, `pc::gi`,
-`pc::lighting`, `pc::tonemap`, and `pc::present`. The shaders compile
-directly from the pcloud submodule to `build/shaders/pcloud_*.spv`.
-The GPU resource synchronization and render graph remain host-managed.
-The shader material packing and Vulkan backend must match; reuse is not
-automatically portable to non-Vulkan APIs.
+On the client, type `w`, `a`, `s`, `d`, `stop`, `f`, `r`, or `exit` and Enter.
+The original server/client source layout is preserved on the main branch.

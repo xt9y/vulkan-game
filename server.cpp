@@ -1,230 +1,130 @@
-#include "srv/app/application.hpp"
-#include "srv/game/application.hpp"
-#include "srv/game/options.hpp"
-#include <network/socket.hpp>
-#include "srv/shared/player/movement.hpp"
-#include "srv/shared/scene/scene.hpp"
-#include "weapons.hpp"
-
+// Two-file Vulkan game rewrite — SERVER FOUNDATION, not feature parity.
+// Directly uses VulkanSystems/network; no clt/, srv/, or game headers.
+// C++20. Link VulkanNetwork and its required Mbed TLS dependencies.
+#include <network/secure.hpp>
+#include <network/session.hpp>
+#include <network/endpoint.hpp>
 #include <algorithm>
 #include <array>
-#include <cstdint>
-#include <atomic>
+#include <chrono>
+#include <cmath>
 #include <csignal>
-#include <exception>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
 #include <iostream>
-#include <limits>
+#include <map>
 #include <stdexcept>
-#include <utility>
-
-namespace
-{
-    void quad(::scene::mesh& mesh, vk::util::math::vec3 a, vk::util::math::vec3 b, vk::util::math::vec3 c, vk::util::math::vec3 d, vk::util::math::vec3 normal)
-    {
-        const auto base = static_cast<std::uint32_t>(mesh.vertices.size());
-
-        mesh.vertices.push_back({a, normal, 0, 0});
-        mesh.vertices.push_back({b, normal, 1, 0});
-        mesh.vertices.push_back({c, normal, 1, 1});
-        mesh.vertices.push_back({d, normal, 0, 1});
-
-        mesh.indices.insert(mesh.indices.end(), {
-            base, base + 1, base + 2,
-            base, base + 2, base + 3,
-        });
-    }
-
-    ::scene::mesh make_rect(std::uint32_t id, float x, float y, float z,
-                            std::array<float, 4> color, float roughness = 0.85f)
-    {
-        ::scene::mesh mesh;
-        mesh.id = id;
-        mesh.surface.base_color = color;
-        mesh.surface.roughness = roughness;
-    
-        quad(mesh, {-x, -y,  z}, { x, -y,  z}, { x,  y,  z}, {-x,  y,  z}, { 0,  0,  1});
-        quad(mesh, { x, -y, -z}, {-x, -y, -z}, {-x,  y, -z}, { x,  y, -z}, { 0,  0, -1});
-        quad(mesh, {-x, -y, -z}, {-x, -y,  z}, {-x,  y,  z}, {-x,  y, -z}, {-1,  0,  0});
-        quad(mesh, { x, -y,  z}, { x, -y, -z}, { x,  y, -z}, { x,  y,  z}, { 1,  0,  0});
-        quad(mesh, {-x,  y,  z}, { x,  y,  z}, { x,  y, -z}, {-x,  y, -z}, { 0,  1,  0});
-        quad(mesh, {-x, -y, -z}, { x, -y, -z}, { x, -y,  z}, {-x, -y,  z}, { 0, -1,  0});
-    
-        return mesh;
-    }
-
-    void place(::scene::state& initial_scene,std::uint32_t id,
-               std::uint32_t mesh,vk::util::math::vec3 position)
-    {
-        ::scene::instance object{};
-        object.id = id;
-        object.mesh_id = mesh;
-        object.pose.position = position;
-
-        // World collision bounds follow actual transformed scene vertices.
-        const auto geometry = std::find_if(
-            initial_scene.meshes.begin(), initial_scene.meshes.end(),
-            [mesh](const ::scene::mesh& item) { return item.id == mesh; });
-        if (geometry == initial_scene.meshes.end())
-            throw std::runtime_error("No mesh for scene collision bounds");
-
-        ::scene::collision_box bounds{};
-        const auto infinity = std::numeric_limits<float>::infinity();
-        bounds.minimum = { infinity, infinity, infinity };
-        bounds.maximum = {-infinity,-infinity,-infinity };
-        for (const auto& vertex : geometry->vertices)
-        {
-            const auto& p = vertex.position;
-            const auto& scale = object.pose.scale;
-            const auto local = vk::util::math::vec3{
-                p.x * scale.x, p.y * scale.y, p.z * scale.z
-            };
-            const auto rotated = vk::util::math::rotate(
-                object.pose.rotation, local);
-            const auto world = position + rotated;
-            bounds.minimum.x = std::min(bounds.minimum.x, world.x);
-            bounds.minimum.y = std::min(bounds.minimum.y, world.y);
-            bounds.minimum.z = std::min(bounds.minimum.z, world.z);
-            bounds.maximum.x = std::max(bounds.maximum.x, world.x);
-            bounds.maximum.y = std::max(bounds.maximum.y, world.y);
-            bounds.maximum.z = std::max(bounds.maximum.z, world.z);
-        }
-        initial_scene.instances.push_back(object);
-        initial_scene.collision_boxes.push_back(bounds);
-    }
-
-    // Define level geometry, instances, imported models and lights here.
-    ::scene::state make_level()
-    {
-        ::scene::state initial_scene;
-        // Checker floor with three white cubes; no surrounding test walls.
-        // Floor surface stays at y=0 for gameplay collisions.
-
-        auto floor=make_rect(1,10.f,.1f,10.f,{1.f,1.f,1.f,1.f});
-        floor.surface.procedural_pattern=1;
-        auto cube=make_rect(2,.5f,.5f,.5f,{1.f,1.f,1.f,1.f});
-        initial_scene.meshes.push_back(std::move(floor));
-        initial_scene.meshes.push_back(std::move(cube));
-        place(initial_scene,1,1, {0, -0.1f, 0});
-        place(initial_scene,2,2, {-2.f, .5f, 0});
-        place(initial_scene,3,2, {0, .5f, 0});
-        place(initial_scene,4,2, {2.f, .5f, 0});
-        // Imported models: path, world position/scale, animation clip.
-        ::scene::transform mermaid{};
-        mermaid.position = {0.0f,1.0f,0.5f/3.0f};
-        mermaid.scale = {1.5f,1.5f,1.5f};
-        srv::application::load_model("assets/mermaid/mermaid.glb", mermaid, 0);
-
-        // Level-authored lights: position, radius, RGB, intensity.
-        // Keep the example light in view from the default player spawn,
-        // so its Hell2024 LIGHT label is immediately selectable in ? mode.
-        initial_scene.lights.push_back({
-            {0.0f,3.0f,1.0f},6.0f,{1.0f,0.5f,0.2f},4.0f
-        });
-
-        return initial_scene;
-    }
-
-    void stop(int)
-    {
-        game::application::get()->stop.store(true, std::memory_order_relaxed);
-    }
+#include <string>
+#include <thread>
+#include <vector>
+using namespace std::chrono;
+using bytes=std::vector<std::uint8_t>;
+using clock_type=steady_clock;
+namespace {
+volatile std::sig_atomic_t running=1;
+void stop(int){running=0;}
+std::string config_dir(){
+#ifdef _WIN32
+    const char* p=std::getenv("APPDATA");
+#else
+    const char* p=std::getenv("XDG_CONFIG_HOME");
+    if(!p){static std::string base=[] {const char* home=std::getenv("HOME");return std::string(home?home:".")+"/.config";}();p=base.c_str();}
+#endif
+    if(!p)throw std::runtime_error("No user config directory");
+    return (std::filesystem::path(p)/"vulkan-game").string();
 }
-
-int main(int argc, char** argv)
-{
-    try
-    {
-        game::options::state settings{};
-        settings.bind_host = "0.0.0.0";
-        settings.port = 27015;
-        settings.duration = 0;
-        settings.headless = false;
-        settings.help = false;
-        game::options::init(argc, argv, game::options::mode::server_only,
-                            std::move(settings));
-        if (game::options::get()->help)
-        {
-            game::options::print_help();
-            return 0;
+void u32(bytes& b,std::uint32_t x){for(int i=0;i<4;i++)b.push_back(std::uint8_t(x>>(8*i)));}
+void f32(bytes& b,float x){if(!std::isfinite(x))throw std::invalid_argument("nonfinite float");std::uint32_t u;std::memcpy(&u,&x,4);u32(b,u);}
+struct reader {const bytes& b;size_t i=0;bool ok=true;
+    std::uint32_t u(){if(i+4>b.size()){ok=false;return 0;}std::uint32_t x=0;for(int n=0;n<4;n++)x|=std::uint32_t(b[i++])<<(8*n);return x;}
+    float f(){std::uint32_t u32=u();float x;std::memcpy(&x,&u32,4);if(!std::isfinite(x))ok=false;return x;}
+    bool end()const{return ok&&i==b.size();}
+};
+enum : std::uint32_t {hello=1,scene=2,input=3,player=4,shoot=5,reload=6,weapon=7,edit_light=8};
+struct box {float x,y,z,sx,sy,sz;};
+struct light {float x,y,z,r,red,green,blue,strength;};
+struct actor {net::endpoint::resource peer{};float x=0,z=5,y=1.7f;std::uint32_t ack=0;
+    std::uint32_t ammo=12,reserve=48;bool reloading=false;
+    clock_type::time_point shot={},reload_end={},last_seen=clock_type::now();};
+constexpr float radius=.35f,speed=3.8f;
+std::vector<box> boxes={{0,-.1f,0,10,.1f,10},{-2,.5f,0,.5f,.5f,.5f},{0,.5f,0,.5f,.5f,.5f},{2,.5f,0,.5f,.5f,.5f}};
+std::vector<light> lights={{0,3,1,6,1,.85f,.7f,1}};
+std::map<std::string,actor> players;
+bool collide(float x,float z){for(const auto& b:boxes){if(b.sy<.15f)continue;float nx=std::clamp(x,b.x-b.sx,b.x+b.sx),nz=std::clamp(z,b.z-b.sz,b.z+b.sz);float dx=x-nx,dz=z-nz;if(dx*dx+dz*dz<radius*radius)return true;}return false;}
+void move(actor& a,int dx,int dz){float fx=float(std::clamp(dx,-1,1)),fz=float(std::clamp(dz,-1,1));float len=std::hypot(fx,fz);if(len>1){fx/=len;fz/=len;}
+    float nx=a.x+fx*speed/60.f,nz=a.z+fz*speed/60.f;
+    if(!collide(nx,a.z))a.x=nx;
+    if(!collide(a.x,nz))a.z=nz;
+    a.x=std::clamp(a.x,-9.5f,9.5f);a.z=std::clamp(a.z,-9.5f,9.5f);
+}
+bytes message(std::uint32_t type){bytes b;u32(b,0x324756u);u32(b,type);return b;}
+bytes scene_packet(){auto b=message(scene);u32(b,std::uint32_t(boxes.size()));for(auto& v:boxes)for(float f:{v.x,v.y,v.z,v.sx,v.sy,v.sz})f32(b,f);
+    u32(b,std::uint32_t(lights.size()));for(auto& l:lights)for(float f:{l.x,l.y,l.z,l.r,l.red,l.green,l.blue,l.strength})f32(b,f);return b;}
+bytes player_packet(const actor& a){auto b=message(player);u32(b,a.ack);f32(b,a.x);f32(b,a.y);f32(b,a.z);return b;}
+bytes weapon_packet(const actor& a){auto b=message(weapon);u32(b,a.ammo);u32(b,a.reserve);u32(b,a.reloading?1:0);return b;}
+}
+int main(int argc,char** argv){
+    try{
+        std::signal(SIGINT,stop);std::signal(SIGTERM,stop);
+        const auto port=argc>1?std::uint16_t(std::stoul(argv[1])):std::uint16_t(27015);
+        net::secure::settings settings{};settings.storage_directory=config_dir();settings.max_peers=64;
+        auto socket=net::secure::create(net::secure::role::server,settings,port);
+        net::session::settings channel{};channel.allow_unknown_peers=false;
+        channel.channel.mtu=1200;net::session reliable(channel);
+        std::cout<<"Server DTLS UDP :"<<port<<" @ 60 Hz\n";
+        auto next=clock_type::now();std::uint64_t tick=0;std::array<std::uint8_t,1400> datagram{};
+        while(running){
+            // Transport controls authentication, reliability, ordering and retransmission.
+            net::endpoint::resource peer{};
+            while(auto n=net::secure::receive(socket,peer,datagram.data(),datagram.size())){
+                if(!net::secure::authenticated(socket,peer))continue;
+                reliable.open(peer);reliable.accept(peer,datagram.data(),*n);
+            }
+            net::delivery event{};
+            while(reliable.pop(event)){
+                const auto id=net::endpoint::identifier(event.peer);
+                reader r{event.payload};if(r.u()!=0x324756u)continue;auto type=r.u();if(!r.ok)continue;
+                if(type==hello){
+                    if(!r.end())continue;
+                    if(players.size()>=64&&!players.count(id))continue;
+                    auto [it,created]=players.try_emplace(id);auto& p=it->second;p.peer=event.peer;
+                    p.last_seen=clock_type::now();reliable.send(event.peer,scene_packet());
+                    reliable.send(event.peer,player_packet(p));reliable.send(event.peer,weapon_packet(p));
+                }else{
+                    auto it=players.find(id);if(it==players.end())continue;auto& p=it->second;p.last_seen=clock_type::now();
+                    if(type==input){auto seq=r.u();int dx=int(r.u())-1,dz=int(r.u())-1;
+                        if(r.end()&&seq>p.ack&&seq-p.ack<=120){p.ack=seq;move(p,dx,dz);}
+                    }else if(type==shoot){
+                        if(r.end()&&!p.reloading&&p.ammo&&
+                           (p.shot==clock_type::time_point{}||clock_type::now()-p.shot>=milliseconds(90))){
+                            --p.ammo;p.shot=clock_type::now();reliable.send(event.peer,weapon_packet(p));
+                        }
+                    }else if(type==reload){
+                        if(r.end()&&!p.reloading&&p.ammo<12&&p.reserve){
+                            p.reloading=true;p.reload_end=clock_type::now()+milliseconds(1300);
+                            reliable.send(event.peer,weapon_packet(p));
+                        }
+                    }else if(type==edit_light){
+                        auto i=r.u();light l{};for(float* f:{&l.x,&l.y,&l.z,&l.r,&l.red,&l.green,&l.blue,&l.strength})*f=r.f();
+                        if(r.end()&&i<lights.size()&&l.r>=.05f&&l.r<=64&&l.strength>=0&&l.strength<=20&&
+                           std::abs(l.x)<500&&std::abs(l.y)<500&&std::abs(l.z)<500){
+                            lights[i]=l;auto snapshot=scene_packet();for(auto& [_,q]:players)reliable.send(q.peer,snapshot);
+                        }
+                    }
+                }
+            }
+            const auto now=clock_type::now();
+            for(auto it=players.begin();it!=players.end();){auto& p=it->second;
+                if(now-p.last_seen>seconds(45)){reliable.close(p.peer);it=players.erase(it);continue;}
+                if(p.reloading&&now>=p.reload_end){auto n=std::min<std::uint32_t>(12-p.ammo,p.reserve);p.ammo+=n;p.reserve-=n;p.reloading=false;reliable.send(p.peer,weapon_packet(p));}
+                if((tick%3)==0)reliable.send(p.peer,player_packet(p));
+                ++it;
+            }
+            reliable.pump([&](const auto& p,const void* data,size_t length){return net::secure::send(socket,p,data,length);});
+            ++tick;next+=microseconds(16667);if(next<clock_type::now()-milliseconds(100))next=clock_type::now();std::this_thread::sleep_until(next);
         }
-
-        player::configure({
-            {0, 0, 4}, // spawn
-            4.0f,      // walking speed
-            14.0f,     // sprint speed
-            20.0f,     // gravity
-            0.3f,      // player radius (collision width)
-            1.8f       // player height (collision and camera)
-        });
-
-        // One game-authored gun profile supplies both the server's
-        // authoritative rules and the client's models, controls and clips.
-        for(const auto& gun:game_weapons::all())
-            srv::application::add_weapon(gun.rules);
-        srv::application::on_weapon_command(
-        [](srv::application::weapon_command_context& event)
-        {
-            const auto result = ::weapon::apply(
-                event.state,
-                event.command.sequence,
-                event.command.kind,
-                event.now,
-                event.definition
-            );
-
-            if (result != ::weapon::result::fired)
-                return ::weapon::hit{};
-
-            return event.world.trace(
-                event.player.position,
-                weapon::direction(
-                    event.command.yaw,
-                    event.command.pitch
-                ),
-                event.definition.range
-            );
-        });
-
-        net::socket::init();
-        std::signal(SIGINT, stop);
-        std::signal(SIGTERM, stop);
-        srv::application::set_scene(make_level());
-        // The level editor is a developer-only operation. Only local DTLS
-        // clients may change this server's lights; other peers can observe
-        // the replicated results but cannot mutate the world.
-        srv::application::on_editor_permission(
-            [](const net::endpoint::resource& peer)
-            {
-                if(peer.address.ss_family==AF_INET)
-                {
-                    const auto* address=
-                        reinterpret_cast<const sockaddr_in*>(&peer.address);
-                    const auto* octets=reinterpret_cast<const unsigned char*>(
-                        &address->sin_addr);
-                    return octets[0]==127; // 127.0.0.0/8
-                }
-                if(peer.address.ss_family==AF_INET6)
-                {
-                    const auto* address=
-                        reinterpret_cast<const sockaddr_in6*>(&peer.address);
-                    return IN6_IS_ADDR_LOOPBACK(&address->sin6_addr)!=0;
-                }
-                return false;
-            });
-
-        srv::application::init();
-        const int result = srv::application::run();
-        srv::application::shutdown();
-        net::socket::shutdown();
-        game::options::shutdown();
-        return result;
-    }
-    catch (const std::exception& e)
-    {
-        srv::application::shutdown();
-        net::socket::shutdown();
-        game::options::shutdown();
-        std::cerr << "vulkan-server: " << e.what() << '\n';
-        return 1;
-    }
+        net::secure::destroy(socket);return 0;
+    }catch(const std::exception& e){std::cerr<<"server: "<<e.what()<<'\n';return 1;}
 }
