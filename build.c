@@ -20,6 +20,8 @@ static void prepare_vulkan_submodules(void)
     static const char* required[]={
         "third-party/vulkan-wrapper/build.c",
         "third-party/vulkan-systems/gpu/build.c",
+        "third-party/vulkan-systems/pcloud/pcloud/pcloud.hpp",
+        "third-party/vulkan-systems/pcloud/pcloud/shaders/cloud.comp",
         "third-party/vulkan-headers/registry/vk.xml"
     };
     int missing=0;
