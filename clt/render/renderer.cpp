@@ -76,6 +76,8 @@ namespace clt::renderer
             // Decode the original 90-glyph editor font synchronously once,
             // BEFORE the render thread exists. No first-frame font stall.
             editor::vulkan::initialize_font();
+            editor::instance().set_font_metrics(
+                editor::vulkan::font_metrics(),16);
             if (!glfwVulkanSupported())
             {
 #ifdef __APPLE__
