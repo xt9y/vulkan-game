@@ -2624,7 +2624,6 @@ namespace srv::application
         player::collision_world colliders;
         ::weapon::world weapon_world;
         ::weapon::registry weapons;
-        std::function<bool(const net::endpoint::resource&)> editor_permission;
         spatial::index collision_index;
         struct batch {
             std::vector<std::uint8_t> bytes;
@@ -2642,8 +2641,6 @@ namespace srv::application
                     std::uint32_t animation);
     // Register game rules and receive authenticated, owned, equipped weapon commands.
     void add_weapon(::weapon::definition definition);
-    // No client can change the level unless this policy explicitly permits it.
-    void on_editor_permission(std::function<bool(const net::endpoint::resource&)> handler);
     void init();
     // Publish append-only mesh/instance batches; called on the server thread.
     // Background jobs return a completion that invokes append_scene().
@@ -2827,29 +2824,6 @@ int main(int argc, char** argv)
         std::signal(SIGINT, stop);
         std::signal(SIGTERM, stop);
         srv::application::set_scene(make_level());
-        // The level editor is a developer-only operation. Only local DTLS
-        // clients may change this server's lights; other peers can observe
-        // the replicated results but cannot mutate the world.
-        srv::application::on_editor_permission(
-            [](const net::endpoint::resource& peer)
-            {
-                if(peer.address.ss_family==AF_INET)
-                {
-                    const auto* address=
-                        reinterpret_cast<const sockaddr_in*>(&peer.address);
-                    const auto* octets=reinterpret_cast<const unsigned char*>(
-                        &address->sin_addr);
-                    return octets[0]==127; // 127.0.0.0/8
-                }
-                if(peer.address.ss_family==AF_INET6)
-                {
-                    const auto* address=
-                        reinterpret_cast<const sockaddr_in6*>(&peer.address);
-                    return IN6_IS_ADDR_LOOPBACK(&address->sin6_addr)!=0;
-                }
-                return false;
-            });
-
         srv::application::init();
         const int result = srv::application::run();
         srv::application::shutdown();
@@ -3164,14 +3138,6 @@ namespace srv::application
             throw std::runtime_error("Register weapons before init");
         }
         ::weapon::add(get()->weapons,std::move(definition));
-    }
-
-    void on_editor_permission(
-        std::function<bool(const net::endpoint::resource&)> handler)
-    {
-        if(get()->initialized)
-            throw std::runtime_error("Configure editor permission before init");
-        get()->editor_permission=std::move(handler);
     }
 
     void init()
@@ -3561,7 +3527,6 @@ namespace srv::application
         get()->colliders.clear();
         get()->weapon_world = {};
         get()->weapons = {};
-        get()->editor_permission = {};
         get()->scene = {};
         get()->editor_light_versions.clear();
         get()->editor_light_revision=1;
@@ -3586,9 +3551,16 @@ namespace srv::application
             const net::editor_light::resource& command)
         {
             // Authenticated DTLS is not sufficient to grant editing rights.
-            // The host game must explicitly authorize this peer.
-            if(!get()->editor_permission || !get()->editor_permission(peer))
-                return;
+            // Only local, authenticated peers may mutate editor lights.
+            bool local=false;
+            if(peer.address.ss_family==AF_INET) {
+                const auto* addr=reinterpret_cast<const sockaddr_in*>(&peer.address);
+                local=reinterpret_cast<const unsigned char*>(&addr->sin_addr)[0]==127;
+            } else if(peer.address.ss_family==AF_INET6) {
+                const auto* addr=reinterpret_cast<const sockaddr_in6*>(&peer.address);
+                local=IN6_IS_ADDR_LOOPBACK(&addr->sin6_addr)!=0;
+            }
+            if(!local) return;
             // Same DTLS endpoint/token as movement and weapons.
             for(auto& client:session::get()->clients)
             {
