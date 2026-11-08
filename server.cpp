@@ -115,8 +115,10 @@ namespace
         srv::application::load_model("assets/mermaid/mermaid.glb", mermaid, 0);
 
         // Level-authored lights: position, radius, RGB, intensity.
+        // Keep the example light in view from the default player spawn,
+        // so its Hell2024 LIGHT label is immediately selectable in ? mode.
         initial_scene.lights.push_back({
-            {0.0f,5.0f,1.0f},6.0f,{1.0f,0.5f,0.2f},4.0f
+            {0.0f,3.0f,1.0f},6.0f,{1.0f,0.5f,0.2f},4.0f
         });
 
         return initial_scene;
