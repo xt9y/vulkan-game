@@ -1,6 +1,9 @@
 #include "clt/app/application.hpp"
 #include "clt/weapon/weapon.hpp"
 #include "clt/render/postprocess.hpp"
+#include "clt/network/connection.hpp"
+#include "clt/platform/window.hpp"
+#include "clt/view/camera.hpp"
 #include "weapons.hpp"
 #include "srv/game/application.hpp"
 #include "srv/game/options.hpp"
@@ -12,6 +15,10 @@
 #include <array>
 #include <atomic>
 #include <csignal>
+#include <cmath>
+#include <cstdint>
+#include <memory>
+#include <vector>
 #include <exception>
 #include <iostream>
 #include <stdexcept>
@@ -21,6 +28,84 @@
 
 namespace
 {
+    // The server's scene.light array is append-only today. Reserve a high
+    // object-ID range for the editor's projected light labels, rather than
+    // reusing mesh instance IDs. The renderer does not need a light mesh.
+    constexpr std::uint64_t editor_light_ids=1ull<<32;
+
+    void publish_editor_lights()
+    {
+        auto& ui=editor::instance();
+        if(!ui.visible())return;
+
+        int width=0,height=0;
+        clt::window::framebuffer_size(width,height);
+        if(width<=0 || height<=0)return;
+
+        const auto world=clt::connection::snapshot();
+        if(!world)
+        {
+            ui.set_labels({});
+            return;
+        }
+
+        using namespace vk::util::math;
+        const mat4 vp=clt::camera::view_projection(
+            float(width)/float(height));
+        std::vector<editor::screen_label> labels;
+        labels.reserve(world->lights.size());
+        for(std::size_t i=0;i<world->lights.size();++i)
+        {
+            const auto& light=world->lights[i];
+            const vec4 clip=vp*vec4{light.position,1.0f};
+            // Vulkan NDC Z is [0,1]. Projection already flips Y to
+            // framebuffer-down coordinates. Never draw behind the camera.
+            if(!std::isfinite(clip.w) || clip.w<=0.0001f ||
+               clip.z<0.0f || clip.z>clip.w)
+                continue;
+            const float nx=clip.x/clip.w,ny=clip.y/clip.w;
+            if(!std::isfinite(nx)||!std::isfinite(ny) ||
+               nx<-1.0f||nx>1.0f||ny<-1.0f||ny>1.0f)
+                continue;
+            labels.push_back({
+                editor_light_ids+std::uint64_t(i)+1u,
+                "LIGHT",
+                int(std::lround((nx*0.5f+0.5f)*float(width))),
+                int(std::lround((ny*0.5f+0.5f)*float(height))),
+                true
+            });
+        }
+        ui.set_labels(std::move(labels));
+
+        // Only refresh properties when a new authoritative snapshot arrives.
+        // Otherwise arrow-key UI edits would be reset every input frame.
+        static std::shared_ptr<const ::scene::state> registered;
+        if(registered==world)return;
+        registered=world;
+        for(std::size_t i=0;i<world->lights.size();++i)
+        {
+            const auto& light=world->lights[i];
+            ui.set_properties(editor_light_ids+std::uint64_t(i)+1u,{
+                {"pos_x","Pos X",editor::property_kind::real,
+                    light.position.x,-10000.0,10000.0,0.1},
+                {"pos_y","Pos Y",editor::property_kind::real,
+                    light.position.y,-10000.0,10000.0,0.1},
+                {"pos_z","Pos Z",editor::property_kind::real,
+                    light.position.z,-10000.0,10000.0,0.1},
+                {"color_r","Color X",editor::property_kind::real,
+                    light.color.x,0.0,1.0,0.1},
+                {"color_g","Color Y",editor::property_kind::real,
+                    light.color.y,0.0,1.0,0.1},
+                {"color_b","Color Z",editor::property_kind::real,
+                    light.color.z,0.0,1.0,0.1},
+                {"radius","Radius",editor::property_kind::real,
+                    light.radius,0.0,1000.0,0.1},
+                {"strength","Strength",editor::property_kind::real,
+                    light.strength,0.0,1000.0,0.1}
+            });
+        }
+    }
+
     void load_weapons()
     {
         for(auto&& gun:game_weapons::all())
@@ -29,6 +114,9 @@ namespace
 
     void on_input(const clt::input::frame& frame)
     {
+        // Publish the real server-streamed light positions to the existing
+        // Hell2024 Icon_Light overlay. UI input and shader lights are separate.
+        publish_editor_lights();
         // Clicking editor world labels must never fire the active weapon.
         if(editor::instance().captures_input())
         {
