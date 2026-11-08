@@ -57,7 +57,6 @@ static void compile_shaders(void)
 // editor hardloads these once at startup; no network or decoding in frames.
 static void prepare_editor_assets(void)
 {
-    const char* root="build/editor-hell2024";
     struct stat font,menu;
     const char* font_path=
         "build/editor-hell2024/Hell2024/Hell2024/res/textures/font/char_90.png";
