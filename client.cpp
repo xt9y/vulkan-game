@@ -1,4 +1,4 @@
-// Only two application source files; use shared data/code from server.cpp once.
+// Only two application translation units; shared code resides in server.cpp.
 #define VULKAN_GAME_SHARED_ONLY
 #include "server.cpp"
 #undef VULKAN_GAME_SHARED_ONLY
@@ -4067,6 +4067,80 @@ namespace clt::scene_renderer
             writes[i].pBufferInfo=&infos[i];
         }
         vk::device::get()->handle.updateDescriptorSets(writes,{});
+    }
+
+    void create_local_frames()
+    {
+        auto& data = get();
+        const auto& source = weapon::assets();
+        if (source.meshes.empty())
+        {
+            return;
+        }
+        if (data.local_meshes.empty())
+        {
+            gpu::upload::batch transfers;
+            for (const auto& mesh : source.meshes)
+            {
+                gpu_mesh output;
+                output.id = mesh.id;
+                output.skin_id = mesh.skin_id;
+                output.joint_count = animation::joints(mesh.skin_id);
+                output.surface = mesh.surface;
+                output.index_count = mesh.indices.size();
+                output.geometry.upload(transfers,
+                    mesh.vertices.data(),
+                    mesh.vertices.size() * sizeof(::scene::vertex),
+                    mesh.indices.data(),
+                    mesh.indices.size() * sizeof(std::uint32_t),
+                    output.index_count);
+                data.local_meshes.push_back(std::move(output));
+            }
+            transfers.finish();
+        }
+        const auto count=std::uint32_t(
+            data.local_meshes.size()*vk::swapchain::get()->images.size());
+        const auto schema=instance_bindings();
+        const auto device=vk::device::get()->handle;
+        data.local_sets=std::make_unique<gpu::descriptors>();
+        data.local_sets->create(std::vector<vk::DescriptorSetLayoutBinding>(schema.begin(),schema.end()),count);
+        std::uint32_t descriptor_index=0;
+        std::array<std::uint32_t, 192> identities{};
+        for (std::uint32_t i = 0; i < identities.size(); ++i)
+        {
+            identities[i] = i;
+        }
+        for (auto& mesh : data.local_meshes)
+        {
+            mesh.frames.resize(vk::swapchain::get()->images.size());
+            for (auto& frame : mesh.frames)
+            {
+                const auto memory = vk::MemoryPropertyFlagBits::eHostVisible |
+                                    vk::MemoryPropertyFlagBits::eHostCoherent;
+                frame.local_instances = gpu::create_buffer(
+                    192 * sizeof(instance_data), vk::BufferUsageFlagBits::eStorageBuffer, memory
+                );
+                frame.visible = gpu::create_buffer(
+                    sizeof(identities),
+                    vk::BufferUsageFlagBits::eVertexBuffer |
+                        vk::BufferUsageFlagBits::eStorageBuffer,
+                    memory
+                );
+                vk::buffer::write(frame.visible, identities.data(), sizeof(identities));
+                frame.skin_palette = gpu::create_buffer(
+                    std::max<std::uint32_t>(1, mesh.joint_count) * sizeof(animation::matrix),
+                    vk::BufferUsageFlagBits::eStorageBuffer,
+                    memory
+                );
+                frame.set=data.local_sets->set(descriptor_index++);
+                bind_storage(frame.set,{
+                    frame.local_instances.handle,frame.local_instances.handle,
+                    frame.local_instances.handle,frame.local_instances.handle,
+                    frame.skin_palette.handle
+                });
+                texture::bind(frame.set, mesh.surface);
+            }
+        }
     }
 
     void release_frame_resources()

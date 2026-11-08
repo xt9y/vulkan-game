@@ -1,4 +1,4 @@
-// Shared data/code lives once here; client.cpp includes it with VULKAN_GAME_SHARED_ONLY.
+// The shared code is compiled once per executable.
 
 // [weapons.cpp]
 
@@ -1464,6 +1464,45 @@ namespace srv::assets
 #include <cstdint>
 #include <optional>
 
+namespace net::animation
+{
+    // Repeated 10 Hz authoritative animation state, not skeleton poses.
+    struct resource
+    {
+        std::uint32_t token = 0;
+        std::uint32_t server_tick = 0;
+        std::uint32_t instance_id = 0;
+        std::uint32_t clip = 0;
+        std::uint32_t start_tick = 0;
+        std::uint32_t overlay = UINT32_MAX;
+        std::uint32_t mask_root = UINT32_MAX;
+        float blend = 0;
+    };
+
+    struct attachment_event
+    {
+        std::uint32_t token = 0;
+        std::uint32_t tick = 0;
+        std::uint32_t sequence = 0;
+        std::uint32_t instance_id = 0;
+        std::uint32_t joint = 0;
+        std::uint32_t kind = 0;
+    };
+
+    using event_packet = std::array<std::uint8_t, 28>;
+    event_packet encode_event(const attachment_event& event);
+    std::optional<attachment_event> decode_event(const std::uint8_t* bytes, std::size_t size);
+
+    using packet = std::array<std::uint8_t, 40>;
+    packet encode(const resource& state);
+    std::optional<resource> decode(const std::uint8_t* data, std::size_t bytes);
+} // namespace net::animation
+
+
+
+#include <cmath>
+#include <cstring>
+
 namespace net::animation {
     packet encode(const resource& state) {
         packet p{'A','N','I','M'};
@@ -1497,111 +1536,6 @@ namespace net::animation {
             v.instance_id,v.joint,v.kind);
         if(!v.token||!v.instance_id||!v.sequence)return std::nullopt;
         return v;
-    }
-} // namespace net::animation
-
-
-
-#include <cmath>
-#include <cstring>
-
-namespace net::animation
-{
-    namespace
-    {
-        void write(std::uint8_t* out, std::uint32_t value)
-        {
-            out[0] = std::uint8_t(value >> 24);
-            out[1] = std::uint8_t(value >> 16);
-            out[2] = std::uint8_t(value >> 8);
-            out[3] = std::uint8_t(value);
-        }
-
-        std::uint32_t read(const std::uint8_t* in)
-        {
-            return (std::uint32_t(in[0]) << 24) |
-                (std::uint32_t(in[1]) << 16) |
-                (std::uint32_t(in[2]) << 8) | std::uint32_t(in[3]);
-        }
-    }
-
-    packet encode(const resource& state)
-    {
-        packet bytes{};
-        bytes[0] = 'A';
-        bytes[1] = 'N';
-        bytes[2] = 'I';
-        bytes[3] = 'M';
-        write(bytes.data() + 4, 1);
-        write(bytes.data() + 8, state.token);
-        write(bytes.data() + 12, state.server_tick);
-        write(bytes.data() + 16, state.instance_id);
-        write(bytes.data() + 20, state.clip);
-        write(bytes.data() + 24, state.start_tick);
-        write(bytes.data() + 28, state.overlay);
-        write(bytes.data() + 32, state.mask_root);
-        std::uint32_t bits = 0;
-        std::memcpy(&bits, &state.blend, sizeof(bits));
-        write(bytes.data() + 36, bits);
-        return bytes;
-    }
-
-    std::optional<resource> decode(const std::uint8_t* bytes, std::size_t size)
-    {
-        if (!bytes || size != packet{}.size() ||
-            bytes[0] != 'A' || bytes[1] != 'N' ||
-            bytes[2] != 'I' || bytes[3] != 'M' ||
-            read(bytes + 4) != 1)
-            return std::nullopt;
-
-        resource result;
-        result.token = read(bytes + 8);
-        result.server_tick = read(bytes + 12);
-        result.instance_id = read(bytes + 16);
-        result.clip = read(bytes + 20);
-        result.start_tick = read(bytes + 24);
-        result.overlay = read(bytes + 28);
-        result.mask_root = read(bytes + 32);
-        const auto bits = read(bytes + 36);
-        std::memcpy(&result.blend, &bits, sizeof(result.blend));
-        if (!result.token || !result.instance_id ||
-            !std::isfinite(result.blend) ||
-            result.blend < 0 || result.blend > 1)
-            return std::nullopt;
-        return result;
-    }
-    event_packet encode_event(const attachment_event& event)
-    {
-        event_packet bytes{};
-        bytes[0] = 'E';
-        bytes[1] = 'V';
-        bytes[2] = 'N';
-        bytes[3] = 'T';
-        write(bytes.data() + 4, event.token);
-        write(bytes.data() + 8, event.tick);
-        write(bytes.data() + 12, event.sequence);
-        write(bytes.data() + 16, event.instance_id);
-        write(bytes.data() + 20, event.joint);
-        write(bytes.data() + 24, event.kind);
-        return bytes;
-    }
-
-    std::optional<attachment_event> decode_event(const std::uint8_t* bytes,
-                                                  std::size_t size)
-    {
-        if (!bytes || size != event_packet{}.size() ||
-            bytes[0] != 'E' || bytes[1] != 'V' ||
-            bytes[2] != 'N' || bytes[3] != 'T')
-            return std::nullopt;
-        attachment_event event;
-        event.token = read(bytes + 4);
-        event.tick = read(bytes + 8);
-        event.sequence = read(bytes + 12);
-        event.instance_id = read(bytes + 16);
-        event.joint = read(bytes + 20);
-        event.kind = read(bytes + 24);
-        return event.token && event.instance_id && event.sequence ?
-            std::optional<attachment_event>(event) : std::nullopt;
     }
 } // namespace net::animation
 
@@ -1977,95 +1911,46 @@ bool decode_batch(const std::vector<std::uint8_t>& bytes,batch_payload& result) 
 #include <cstdint>
 #include <optional>
 
-namespace net::weapon {
-namespace {
-    using namespace net::movement::detail;
-    bool header(const std::uint8_t* p,std::size_t n,std::size_t expected,std::uint8_t type) {
-        return p&&n==expected&&p[0]=='V'&&p[1]=='G'&&p[2]=='U'&&
-            p[3]=='N'&&p[4]==2&&p[5]==type&&!p[6]&&!p[7];
-    }
-    void write_state(std::uint8_t* p,const snapshot& v) {
-        fields(p+8,v.token,v.sequence,v.tick,v.magazine,v.reserve,
-            std::uint32_t(v.reload),std::uint32_t(v.outcome),
-            v.reload_elapsed,v.reload_duration,v.refill_time,
-            v.weapon_id,v.active_weapon_id);
-    }
-    std::optional<snapshot> read_state(const std::uint8_t* p) {
-        snapshot v{};
-        std::uint32_t reload=0,outcome=0;
-        fields(p+8,v.token,v.sequence,v.tick,v.magazine,v.reserve,reload,outcome,
-            v.reload_elapsed,v.reload_duration,v.refill_time,
-            v.weapon_id,v.active_weapon_id);
-        v.reload=reload_phase(reload);
-        v.outcome=result(outcome);
-        if(!v.token||!v.weapon_id||!v.active_weapon_id||reload>2||
-           outcome>std::uint32_t(result::equipped)||
-           !std::isfinite(v.reload_elapsed)||!std::isfinite(v.reload_duration)||
-           !std::isfinite(v.refill_time)||v.reload_elapsed<0||
-           v.reload_duration<0||v.refill_time<0||
-           v.reload_elapsed>v.reload_duration||v.refill_time>v.reload_duration)
-            return std::nullopt;
-        return v;
-    }
-}
-command_packet encode_command(const command& v) {
-    command_packet p{'V','G','U','N',2,1,0,0};
-    net::movement::detail::fields(p.data()+8,
-        v.token,v.sequence,std::uint32_t(v.kind),v.yaw,v.pitch,v.weapon_id);
-    return p;
-}
-std::optional<command> decode_command(const std::uint8_t* p,std::size_t n) {
-    if(!header(p,n,command_packet{}.size(),1))return std::nullopt;
-    command v{};
-    std::uint32_t kind=0;
-    net::movement::detail::fields(p+8,v.token,v.sequence,kind,v.yaw,v.pitch,v.weapon_id);
-    v.kind=action(kind);
-    if(!v.token||!v.sequence||!v.weapon_id||kind<1||kind>3||
-       !std::isfinite(v.yaw)||!std::isfinite(v.pitch)||
-       std::abs(v.yaw)>1000||std::abs(v.pitch)>1.570797f)
-        return std::nullopt;
-    return v;
-}
-snapshot_packet encode_snapshot(const snapshot& v) {
-    snapshot_packet p{'V','G','U','N',2,2,0,0};
-    write_state(p.data(),v);
-    return p;
-}
-std::optional<snapshot> decode_snapshot(const std::uint8_t* p,std::size_t n) {
-    if(!header(p,n,snapshot_packet{}.size(),2))return std::nullopt;
-    return read_state(p);
-}
-shot_packet encode_shot(const shot& v) {
-    shot_packet p{'V','G','U','N',2,3,0,0};
-    write_state(p.data(),v.state);
-    const auto& h=v.impact;
-    net::movement::detail::fields(p.data()+56,std::uint32_t(h.impacted),
-        h.position.x,h.position.y,h.position.z,
-        h.normal.x,h.normal.y,h.normal.z,h.instance,h.triangle);
-    return p;
-}
-std::optional<shot> decode_shot(const std::uint8_t* p,std::size_t n) {
-    if(!header(p,n,shot_packet{}.size(),3))return std::nullopt;
-    const auto state=read_state(p);
-    if(!state)return std::nullopt;
-    shot v{};
-    v.state=*state;
-    std::uint32_t impacted=0;
-    auto& h=v.impact;
-    net::movement::detail::fields(p+56,impacted,
-        h.position.x,h.position.y,h.position.z,
-        h.normal.x,h.normal.y,h.normal.z,h.instance,h.triangle);
-    if(impacted>1)return std::nullopt;
-    h.impacted=impacted==1;
-    const auto finite=[](float x){return std::isfinite(x)&&std::abs(x)<1000000.f;};
-    if(!finite(h.position.x)||!finite(h.position.y)||!finite(h.position.z)||
-       !finite(h.normal.x)||!finite(h.normal.y)||!finite(h.normal.z))
-        return std::nullopt;
-    if(h.impacted&&(state->outcome!=result::fired||!h.instance||
-       std::abs(vk::util::math::length_squared(h.normal)-1.f)>.01f))
-        return std::nullopt;
-    return v;
-}
+namespace net::weapon
+{
+    using action = ::weapon::action;
+    using result = ::weapon::result;
+    using reload_phase = ::weapon::reload_phase;
+
+    struct command
+    {
+        std::uint32_t token = 0, sequence = 0;
+        action kind = action::fire;
+        float yaw = 0, pitch = 0;
+        std::uint32_t weapon_id = 0;
+    };
+
+    struct snapshot
+    {
+        std::uint32_t token = 0, sequence = 0, tick = 0;
+        std::uint32_t magazine = 0, reserve = 0;
+        reload_phase reload = reload_phase::none;
+        result outcome = result::none;
+        float reload_elapsed = 0, reload_duration = 0, refill_time = 0;
+        std::uint32_t weapon_id = 0;
+        std::uint32_t active_weapon_id = 0;
+    };
+
+    struct shot
+    {
+        snapshot state;
+        ::weapon::hit impact;
+    };
+
+    using command_packet = std::array<std::uint8_t, 32>;
+    using snapshot_packet = std::array<std::uint8_t, 56>;
+    using shot_packet = std::array<std::uint8_t, 92>;
+    command_packet encode_command(const command& value);
+    std::optional<command> decode_command(const std::uint8_t* bytes, std::size_t size);
+    snapshot_packet encode_snapshot(const snapshot& value);
+    std::optional<snapshot> decode_snapshot(const std::uint8_t* bytes, std::size_t size);
+    shot_packet encode_shot(const shot& value);
+    std::optional<shot> decode_shot(const std::uint8_t* bytes, std::size_t size);
 } // namespace net::weapon
 
 
@@ -2258,162 +2143,95 @@ namespace net::movement
 
 
 
-namespace net::weapon
-{
-    namespace
-    {
-        using namespace net::movement::detail;
-
-        bool
-        header(const std::uint8_t* p, std::size_t size, std::size_t expected, std::uint8_t kind)
-        {
-            return p && size == expected && p[0] == 'V' && p[1] == 'G' && p[2] == 'U' &&
-                   p[3] == 'N' && p[4] == 2 && p[5] == kind && !p[6] && !p[7];
-        }
-
-        void write_state(std::uint8_t* p, const snapshot& v)
-        {
-            put(p + 8, v.token);
-            put(p + 12, v.sequence);
-            put(p + 16, v.tick);
-            put(p + 20, v.magazine);
-            put(p + 24, v.reserve);
-            put(p + 28, std::uint32_t(v.reload));
-            put(p + 32, std::uint32_t(v.outcome));
-            put_float(p + 36, v.reload_elapsed);
-            put_float(p + 40, v.reload_duration);
-            put_float(p + 44, v.refill_time);
-            put(p + 48, v.weapon_id);
-            put(p + 52, v.active_weapon_id);
-        }
-
-        std::optional<snapshot> read_state(const std::uint8_t* p)
-        {
-            snapshot v;
-            v.token = get(p + 8);
-            v.sequence = get(p + 12);
-            v.tick = get(p + 16);
-            v.magazine = get(p + 20);
-            v.reserve = get(p + 24);
-            v.reload = reload_phase(get(p + 28));
-            v.outcome = result(get(p + 32));
-            v.reload_elapsed = get_float(p + 36);
-            v.reload_duration = get_float(p + 40);
-            v.refill_time = get_float(p + 44);
-            v.weapon_id = get(p + 48);
-            v.active_weapon_id = get(p + 52);
-            if (!v.token || !v.weapon_id || !v.active_weapon_id || get(p + 28) > 2 ||
-                get(p + 32) > std::uint32_t(result::equipped) ||
-                !std::isfinite(v.reload_elapsed) || !std::isfinite(v.reload_duration) ||
-                !std::isfinite(v.refill_time) || v.reload_elapsed < 0 || v.reload_duration < 0 ||
-                v.refill_time < 0 ||
-                v.reload_elapsed > v.reload_duration || v.refill_time > v.reload_duration)
-            {
-                return std::nullopt;
-            }
-            return v;
-        }
-    } // namespace
-
-    command_packet encode_command(const command& v)
-    {
-        command_packet p{'V', 'G', 'U', 'N', 2, 1, 0, 0};
-        put(p.data() + 8, v.token);
-        put(p.data() + 12, v.sequence);
-        put(p.data() + 16, std::uint32_t(v.kind));
-        put_float(p.data() + 20, v.yaw);
-        put_float(p.data() + 24, v.pitch);
-        put(p.data() + 28, v.weapon_id);
-        return p;
+namespace net::weapon {
+namespace {
+    using namespace net::movement::detail;
+    bool header(const std::uint8_t* p,std::size_t n,std::size_t expected,std::uint8_t type) {
+        return p&&n==expected&&p[0]=='V'&&p[1]=='G'&&p[2]=='U'&&
+            p[3]=='N'&&p[4]==2&&p[5]==type&&!p[6]&&!p[7];
     }
-
-    std::optional<command> decode_command(const std::uint8_t* p, std::size_t size)
-    {
-        if (!header(p, size, command_packet{}.size(), 1))
-        {
+    void write_state(std::uint8_t* p,const snapshot& v) {
+        fields(p+8,v.token,v.sequence,v.tick,v.magazine,v.reserve,
+            std::uint32_t(v.reload),std::uint32_t(v.outcome),
+            v.reload_elapsed,v.reload_duration,v.refill_time,
+            v.weapon_id,v.active_weapon_id);
+    }
+    std::optional<snapshot> read_state(const std::uint8_t* p) {
+        snapshot v{};
+        std::uint32_t reload=0,outcome=0;
+        fields(p+8,v.token,v.sequence,v.tick,v.magazine,v.reserve,reload,outcome,
+            v.reload_elapsed,v.reload_duration,v.refill_time,
+            v.weapon_id,v.active_weapon_id);
+        v.reload=reload_phase(reload);
+        v.outcome=result(outcome);
+        if(!v.token||!v.weapon_id||!v.active_weapon_id||reload>2||
+           outcome>std::uint32_t(result::equipped)||
+           !std::isfinite(v.reload_elapsed)||!std::isfinite(v.reload_duration)||
+           !std::isfinite(v.refill_time)||v.reload_elapsed<0||
+           v.reload_duration<0||v.refill_time<0||
+           v.reload_elapsed>v.reload_duration||v.refill_time>v.reload_duration)
             return std::nullopt;
-        }
-        command v{
-            get(p + 8), get(p + 12), action(get(p + 16)), get_float(p + 20), get_float(p + 24), get(p + 28)
-        };
-        if (!v.token || !v.sequence || !v.weapon_id || get(p + 16) < 1 || get(p + 16) > 3 ||
-            !std::isfinite(v.yaw) || !std::isfinite(v.pitch) || std::abs(v.yaw) > 1000 ||
-            std::abs(v.pitch) > 1.570797f)
-        {
-            return std::nullopt;
-        }
         return v;
     }
-
-    snapshot_packet encode_snapshot(const snapshot& v)
-    {
-        snapshot_packet p{'V', 'G', 'U', 'N', 2, 2, 0, 0};
-        write_state(p.data(), v);
-        return p;
-    }
-
-    std::optional<snapshot> decode_snapshot(const std::uint8_t* p, std::size_t size)
-    {
-        if (!header(p, size, snapshot_packet{}.size(), 2))
-        {
-            return std::nullopt;
-        }
-        return read_state(p);
-    }
-
-    shot_packet encode_shot(const shot& v)
-    {
-        shot_packet p{'V', 'G', 'U', 'N', 2, 3, 0, 0};
-        write_state(p.data(), v.state);
-        const auto& h = v.impact;
-        put(p.data() + 56, h.impacted ? 1 : 0);
-        put_float(p.data() + 60, h.position.x);
-        put_float(p.data() + 64, h.position.y);
-        put_float(p.data() + 68, h.position.z);
-        put_float(p.data() + 72, h.normal.x);
-        put_float(p.data() + 76, h.normal.y);
-        put_float(p.data() + 80, h.normal.z);
-        put(p.data() + 84, h.instance);
-        put(p.data() + 88, h.triangle);
-        return p;
-    }
-
-    std::optional<shot> decode_shot(const std::uint8_t* p, std::size_t size)
-    {
-        if (!header(p, size, shot_packet{}.size(), 3))
-        {
-            return std::nullopt;
-        }
-        const auto state = read_state(p);
-        if (!state || get(p + 56) > 1)
-        {
-            return std::nullopt;
-        }
-        shot v{
-            *state,
-            {get(p + 56) == 1,
-             {get_float(p + 60), get_float(p + 64), get_float(p + 68)},
-             {get_float(p + 72), get_float(p + 76), get_float(p + 80)},
-             get(p + 84),
-             get(p + 88)}
-        };
-        const auto& h = v.impact;
-        auto finite = [](float x)
-        {
-            return std::isfinite(x) && std::abs(x) < 1000000;
-        };
-        if (!finite(h.position.x) || !finite(h.position.y) || !finite(h.position.z) ||
-            !finite(h.normal.x) || !finite(h.normal.y) || !finite(h.normal.z))
-        {
-            return std::nullopt;
-        }
-        if (h.impacted && (state->outcome != result::fired || !h.instance ||
-                           std::abs(vk::util::math::length_squared(h.normal) - 1.0f) > 0.01f))
-        {
-            return std::nullopt;
-        }
-        return v;
-    }
+}
+command_packet encode_command(const command& v) {
+    command_packet p{'V','G','U','N',2,1,0,0};
+    net::movement::detail::fields(p.data()+8,
+        v.token,v.sequence,std::uint32_t(v.kind),v.yaw,v.pitch,v.weapon_id);
+    return p;
+}
+std::optional<command> decode_command(const std::uint8_t* p,std::size_t n) {
+    if(!header(p,n,command_packet{}.size(),1))return std::nullopt;
+    command v{};
+    std::uint32_t kind=0;
+    net::movement::detail::fields(p+8,v.token,v.sequence,kind,v.yaw,v.pitch,v.weapon_id);
+    v.kind=action(kind);
+    if(!v.token||!v.sequence||!v.weapon_id||kind<1||kind>3||
+       !std::isfinite(v.yaw)||!std::isfinite(v.pitch)||
+       std::abs(v.yaw)>1000||std::abs(v.pitch)>1.570797f)
+        return std::nullopt;
+    return v;
+}
+snapshot_packet encode_snapshot(const snapshot& v) {
+    snapshot_packet p{'V','G','U','N',2,2,0,0};
+    write_state(p.data(),v);
+    return p;
+}
+std::optional<snapshot> decode_snapshot(const std::uint8_t* p,std::size_t n) {
+    if(!header(p,n,snapshot_packet{}.size(),2))return std::nullopt;
+    return read_state(p);
+}
+shot_packet encode_shot(const shot& v) {
+    shot_packet p{'V','G','U','N',2,3,0,0};
+    write_state(p.data(),v.state);
+    const auto& h=v.impact;
+    net::movement::detail::fields(p.data()+56,std::uint32_t(h.impacted),
+        h.position.x,h.position.y,h.position.z,
+        h.normal.x,h.normal.y,h.normal.z,h.instance,h.triangle);
+    return p;
+}
+std::optional<shot> decode_shot(const std::uint8_t* p,std::size_t n) {
+    if(!header(p,n,shot_packet{}.size(),3))return std::nullopt;
+    const auto state=read_state(p);
+    if(!state)return std::nullopt;
+    shot v{};
+    v.state=*state;
+    std::uint32_t impacted=0;
+    auto& h=v.impact;
+    net::movement::detail::fields(p+56,impacted,
+        h.position.x,h.position.y,h.position.z,
+        h.normal.x,h.normal.y,h.normal.z,h.instance,h.triangle);
+    if(impacted>1)return std::nullopt;
+    h.impacted=impacted==1;
+    const auto finite=[](float x){return std::isfinite(x)&&std::abs(x)<1000000.f;};
+    if(!finite(h.position.x)||!finite(h.position.y)||!finite(h.position.z)||
+       !finite(h.normal.x)||!finite(h.normal.y)||!finite(h.normal.z))
+        return std::nullopt;
+    if(h.impacted&&(state->outcome!=result::fired||!h.instance||
+       std::abs(vk::util::math::length_squared(h.normal)-1.f)>.01f))
+        return std::nullopt;
+    return v;
+}
 } // namespace net::weapon
 
 
@@ -2598,6 +2416,50 @@ void step(state& p,const input& keys,const collision_world& world,
 #include <cstdint>
 #include <string>
 
+namespace game::options
+{
+    enum class mode { server_only, client_only };
+    enum class gbuffer_precision { unspecified, rgba8, rgba16f };
+    enum class surface_format { unspecified, bgra8_srgb, rgba8_srgb };
+    enum class depth_precision { unspecified, d32, d16 };
+    enum class presentation { unspecified, fifo, mailbox, immediate };
+
+    struct client_graphics
+    {
+        int width, height;
+        std::string title, vertex_shader, fragment_shader;
+        gbuffer_precision gbuffer;
+        surface_format surface;
+        depth_precision depth;
+        presentation present;
+        std::string culling_shader, lighting_shader, tonemap_shader;
+        std::string fullscreen_shader, presentation_shader;
+        float exposure;
+    };
+
+    struct state
+    {
+        options::mode mode;
+        std::string host, bind_host;
+        std::uint16_t port;
+        double duration;
+        bool headless, help;
+        client_graphics graphics;
+    };
+
+    state* get();
+    void init(int argc, char** argv, mode selected_mode, state configured);
+    void print_help();
+    void shutdown();
+} // namespace game::options
+
+
+
+#include <cmath>
+#include <iostream>
+#include <stdexcept>
+#include <utility>
+
 namespace game::options {
     state* get() {
         static state value;
@@ -2672,152 +2534,6 @@ namespace game::options {
                  <<"  --help              Show this help\n";
     }
     void shutdown() {*get()={};}
-} // namespace game::options
-
-
-
-#include <cmath>
-#include <iostream>
-#include <stdexcept>
-#include <utility>
-
-namespace game::options
-{
-    state* get()
-    {
-        static state data;
-        return &data;
-    }
-
-    void init(int argc, char** argv, mode selected_mode, state configured)
-    {
-        state result = std::move(configured);
-        result.mode = selected_mode;
-        bool host_specified = false;
-        bool bind_specified = false;
-
-        for (int i = 1; i < argc; ++i)
-        {
-            const std::string option = argv[i];
-
-            if (option == "--help")
-            {
-                result.help = true;
-                continue;
-            }
-
-            if (option == "--headless")
-            {
-                result.headless = true;
-                continue;
-            }
-
-            if (option != "--port" && option != "--duration" && option != "--host" &&
-                option != "--bind")
-            {
-                throw std::invalid_argument("Unknown option: " + option);
-            }
-
-            if (++i == argc)
-            {
-                throw std::invalid_argument("Missing value for " + option);
-            }
-
-            const std::string value = argv[i];
-            std::size_t end = 0;
-
-            if (option == "--port")
-            {
-                const auto port = std::stoul(value, &end);
-
-                if (end != value.size() || port == 0 || port > 65535 || value.front() == '-')
-                {
-                    throw std::invalid_argument("Port must be in 1..65535");
-                }
-
-                result.port = static_cast<std::uint16_t>(port);
-            }
-            else if (option == "--duration")
-            {
-                result.duration = std::stod(value, &end);
-
-                if (end != value.size() || !std::isfinite(result.duration) || result.duration <= 0)
-                {
-                    throw std::invalid_argument("Duration must be a positive number of seconds");
-                }
-            }
-            else if (option == "--host")
-            {
-                result.host = value;
-                host_specified = true;
-            }
-            else
-            {
-                result.bind_host = value;
-                bind_specified = true;
-            }
-        }
-
-        if (!result.help)
-        {
-            if (result.mode == mode::server_only && result.headless)
-            {
-                throw std::invalid_argument("--headless requires a client mode");
-            }
-
-            if (result.mode != mode::client_only && host_specified)
-            {
-                throw std::invalid_argument(
-                    "--host is only supported by vulkan-client"
-                );
-            }
-
-            if (result.mode == mode::client_only && bind_specified)
-            {
-                throw std::invalid_argument("--bind is only supported by vulkan-server");
-            }
-        }
-
-        if (!result.port || (result.mode == mode::server_only && result.bind_host.empty()))
-            throw std::invalid_argument("A server bind address and UDP port are required");
-
-        if (result.mode == mode::client_only)
-        {
-            const auto& g = result.graphics;
-            if (result.host.empty() || g.width <= 0 || g.height <= 0 ||
-                g.title.empty() || g.vertex_shader.empty() || g.fragment_shader.empty() ||
-                g.gbuffer == gbuffer_precision::unspecified ||
-                g.surface == surface_format::unspecified ||
-                g.depth == depth_precision::unspecified ||
-                g.present == presentation::unspecified ||
-                g.culling_shader.empty() || g.lighting_shader.empty() ||
-                g.tonemap_shader.empty() || g.fullscreen_shader.empty() ||
-                g.presentation_shader.empty() || g.exposure < 0)
-                throw std::invalid_argument("Client graphics configuration is incomplete");
-        }
-        *get() = std::move(result);
-    }
-
-    void print_help()
-    {
-        const bool server = get()->mode == mode::server_only;
-        std::cout << (server ? "Usage: vulkan-server [OPTIONS]\n\n"
-                            : "Usage: vulkan-client [OPTIONS]\n\n")
-                  << "Options:\n"
-                  << "  --port PORT         UDP port (configured in server.cpp or client.cpp)\n";
-        if (server)
-            std::cout << "  --bind ADDRESS      Server listen address (server.cpp)\n";
-        else
-            std::cout << "  --host HOST         Server address (client.cpp)\n"
-                      << "  --headless          Run the client without a window\n";
-        std::cout << "  --duration SECONDS  Stop automatically after the given time\n"
-                  << "  --help              Show this help\n";
-    }
-
-    void shutdown()
-    {
-        *get() = {};
-    }
 } // namespace game::options
 
 
@@ -3135,7 +2851,7 @@ int main(int argc, char** argv)
             if (result != ::weapon::result::fired)
                 return ::weapon::hit{};
 
-            return ::weapon::trace(event.world,
+            return event.world.trace(
                 event.player.position,
                 weapon::direction(
                     event.command.yaw,
