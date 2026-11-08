@@ -534,7 +534,7 @@ namespace weapon
     struct bindings
     {
         int trigger_button=0,aim_button=1;
-        int reload_key='R',inspect_key='M',equip_key=-1;
+        int reload_key='R',inspect_key='M';
         bool automatic=false;
         float sensitivity=.0025f;
         float ads_sensitivity_multiplier=.60f;
@@ -681,7 +681,6 @@ namespace game_weapons
         glock.input.aim_button=1;           // right mouse button
         glock.input.reload_key='R';
         glock.input.inspect_key='M'; // print magazine/reserve without reloading
-        glock.input.equip_key='1';
         glock.input.automatic=false; // hold to fire at the server-validated interval
         glock.input.sensitivity=.0025f;
         glock.input.ads_sensitivity_multiplier=.90f;

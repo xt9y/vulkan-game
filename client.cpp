@@ -106,18 +106,10 @@ namespace clt::weapon
     using definition=::weapon::gun;
     using gun=::weapon::gun;
 
-    struct equip_binding
-    {
-        std::uint32_t id=0;
-        int key=-1;
-    };
     bindings active_bindings();
-    std::vector<equip_binding> equip_bindings();
 
     // Game-owned declarations, registered before renderer initialization.
     void register_weapon(definition value);
-    // Queued from the input thread; server validates the requested weapon ID.
-    void equip(std::uint32_t id);
     // Requests a read-only magazine/reserve inspection on the render thread.
     void check_magazine();
 
@@ -143,18 +135,6 @@ namespace clt::weapon
     const std::vector<draw>& update(const vk::util::math::mat4& view);
     vk::util::math::mat4 view_projection(float aspect, const vk::util::math::mat4& view);
 
-    struct status
-    {
-        std::uint32_t magazine = 0, reserve = 0;
-        bool reloading = false;
-        float ads = 0;
-        std::string animation;
-        std::size_t casings = 0, impacts = 0;
-        std::uint32_t weapon_id = 0;
-    };
-
-    // Render-thread view of the predicted HUD and presentation state.
-    status inspect();
     void shutdown();
 } // namespace clt::weapon
 
@@ -197,8 +177,6 @@ namespace clt::camera
     void aim(float fraction);
     vk::util::math::mat4 view_projection(float aspect);
 
-    vk::util::math::mat4 view();
-    vk::util::math::mat4 projection(float aspect);
 } // namespace clt::camera
 
 
@@ -642,16 +620,6 @@ namespace
         if(space && !space_held)clt::postprocess::toggle_probes();
         space_held=space;
 
-        // Each gun chooses its own equip key, trigger, ADS and reload input.
-        static std::array<bool,GLFW_KEY_LAST+1> equip_held{};
-        for(const auto& item:clt::weapon::equip_bindings())
-        {
-            if(item.key<0 || item.key>GLFW_KEY_LAST)continue;
-            const bool down=clt::input::key_down(item.key);
-            if(down && !equip_held[item.key])
-                clt::weapon::equip(item.id);
-            equip_held[item.key]=down;
-        }
         const auto keys=clt::weapon::active_bindings();
         static bool inspect_held=false;
         const bool inspect=clt::input::key_down(keys.inspect_key);
@@ -4931,10 +4899,6 @@ namespace clt::camera {
             -std::cos(pose.yaw)*std::cos(pose.pitch)};
         return {pose,look_at(eye,eye+forward),eye};
     }
-    mat4 view() {return capture().view;}
-    mat4 projection(float aspect) {
-        return perspective(snapshot().fov,aspect,.1f,1000.f);
-    }
     mat4 view_projection(float aspect) {
         const auto frame=capture();
         return perspective(frame.pose.fov,aspect,.1f,1000.f)*frame.view;
@@ -5267,11 +5231,6 @@ void add_impact(const ::weapon::hit& impact, const definition& settings)
         std::lock_guard lock(input_mutex);
         return data.registered?data.settings.input:bindings{};
     }
-    std::vector<equip_binding> equip_bindings() {
-        std::lock_guard lock(input_mutex);
-        if(!data.registered||data.settings.input.equip_key<0)return {};
-        return {{data.settings.rules.id,data.settings.input.equip_key}};
-    }
     void controls(bool trigger,bool ads,bool reload,std::uint32_t buttons) {
         const auto camera=camera::snapshot();
         std::lock_guard lock(input_mutex);
@@ -5313,10 +5272,6 @@ void add_impact(const ::weapon::hit& impact, const definition& settings)
         data.settings=std::move(gun);
         data.authority=data.predicted=::weapon::make_state(data.settings.rules);
         data.registered=true;
-    }
-    void equip(std::uint32_t id) {
-        // Only one weapon is configured; equipping the active weapon has no effect.
-        (void)id;
     }
     void check_magazine() {
         std::lock_guard lock(input_mutex);
@@ -5633,18 +5588,7 @@ void add_impact(const ::weapon::hit& impact, const definition& settings)
             (data.settings.ads_fov-data.settings.fov)*data.ads,
             aspect,data.settings.near_plane,data.settings.far_plane)*view;
     }
-    status inspect() {
-        if(!data.registered)return {};
-        std::string current_clip;
-        if(data.ready)
-            for(const auto& skin:data.asset.skins)
-                if(skin.id==data.skin&&data.clip<skin.clips.size())
-                    current_clip=skin.clips[data.clip].name;
-        return {data.predicted.magazine,data.predicted.reserve,
-            data.predicted.reload!=::weapon::reload_phase::none,
-            data.ads,current_clip,data.casings.size(),data.holes.size(),
-            data.ready?data.settings.rules.id:0u};
-    }
+
     void shutdown() {
         data=state{};
         std::lock_guard lock(input_mutex);
