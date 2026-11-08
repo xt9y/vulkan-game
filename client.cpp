@@ -3753,296 +3753,157 @@ namespace clt::window
 
 
 // [clt/player/prediction.cpp]
-
-
-
-
-
-
-
+// One fixed-tick player state; authoritative corrections replay pending inputs.
 #include <atomic>
 #include <chrono>
 #include <deque>
 #include <mutex>
 #include <thread>
-
 #include <cmath>
 
-namespace clt::prediction
-{
-    namespace
-    {
-        using clock = std::chrono::steady_clock;
+namespace clt::prediction {
+namespace {
+    using clock = std::chrono::steady_clock;
+    using vec3 = vk::util::math::vec3;
+    std::atomic<bool> stop{false};
+    std::atomic<std::uint32_t> buttons{0};
+    std::atomic<float> yaw{0}, error{0};
+    std::atomic<std::uint64_t> tick_count{0};
+    std::mutex pose_mutex;
+    vec3 pose{};
+    std::thread worker;
 
-        struct state {
-            std::atomic<bool> stop{false};
+    void run() {
+        std::shared_ptr<const ::scene::state> previous_scene;
+        ::player::collision_world colliders;
+        spatial::index index;
+        ::player::state avatar{};
+        std::deque<::player::input> pending;
+        vec3 correction{};
+        std::uint32_t sequence = 0, server_tick = 0;
+        bool ready = false, configured = false;
+        auto next = clock::now();
+        constexpr auto dt = std::chrono::nanoseconds(1'000'000'000 / net::limits::tick_hz);
 
-            std::atomic<std::uint32_t> buttons{0};
-            std::atomic<float> yaw{0};
-            std::atomic<std::uint64_t> ticks{0};
-            std::atomic<float> error{0};
-
-            std::mutex pose_mutex;
-            vk::util::math::vec3 pose{};
-
-            std::thread worker;
-        };
-
-        state& get()
-        {
-            static state data;
-            return data;
-        }
-
-        void run()
-        {
-            auto& data = get();
-
-            std::shared_ptr<const ::scene::state> cached_scene;
-            ::player::collision_world colliders;
-            spatial::index collision_index;
-
-            ::player::state avatar;
-            vk::util::math::vec3 visual_offset{};
-            std::deque<::player::input> pending;
-
-            std::uint32_t sequence = 0;
-            std::uint32_t last_server_tick = 0;
-
-            bool ready = false;
-            bool configured = false;
-
-            auto next = clock::now();
-            const auto tick = std::chrono::nanoseconds(1'000'000'000 / net::limits::tick_hz);
-
-            while (!data.stop.load(std::memory_order_relaxed))
-            {
-                const auto source = connection::snapshot();
-                const bool connected = connection::get()->connected.load(std::memory_order_relaxed);
-                const auto parameters = connection::movement_parameters();
-
-                if (!connected || !source || !parameters)
-                {
-                    cached_scene.reset();
-                    colliders.clear();
-                    collision_index = {};
-                    avatar = {};
-                    configured = false;
-                    visual_offset = {};
-                    pending.clear();
-                    sequence = 0;
-                    last_server_tick = 0;
-                    ready = false;
+        while (!stop.load(std::memory_order_relaxed)) {
+            const auto scene = connection::snapshot();
+            const auto connected = connection::get()->connected.load(std::memory_order_relaxed);
+            const auto params = connection::movement_parameters();
+            if (!connected || !scene || !params) {
+                previous_scene.reset();
+                colliders.clear();
+                index = {};
+                avatar = {};
+                pending.clear();
+                correction = {};
+                sequence = server_tick = 0;
+                ready = configured = false;
+            } else {
+                if (!configured) {
+                    ::player::configure(*params);
+                    avatar.position = params->spawn;
+                    configured = true;
                 }
-                else
-                {
-                    if (!configured)
-                    {
-                        ::player::configure(*parameters);
-                        avatar.position = parameters->spawn;
-                        configured = true;
+                if (scene != previous_scene) {
+                    bool append = previous_scene &&
+                        scene->meshes.size() == previous_scene->meshes.size() &&
+                        scene->instances.size() >= previous_scene->instances.size();
+                    if (append) {
+                        for (std::size_t i = 0; i < scene->meshes.size(); ++i)
+                            if (!::scene::same_mesh(scene->meshes[i],previous_scene->meshes[i]))
+                                append = false;
+                        if (append)
+                            for (std::size_t i = 0; i < previous_scene->instances.size(); ++i)
+                                if (!::scene::same_instance(
+                                    scene->instances[i],previous_scene->instances[i]))
+                                    append = false;
                     }
+                    if (append) {
+                        const auto first = scene->instances.begin() +
+                            previous_scene->instances.size();
+                        std::vector<::scene::instance> added(first,scene->instances.end());
+                        auto new_boxes = ::player::build_colliders(scene->meshes,added);
+                        std::vector<spatial::bounds> bounds;
+                        bounds.reserve(new_boxes.size());
+                        for (const auto& b : new_boxes)
+                            bounds.push_back({b.min,b.max});
+                        index.append(bounds);
+                        colliders.insert(colliders.end(),new_boxes.begin(),new_boxes.end());
+                    } else {
+                        colliders = ::player::build_colliders(*scene);
+                        index = ::player::build_index(colliders);
+                    }
+                    previous_scene = scene;
                 }
-                if (connected && source && parameters && source != cached_scene)
-                {
-                    // New batches add collision geometry without resetting
-                    // the player's input sequence or rebuilding old BVH nodes.
-                    bool appended = cached_scene &&
-                        source->meshes.size() == cached_scene->meshes.size() &&
-                        source->instances.size() >= cached_scene->instances.size();
-
-                    if (appended)
-                    {
-                        for (std::size_t i = 0; i < source->meshes.size(); ++i)
-                        {
-                            if (!::scene::same_mesh(
-                                source->meshes[i], cached_scene->meshes[i]))
-                            {
-                                appended = false;
-                                break;
-                            }
-                        }
-                    }
-                    if (appended)
-                    {
-                        for (std::size_t i = 0; i < cached_scene->instances.size(); ++i)
-                        {
-                            if (!::scene::same_instance(
-                                source->instances[i], cached_scene->instances[i]))
-                            {
-                                appended = false;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (appended)
-                    {
-                        const auto start = cached_scene->instances.size();
-                        std::vector<::scene::instance> incoming(
-                            source->instances.begin() + start, source->instances.end()
-                        );
-                        auto added = ::player::build_colliders(source->meshes, incoming);
-                        std::vector<spatial::bounds> boxes;
-                        boxes.reserve(added.size());
-                        for (const auto& box : added)
-                        {
-                            boxes.push_back({box.min, box.max});
-                        }
-                        colliders.insert(colliders.end(), added.begin(), added.end());
-                        collision_index.append(boxes);
-                    }
-                    else
-                    {
-                        colliders = ::player::build_colliders(*source);
-                        collision_index = ::player::build_index(colliders);
-                    }
-                    cached_scene = source;
-                }
-
-                if (connected && source && parameters)
-                {
-                    if (const auto update = connection::take_authority())
-                    {
-                        if (!ready || net::message::newer(update->tick, last_server_tick))
-                        {
-                            const auto previous = avatar.position;
-                            const bool was_ready = ready;
-                            avatar = update->player;
-                            last_server_tick = update->tick;
-                            ready = true;
-
-                            while (!pending.empty() && !net::message::newer(pending.front().sequence, update->sequence))
-                            {
-                                pending.pop_front();
-                            }
-
-                            for (const auto& command : pending)
-                            {
-                                ::player::step(avatar, command, colliders, &collision_index);
-                            }
-
-                            if (was_ready)
-                            {
-                                const auto delta = previous - avatar.position;
-                                const auto distance = vk::util::math::length(delta);
-                                data.error.store(distance, std::memory_order_relaxed);
-                                if (distance < 2.0f)
-                                {
-                                    visual_offset = visual_offset + delta;
-                                }
-                                else
-                                {
-                                    visual_offset = {};
-                                }
-                            }
-                        }
-                    }
-
-                    if (ready)
-                    {
-                        ::player::input input;
-
-                        input.sequence = ++sequence;
-
-                        if (input.sequence == 0)
-                        {
-                            input.sequence = ++sequence;
-                        }
-
-                        input.buttons =
-                            data.buttons.load(std::memory_order_relaxed);
-
-                        input.yaw =
-                            data.yaw.load(std::memory_order_relaxed);
-
-                        ::player::step(avatar, input, colliders, &collision_index);
-                        data.ticks.fetch_add(1, std::memory_order_relaxed);
-
-                        pending.push_back(input);
-
-                        if (pending.size() > 128)
-                        {
-                            pending.pop_front();
-                        }
-
-                        connection::send_input(input);
+                if (const auto update = connection::take_authority();
+                    update && (!ready || net::message::newer(update->tick,server_tick))) {
+                    const auto before = avatar.position;
+                    const bool was_ready = ready;
+                    avatar = update->player;
+                    server_tick = update->tick;
+                    ready = true;
+                    while (!pending.empty() &&
+                        !net::message::newer(pending.front().sequence,update->sequence))
+                        pending.pop_front();
+                    for (const auto& cmd : pending)
+                        ::player::step(avatar,cmd,colliders,&index);
+                    if (was_ready) {
+                        const auto delta = before - avatar.position;
+                        const auto distance = vk::util::math::length(delta);
+                        error.store(distance,std::memory_order_relaxed);
+                        correction = distance < 2.f ? correction + delta : vec3{};
                     }
                 }
-
-                visual_offset = visual_offset * 0.8f;
-                {
-                    std::lock_guard<std::mutex> lock(data.pose_mutex);
-                    data.pose = avatar.position + visual_offset;
+                if (ready) {
+                    ::player::input cmd{};
+                    if (!(cmd.sequence = ++sequence)) cmd.sequence = ++sequence;
+                    cmd.buttons = buttons.load(std::memory_order_relaxed);
+                    cmd.yaw = yaw.load(std::memory_order_relaxed);
+                    ::player::step(avatar,cmd,colliders,&index);
+                    tick_count.fetch_add(1,std::memory_order_relaxed);
+                    pending.push_back(cmd);
+                    if (pending.size() > 128) pending.pop_front();
+                    connection::send_input(cmd);
                 }
-
-                next += tick;
-
-                if (next < clock::now())
-                {
-                    next = clock::now();
-                }
-
-                std::this_thread::sleep_until(next);
             }
-        }
-    } // namespace
-
-    void init()
-    {
-        auto& data = get();
-
-        data.stop.store(false, std::memory_order_relaxed);
-        data.buttons.store(0, std::memory_order_relaxed);
-        data.yaw.store(0, std::memory_order_relaxed);
-        data.ticks.store(0, std::memory_order_relaxed);
-        data.error.store(0, std::memory_order_relaxed);
-
-        {
-            std::lock_guard<std::mutex> lock(data.pose_mutex);
-            data.pose = {};
-        }
-        data.worker = std::thread(run);
-    }
-
-    void controls(std::uint32_t buttons, float yaw)
-    {
-        get().buttons.store(buttons, std::memory_order_relaxed);
-        get().yaw.store(yaw, std::memory_order_relaxed);
-    }
-
-    vk::util::math::vec3 position()
-    {
-        auto& data = get();
-
-        std::lock_guard<std::mutex> lock(data.pose_mutex);
-        return data.pose;
-    }
-
-    std::uint64_t ticks()
-    {
-        return get().ticks.load(std::memory_order_relaxed);
-    }
-
-    float correction()
-    {
-        return get().error.load(std::memory_order_relaxed);
-    }
-
-    void shutdown()
-    {
-        auto& data = get();
-
-        data.stop.store(true, std::memory_order_relaxed);
-
-        if (data.worker.joinable())
-        {
-            data.worker.join();
+            correction = correction * .8f;
+            {
+                std::lock_guard<std::mutex> lock(pose_mutex);
+                pose = avatar.position + correction;
+            }
+            next += dt;
+            if (next < clock::now()) next = clock::now();
+            std::this_thread::sleep_until(next);
         }
     }
+}
+void init() {
+    stop.store(false,std::memory_order_relaxed);
+    buttons.store(0,std::memory_order_relaxed);
+    yaw.store(0,std::memory_order_relaxed);
+    tick_count.store(0,std::memory_order_relaxed);
+    error.store(0,std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(pose_mutex);
+        pose = {};
+    }
+    worker = std::thread(run);
+}
+void controls(std::uint32_t b,float y) {
+    buttons.store(b,std::memory_order_relaxed);
+    yaw.store(y,std::memory_order_relaxed);
+}
+vk::util::math::vec3 position() {
+    std::lock_guard<std::mutex> lock(pose_mutex);
+    return pose;
+}
+std::uint64_t ticks() {return tick_count.load(std::memory_order_relaxed);}
+float correction() {return error.load(std::memory_order_relaxed);}
+void shutdown() {
+    stop.store(true,std::memory_order_relaxed);
+    if (worker.joinable()) worker.join();
+}
 } // namespace clt::prediction
-
-
 
 // [clt/render/postprocess.cpp]
 
