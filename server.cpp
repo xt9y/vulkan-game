@@ -2601,18 +2601,6 @@ namespace srv::application
         std::uint32_t animation;
     };
 
-    struct weapon_command_context
-    {
-        const net::weapon::command& command;
-        const ::weapon::definition& definition;
-        ::weapon::state& state;
-        const ::player::state& player;
-        double now;
-        const ::weapon::world& world;
-    };
-
-    using weapon_command_handler = std::function<::weapon::hit(weapon_command_context&)>;
-
     struct state
     {
         game::options::state options;
@@ -2636,7 +2624,6 @@ namespace srv::application
         player::collision_world colliders;
         ::weapon::world weapon_world;
         ::weapon::registry weapons;
-        weapon_command_handler on_weapon_command;
         std::function<bool(const net::endpoint::resource&)> editor_permission;
         spatial::index collision_index;
         struct batch {
@@ -2655,7 +2642,6 @@ namespace srv::application
                     std::uint32_t animation);
     // Register game rules and receive authenticated, owned, equipped weapon commands.
     void add_weapon(::weapon::definition definition);
-    void on_weapon_command(weapon_command_handler handler);
     // No client can change the level unless this policy explicitly permits it.
     void on_editor_permission(std::function<bool(const net::endpoint::resource&)> handler);
     void init();
@@ -2837,30 +2823,6 @@ int main(int argc, char** argv)
         // authoritative rules and the client's models, controls and clips.
         for(const auto& gun:game_weapons::all())
             srv::application::add_weapon(gun.rules);
-        srv::application::on_weapon_command(
-        [](srv::application::weapon_command_context& event)
-        {
-            const auto result = ::weapon::apply(
-                event.state,
-                event.command.sequence,
-                event.command.kind,
-                event.now,
-                event.definition
-            );
-
-            if (result != ::weapon::result::fired)
-                return ::weapon::hit{};
-
-            return event.world.trace(
-                event.player.position,
-                weapon::direction(
-                    event.command.yaw,
-                    event.command.pitch
-                ),
-                event.definition.range
-            );
-        });
-
         net::socket::init();
         std::signal(SIGINT, stop);
         std::signal(SIGTERM, stop);
@@ -3202,15 +3164,6 @@ namespace srv::application
             throw std::runtime_error("Register weapons before init");
         }
         ::weapon::add(get()->weapons,std::move(definition));
-    }
-
-    void on_weapon_command(weapon_command_handler handler)
-    {
-        if (get()->initialized)
-        {
-            throw std::runtime_error("Configure weapon handler before init");
-        }
-        get()->on_weapon_command = std::move(handler);
     }
 
     void on_editor_permission(
@@ -3608,7 +3561,6 @@ namespace srv::application
         get()->colliders.clear();
         get()->weapon_world = {};
         get()->weapons = {};
-        get()->on_weapon_command = {};
         get()->editor_permission = {};
         get()->scene = {};
         get()->editor_light_versions.clear();
@@ -3960,15 +3912,19 @@ namespace srv::application
                         client.weapon.state.sequence=cmd.sequence;
                         client.weapon.state.last_result=::weapon::result::equipped;
                     }
-                    else if (get()->on_weapon_command)
+                    else
                     {
-                        weapon_command_context context{
-                            cmd,*definition,client.weapon.state,client.avatar,
-                            seconds,get()->weapon_world
-                        };
-                        const auto impact=get()->on_weapon_command(context);
+                        const auto result=::weapon::apply(
+                            client.weapon.state,cmd.sequence,cmd.kind,
+                            seconds,*definition);
                         if (cmd.kind==::weapon::action::fire)
                         {
+                            const auto impact=result==::weapon::result::fired
+                                ? ::weapon::trace(
+                                    get()->weapon_world,client.avatar.position,
+                                    ::weapon::direction(cmd.yaw,cmd.pitch),
+                                    definition->range)
+                                : ::weapon::hit{};
                             net::weapon::shot shot{
                                 weapon_snapshot(client,client.weapon,seconds),impact
                             };
