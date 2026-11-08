@@ -43,7 +43,16 @@ namespace clt::connection
     {
         auto& data = *get();
         std::lock_guard<std::mutex> lock(data.scene_mutex);
-        if (data.pending_scene.empty()) return data.scene;
+        // Received light changes are applied together with ordinary scene
+        // batches to a new immutable snapshot, never to a renderer-owned one.
+        std::size_t known_lights=data.scene?data.scene->lights.size():0;
+        for(const auto& batch:data.pending_scene)
+            known_lights+=batch.lights.size();
+        bool applicable=false;
+        for(std::size_t i=0;i<data.light_pending.size() && i<=known_lights;++i)
+            if(data.light_pending[i]){applicable=true;break;}
+        if(data.pending_scene.empty() && (!applicable || !data.scene))
+            return data.scene;
 
         const auto now = clock::now();
         // Keep received batches as independent chunks until publication.
@@ -118,6 +127,37 @@ namespace clt::connection
                 std::make_move_iterator(patch.lights.end())
             );
         }
+        bool light_changed=false;
+        for(std::size_t i=0;i<data.light_pending.size();++i)
+        {
+            auto& pending=data.light_pending[i];
+            if(!pending || i>combined->lights.size())continue;
+            const auto& value=pending->light;
+            if(i==combined->lights.size())
+            {
+                combined->lights.push_back(value);
+                light_changed=true;
+            }
+            else
+            {
+                const auto& old=combined->lights[i];
+                if(old.position.x!=value.position.x ||
+                   old.position.y!=value.position.y ||
+                   old.position.z!=value.position.z ||
+                   old.radius!=value.radius ||
+                   old.color.x!=value.color.x ||
+                   old.color.y!=value.color.y ||
+                   old.color.z!=value.color.z ||
+                   old.strength!=value.strength)
+                {
+                    combined->lights[i]=value;
+                    light_changed=true;
+                }
+            }
+            pending.reset();
+        }
+        if(data.pending_scene.empty() && !light_changed)
+            return data.scene;
         data.scene = std::move(combined);
         data.pending_scene.clear();
         data.last_publish = now;
@@ -141,6 +181,24 @@ namespace clt::connection
             data.attachment_events.begin(), data.attachment_events.end());
         data.attachment_events.clear();
         return events;
+    }
+
+    bool send_editor_light(net::editor_light::resource command)
+    {
+        if((command.type!=net::editor_light::kind::create &&
+            command.type!=net::editor_light::kind::edit) ||
+           !net::editor_light::valid(command.light) ||
+           !get()->connected.load(std::memory_order_relaxed))
+            return false;
+        auto& data=*get();
+        std::lock_guard<std::mutex> lock(data.editor_mutex);
+        if(data.editor_outgoing.size()>=64)return false;
+        command.sequence=++data.editor_sequence;
+        if(!command.sequence)command.sequence=++data.editor_sequence;
+        command.index=command.type==net::editor_light::kind::create ?
+            UINT32_MAX:command.index;
+        data.editor_outgoing.push_back(command);
+        return true;
     }
 
     bool send_weapon(net::weapon::command command)
