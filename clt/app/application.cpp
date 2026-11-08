@@ -178,6 +178,7 @@ namespace clt::application
                 static bool mouse_held=false;
                 const bool mouse_down=input::mouse_down(GLFW_MOUSE_BUTTON_LEFT);
                 events.click=mouse_down && !mouse_held;
+                events.mouse_down=mouse_down;
                 mouse_held=mouse_down;
 
                 auto* handle=window::get()->handle;
