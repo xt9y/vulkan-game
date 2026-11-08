@@ -51,19 +51,16 @@ static void compile_shaders(void)
     }
 }
 
-// Faithful asset import from the exact Hell2024 snapshot inside Hell2025:
-// 7362a3a86cc254ecffdf498c9febae10eefa120b.
-// Only the original bitmap font and UI menu images are checked out. The
-// editor hardloads these once at startup; no network or decoding in frames.
+// Original menu textures remain from Hell2024 (7362a3a); the font
+// is embedded directly from the user's x_font.png in VulkanEditor.
+// No legacy Hell2024 font files are needed.
 static void prepare_editor_assets(void)
 {
-    struct stat font,menu;
-    const char* font_path=
-        "build/editor-hell2024/Hell2024/Hell2024/res/textures/font/char_90.png";
+    struct stat menu;
     const char* menu_path=
         "build/editor-hell2024/Hell2024/Hell2024/res/textures/ui/MenuBG.png";
-    if(stat(font_path,&font)==0 && stat(menu_path,&menu)==0)return;
-    if(stat("build/editor-hell2024/.git",&font)!=0)
+    if(stat(menu_path,&menu)==0)return;
+    if(stat("build/editor-hell2024/.git",&menu)!=0)
     {
         if(system("git init -q build/editor-hell2024 && "
                   "git -C build/editor-hell2024 remote add origin "
@@ -75,7 +72,6 @@ static void prepare_editor_assets(void)
         }
     }
     if(system("git -C build/editor-hell2024 sparse-checkout set "
-              "Hell2024/Hell2024/res/textures/font "
               "Hell2024/Hell2024/res/textures/ui && "
               "git -C build/editor-hell2024 fetch -q --depth 1 "
               "--filter=blob:none origin "
@@ -86,8 +82,8 @@ static void prepare_editor_assets(void)
                 "editor: could not fetch exact Hell2024 UI snapshot\n");
         return;
     }
-    if(stat(font_path,&font)!=0 || stat(menu_path,&menu)!=0)
-        fprintf(stderr,"editor: original UI assets incomplete\n");
+    if(stat(menu_path,&menu)!=0)
+        fprintf(stderr,"editor: original menu textures incomplete\n");
 }
 
 void build(C_Build* b)
