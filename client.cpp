@@ -5097,29 +5097,7 @@ namespace clt::scene_renderer
 
         void destroy_meshes(std::vector<gpu_mesh>& meshes)
         {
-            for (auto& mesh : meshes)
-            {
-                mesh.geometry.reset();
-                if (mesh.instance_buffer.handle)
-                {
-                    mesh.instance_buffer.reset();
-                }
-                if (mesh.bounds_buffer.handle)
-                {
-                    mesh.bounds_buffer.reset();
-                }
-                for (auto& frame : mesh.frames)
-                {
-                    if (frame.visible.handle) frame.visible.reset();
-                    if (frame.indirect.handle) frame.indirect.reset();
-                    if (frame.skin_palette.handle) frame.skin_palette.reset();
-                    if (frame.local_instances.handle)
-                    {
-                        frame.local_instances.reset();
-                    }
-                }
-            }
-
+            // geometry and owned_buffer destructors already release GPU resources.
             meshes.clear();
         }
 
@@ -5337,24 +5315,7 @@ namespace clt::scene_renderer
     {
         auto& data = get();
         for (auto& mesh : data.local_meshes)
-        {
-            for (auto& frame : mesh.frames)
-            {
-                if (frame.local_instances.handle)
-                {
-                    frame.local_instances.reset();
-                }
-                if (frame.visible.handle)
-                {
-                    frame.visible.reset();
-                }
-                if (frame.skin_palette.handle)
-                {
-                    frame.skin_palette.reset();
-                }
-            }
             mesh.frames.clear();
-        }
         data.local_sets.reset();
     }
 
