@@ -413,44 +413,21 @@ namespace weapon
         }
     }
 
-    class registry
-    {
-        std::vector<definition> entries;
+    // Definitions are stored contiguously; no registry object or virtual interface.
+    using registry=std::vector<definition>;
 
-    public:
-        void add(definition value)
-        {
-            validate(value);
-            if (find(value.id))
-            {
-                throw std::invalid_argument("Duplicate weapon ID");
-            }
-            entries.push_back(std::move(value));
-        }
-
-        const definition* find(std::uint32_t id) const
-        {
-            const auto found = std::find_if(
-                entries.begin(),
-                entries.end(),
-                [id](const definition& value)
-                {
-                    return value.id == id;
-                }
-            );
-            return found == entries.end() ? nullptr : &*found;
-        }
-
-        const std::vector<definition>& all() const
-        {
-            return entries;
-        }
-
-        bool empty() const
-        {
-            return entries.empty();
-        }
-    };
+    inline void add(registry& entries,definition value) {
+        validate(value);
+        if(std::any_of(entries.begin(),entries.end(),
+            [&](const definition& e){return e.id==value.id;}))
+            throw std::invalid_argument("Duplicate weapon ID");
+        entries.push_back(std::move(value));
+    }
+    inline const definition* find(const registry& entries,std::uint32_t id) {
+        const auto it=std::find_if(entries.begin(),entries.end(),
+            [id](const definition& e){return e.id==id;});
+        return it==entries.end()?nullptr:&*it;
+    }
 
     struct state
     {
@@ -566,126 +543,76 @@ namespace weapon
         std::uint32_t instance = 0, triangle = 0;
     };
 
-    struct world
-    {
+    // Flat collision data and free functions, no game-owned world object API.
+    struct world {
         std::vector<triangle> triangles;
         spatial::index index;
-
-        void append(
-            const std::vector<scene::mesh>& meshes, const std::vector<scene::instance>& instances
-        )
-        {
-            using namespace vk::util::math;
-            std::vector<spatial::bounds> boxes;
-            for (const auto& instance : instances)
-            {
-                const auto mesh = std::find_if(
-                    meshes.begin(),
-                    meshes.end(),
-                    [&](const scene::mesh& m)
-                    {
-                        return m.id == instance.mesh_id;
-                    }
-                );
-                // Only meshes explicitly streamed as server world geometry
-                // participate; client-only first-person assets are not here.
-                // Use bind-pose triangles for skinned meshes until animated
-                // server-side collision geometry becomes available.
-                if (mesh == meshes.end())
-                {
-                    continue;
-                }
-                auto transform = [&](vec3 p)
-                {
-                    return instance.pose.position + rotate(
-                                                        instance.pose.rotation,
-                                                        {p.x * instance.pose.scale.x,
-                                                         p.y * instance.pose.scale.y,
-                                                         p.z * instance.pose.scale.z}
-                                                    );
-                };
-                for (std::size_t i = 0; i + 2 < mesh->indices.size(); i += 3)
-                {
-                    const auto a = mesh->indices[i], b = mesh->indices[i + 1],
-                               c = mesh->indices[i + 2];
-                    if (a >= mesh->vertices.size() || b >= mesh->vertices.size() ||
-                        c >= mesh->vertices.size())
-                    {
-                        continue;
-                    }
-                    triangle t{
-                        transform(mesh->vertices[a].position),
-                        transform(mesh->vertices[b].position),
-                        transform(mesh->vertices[c].position),
-                        instance.id,
-                        std::uint32_t(i / 3)
-                    };
-                    triangles.push_back(t);
-                    boxes.push_back(
-                        {{std::min({t.a.x, t.b.x, t.c.x}),
-                          std::min({t.a.y, t.b.y, t.c.y}),
-                          std::min({t.a.z, t.b.z, t.c.z})},
-                         {std::max({t.a.x, t.b.x, t.c.x}),
-                          std::max({t.a.y, t.b.y, t.c.y}),
-                          std::max({t.a.z, t.b.z, t.c.z})}}
-                    );
-                }
-            }
-            index.append(boxes);
-        }
-
-        hit trace(vec3 origin, vec3 direction, float range) const
-        {
-            using namespace vk::util::math;
-            hit nearest;
-            float distance = range;
-            const auto end = origin + direction * range;
-            const spatial::bounds region{
-                {std::min(origin.x, end.x), std::min(origin.y, end.y), std::min(origin.z, end.z)},
-                {std::max(origin.x, end.x), std::max(origin.y, end.y), std::max(origin.z, end.z)}
-            };
-            index.query(
-                region,
-                [&](std::uint32_t id)
-                {
-                    const auto& t = triangles[id];
-                    const auto edge1 = t.b - t.a, edge2 = t.c - t.a;
-                    const auto h = cross(direction, edge2);
-                    const float determinant = dot(edge1, h);
-                    if (std::abs(determinant) < 1e-7f)
-                    {
-                        return;
-                    }
-                    const float inverse = 1.0f / determinant;
-                    const auto s = origin - t.a;
-                    const float u = inverse * dot(s, h);
-                    if (u < 0 || u > 1)
-                    {
-                        return;
-                    }
-                    const auto q = cross(s, edge1);
-                    const float v = inverse * dot(direction, q);
-                    if (v < 0 || u + v > 1)
-                    {
-                        return;
-                    }
-                    const float d = inverse * dot(edge2, q);
-                    if (d < 0.0001f || d >= distance)
-                    {
-                        return;
-                    }
-                    distance = d;
-                    auto normal = normalize(cross(edge1, edge2));
-                    if (dot(normal, direction) > 0)
-                    {
-                        normal = normal * -1.0f;
-                    }
-                    nearest = {true, origin + direction * d, normal, t.instance, t.index};
-                }
-            );
-            return nearest;
-        }
     };
+
+    inline void append(world& data,const std::vector<scene::mesh>& meshes,
+                       const std::vector<scene::instance>& instances) {
+        using namespace vk::util::math;
+        std::vector<spatial::bounds> boxes;
+        for(const auto& instance:instances) {
+            const auto mesh=std::find_if(meshes.begin(),meshes.end(),
+                [&](const scene::mesh& m){return m.id==instance.mesh_id;});
+            if(mesh==meshes.end())continue;
+            const auto transform=[&](vec3 p) {
+                return instance.pose.position+rotate(instance.pose.rotation,
+                    {p.x*instance.pose.scale.x,p.y*instance.pose.scale.y,
+                     p.z*instance.pose.scale.z});
+            };
+            for(std::size_t i=0;i+2<mesh->indices.size();i+=3) {
+                const auto a=mesh->indices[i],b=mesh->indices[i+1],c=mesh->indices[i+2];
+                if(a>=mesh->vertices.size()||b>=mesh->vertices.size()||
+                   c>=mesh->vertices.size())continue;
+                triangle t{transform(mesh->vertices[a].position),
+                    transform(mesh->vertices[b].position),
+                    transform(mesh->vertices[c].position),
+                    instance.id,std::uint32_t(i/3)};
+                data.triangles.push_back(t);
+                boxes.push_back({{
+                    std::min({t.a.x,t.b.x,t.c.x}),
+                    std::min({t.a.y,t.b.y,t.c.y}),
+                    std::min({t.a.z,t.b.z,t.c.z})},{
+                    std::max({t.a.x,t.b.x,t.c.x}),
+                    std::max({t.a.y,t.b.y,t.c.y}),
+                    std::max({t.a.z,t.b.z,t.c.z})}});
+            }
+        }
+        data.index.append(boxes);
+    }
+
+    inline hit trace(const world& data,vec3 origin,vec3 direction,float range) {
+        using namespace vk::util::math;
+        hit nearest{};
+        float distance=range;
+        const auto end=origin+direction*range;
+        const spatial::bounds region{{
+            std::min(origin.x,end.x),std::min(origin.y,end.y),std::min(origin.z,end.z)},{
+            std::max(origin.x,end.x),std::max(origin.y,end.y),std::max(origin.z,end.z)}};
+        data.index.query(region,[&](std::uint32_t id) {
+            const auto& t=data.triangles[id];
+            const auto edge1=t.b-t.a,edge2=t.c-t.a;
+            const auto h=cross(direction,edge2);
+            const float determinant=dot(edge1,h);
+            if(std::abs(determinant)<1e-7f)return;
+            const float inverse=1.f/determinant;
+            const auto s=origin-t.a;
+            const float u=inverse*dot(s,h);
+            if(u<0||u>1)return;
+            const auto q=cross(s,edge1);
+            const float v=inverse*dot(direction,q);
+            if(v<0||u+v>1)return;
+            const float d=inverse*dot(edge2,q);
+            if(d<.0001f||d>=distance)return;
+            distance=d;
+            auto normal=normalize(cross(edge1,edge2));
+            if(dot(normal,direction)>0)normal=normal*-1.f;
+            nearest={true,origin+direction*d,normal,t.instance,t.index};
+        });
+        return nearest;
+    }
 } // namespace weapon
 
 
@@ -1159,7 +1086,7 @@ int main(int argc, char** argv)
             if (result != ::weapon::result::fired)
                 return ::weapon::hit{};
 
-            return event.world.trace(
+            return ::weapon::trace(event.world,
                 event.player.position,
                 weapon::direction(
                     event.command.yaw,
@@ -2716,7 +2643,7 @@ namespace srv::application
         {
             throw std::runtime_error("Register weapons before init");
         }
-        get()->weapons.add(std::move(definition));
+        ::weapon::add(get()->weapons,std::move(definition));
     }
 
     void on_weapon_command(weapon_command_handler handler)
@@ -2760,7 +2687,7 @@ namespace srv::application
         session::init();
         get()->colliders = player::build_colliders(get()->scene);
         get()->collision_index = player::build_index(get()->colliders);
-        get()->weapon_world.append(get()->scene.meshes, get()->scene.instances);
+        ::weapon::append(get()->weapon_world,get()->scene.meshes, get()->scene.instances);
         generation_jobs().start(1,64);
         get()->scene_batches = {{net::scene_stream::serialize(get()->scene),true}};
         get()->tick = 0;
@@ -2888,7 +2815,7 @@ namespace srv::application
         }
 
         // Only the new geometry needs collision bounds and a new BVH root.
-        data.weapon_world.append(data.scene.meshes, patch.instances);
+        ::weapon::append(data.weapon_world,data.scene.meshes, patch.instances);
         auto added_colliders = player::build_colliders(data.scene.meshes, patch.instances);
         std::vector<spatial::bounds> boxes;
         boxes.reserve(added_colliders.size());
@@ -3502,7 +3429,7 @@ namespace srv::application
                     {
                         item.state.last_result = ::weapon::result::none;
                     }
-                    const auto* definition = get()->weapons.find(next.weapon_id);
+                    const auto* definition = ::weapon::find(get()->weapons,next.weapon_id);
                     auto owned = std::find_if(
                         client.weapons.begin(),
                         client.weapons.end(),
@@ -3564,7 +3491,7 @@ namespace srv::application
                 }
                 for (auto& owned : client.weapons)
                 {
-                    const auto* definition = get()->weapons.find(owned.id);
+                    const auto* definition = ::weapon::find(get()->weapons,owned.id);
                     if (!definition)
                     {
                         continue;
@@ -3642,7 +3569,7 @@ namespace srv::application
                     client->token = message.token;
                     client->active = true;
                     client->avatar.position = player::parameters().spawn;
-                    for (const auto& definition : get()->weapons.all())
+                    for (const auto& definition : get()->weapons)
                     {
                         client->weapons.push_back(
                             {definition.id, ::weapon::make_state(definition), std::nullopt}
