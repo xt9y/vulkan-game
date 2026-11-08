@@ -222,7 +222,13 @@ namespace clt::postprocess
         gbuffers.reserve(count);
         for(std::uint32_t i=0;i<count;++i)
             gbuffers.push_back(scene_renderer::outputs(i).views);
-        pc::create(pc::configuration{},gbuffers);
+        pc::configuration shaders{};
+        const auto& configured=game::options::get()->graphics;
+        shaders.lighting_shader=configured.lighting_shader;
+        shaders.tonemap_shader=configured.tonemap_shader;
+        shaders.fullscreen_shader=configured.fullscreen_shader;
+        shaders.presentation_shader=configured.presentation_shader;
+        pc::create(shaders,gbuffers);
     }
 
     void synchronize_scene()
