@@ -5,6 +5,7 @@
 #include <jobs/pool.hpp>
 #include "srv/network/session.hpp"
 #include "srv/shared/net/animation.hpp"
+#include "srv/shared/net/editor_light.hpp"
 #include <network/endpoint.hpp>
 #include "srv/shared/net/limits.hpp"
 #include "srv/shared/net/message.hpp"
@@ -40,6 +41,8 @@ namespace srv::application
         }
 
         void receive_messages();
+        void send_editor_lights();
+        void handle_editor_light(const net::endpoint::resource&,const net::editor_light::resource&);
         void send_scene_batches();
         void send_animation_states();
         void send_attachment_events();
@@ -70,6 +73,8 @@ namespace srv::application
     {
         if (get()->initialized) throw std::runtime_error("Cannot replace a running scene");
         get()->scene = std::move(scene);
+        get()->editor_light_versions.assign(get()->scene.lights.size(),1u);
+        get()->editor_light_revision=1;
         get()->scene_configured = true;
     }
 
@@ -358,6 +363,7 @@ namespace srv::application
             receive_messages();
             tick_players();
             tick_weapons();
+            send_editor_lights();
             send_animation_states();
             send_attachment_events();
 
@@ -485,6 +491,8 @@ namespace srv::application
         get()->weapons = {};
         get()->on_weapon_command = {};
         get()->scene = {};
+        get()->editor_light_versions.clear();
+        get()->editor_light_revision=1;
         get()->models.clear();
         get()->scene_configured = false;
         get()->importing.reset();
@@ -501,6 +509,111 @@ namespace srv::application
 
     namespace
     {
+        void handle_editor_light(
+            const net::endpoint::resource& peer,
+            const net::editor_light::resource& command)
+        {
+            // Same authenticated DTLS endpoint/token as movement and weapons.
+            // Editor mutations are accepted only for active connected peers.
+            for(auto& client:session::get()->clients)
+            {
+                if(!client.active || client.token!=command.token ||
+                   !net::endpoint::equal(client.endpoint,peer))
+                    continue;
+
+                const bool duplicate=command.sequence==client.editor_light_sequence;
+                if(!duplicate && (!net::message::newer(
+                    command.sequence,client.editor_light_sequence) ||
+                    (client.editor_light_sequence &&
+                     command.sequence-client.editor_light_sequence>256u)))
+                    return;
+
+                if(!duplicate)
+                {
+                    std::uint32_t index=command.index;
+                    if(command.type==net::editor_light::kind::create)
+                    {
+                        if(get()->scene.lights.size()>=64)
+                            return;
+                        index=static_cast<std::uint32_t>(
+                            get()->scene.lights.size());
+                        get()->scene.lights.push_back(command.light);
+                        get()->editor_light_versions.push_back(
+                            ++get()->editor_light_revision);
+                    }
+                    else if(command.type==net::editor_light::kind::edit)
+                    {
+                        if(index>=get()->scene.lights.size())return;
+                        get()->scene.lights[index]=command.light;
+                        get()->editor_light_versions[index]=
+                            ++get()->editor_light_revision;
+                    }
+                    else return;
+                    client.editor_light_sequence=command.sequence;
+                    client.editor_light_index=index;
+
+                    // Publish immediately to every connected viewport.
+                    for(const auto& recipient:session::get()->clients)
+                    {
+                        if(!recipient.active)continue;
+                        net::editor_light::resource changed{};
+                        changed.type=net::editor_light::kind::state;
+                        changed.token=recipient.token;
+                        changed.index=index;
+                        changed.sequence=get()->editor_light_versions[index];
+                        changed.revision=changed.sequence;
+                        changed.light=get()->scene.lights[index];
+                        const auto bytes=net::editor_light::encode(changed);
+                        net::secure::send(get()->socket,recipient.endpoint,
+                                          bytes.data(),bytes.size());
+                    }
+                    std::clog<<"srv: editor light "<<index
+                             <<(command.type==net::editor_light::kind::create?
+                                " placed":" updated")<<"\n";
+                }
+                if(client.editor_light_index>=get()->scene.lights.size())
+                    return;
+                // Command ACK makes creates idempotent under retransmission.
+                net::editor_light::resource ack{};
+                ack.type=net::editor_light::kind::ack;
+                ack.token=client.token;
+                ack.sequence=client.editor_light_sequence;
+                ack.index=client.editor_light_index;
+                ack.revision=get()->editor_light_versions[ack.index];
+                ack.light=get()->scene.lights[ack.index];
+                const auto bytes=net::editor_light::encode(ack);
+                net::secure::send(get()->socket,peer,bytes.data(),bytes.size());
+                client.last_seen=clock::now();
+                return;
+            }
+        }
+
+        void send_editor_lights()
+        {
+            // A small periodic authoritative refresh recovers lost UDP
+            // notifications and brings late joiners up to date. No meshes
+            // or scene data are reserialized.
+            if(get()->tick%60u!=0u)return;
+            for(const auto& client:session::get()->clients)
+            {
+                if(!client.active)continue;
+                for(std::size_t i=0;i<get()->scene.lights.size();++i)
+                {
+                    net::editor_light::resource update{};
+                    update.type=net::editor_light::kind::state;
+                    update.token=client.token;
+                    update.index=static_cast<std::uint32_t>(i);
+                    update.sequence=i<get()->editor_light_versions.size() ?
+                        get()->editor_light_versions[i]:1;
+                    update.revision=update.sequence;
+                    update.light=get()->scene.lights[i];
+                    const auto bytes=net::editor_light::encode(update);
+                    net::secure::send(get()->socket,client.endpoint,
+                                      bytes.data(),bytes.size());
+                }
+            }
+        }
+
         void receive_messages()
         {
             // One extra byte ensures oversized datagrams can never look like valid packets after
@@ -523,6 +636,13 @@ namespace srv::application
 
                 if(get()->scene_transport->accept(peer,buffer.data(),*size,clock::now()))
                     continue;
+                if(const auto editor_command=net::editor_light::decode(buffer.data(),*size))
+                {
+                    if(editor_command->type==net::editor_light::kind::create ||
+                       editor_command->type==net::editor_light::kind::edit)
+                        handle_editor_light(peer,*editor_command);
+                    continue;
+                }
                 if (const auto command = net::weapon::decode_command(buffer.data(), *size))
                 {
                     handle_weapon(peer, *command);
