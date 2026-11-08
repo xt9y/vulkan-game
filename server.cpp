@@ -1,98 +1,14 @@
-// Amalgamated original full-feature Vulkan game server.
-// No references to game-local headers or compilation of clt/srv files.
-// Preserves original fastgltf and Ozz asset/animation paths.
+// Shared data/code lives once here; client.cpp includes it with VULKAN_GAME_SHARED_ONLY.
 
-// [server.cpp]
+// [weapons.cpp]
 
-// [srv/app/application.hpp]
+// [weapons.hpp]
 
 
-// [srv/game/options.hpp]
-
-#include "util/math/vector.hpp"
-#include <cstdint>
-#include <string>
-
-namespace game::options
-{
-    enum class mode { server_only, client_only };
-    enum class gbuffer_precision { unspecified, rgba8, rgba16f };
-    enum class surface_format { unspecified, bgra8_srgb, rgba8_srgb };
-    enum class depth_precision { unspecified, d32, d16 };
-    enum class presentation { unspecified, fifo, mailbox, immediate };
-
-    struct client_graphics
-    {
-        int width, height;
-        std::string title, vertex_shader, fragment_shader;
-        gbuffer_precision gbuffer;
-        surface_format surface;
-        depth_precision depth;
-        presentation present;
-        std::string culling_shader, lighting_shader, tonemap_shader;
-        std::string fullscreen_shader, presentation_shader;
-        float exposure;
-    };
-
-    struct state
-    {
-        options::mode mode;
-        std::string host, bind_host;
-        std::uint16_t port;
-        double duration;
-        bool headless, help;
-        client_graphics graphics;
-    };
-
-    state* get();
-    void init(int argc, char** argv, mode selected_mode, state configured);
-    void print_help();
-    void shutdown();
-} // namespace game::options
+// [srv/shared/weapon/gun.hpp]
 
 
-
-// [srv/shared/net/animation.hpp]
-
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <optional>
-
-namespace net::animation
-{
-    // Repeated 10 Hz authoritative animation state, not skeleton poses.
-    struct resource
-    {
-        std::uint32_t token = 0;
-        std::uint32_t server_tick = 0;
-        std::uint32_t instance_id = 0;
-        std::uint32_t clip = 0;
-        std::uint32_t start_tick = 0;
-        std::uint32_t overlay = UINT32_MAX;
-        std::uint32_t mask_root = UINT32_MAX;
-        float blend = 0;
-    };
-
-    struct attachment_event
-    {
-        std::uint32_t token = 0;
-        std::uint32_t tick = 0;
-        std::uint32_t sequence = 0;
-        std::uint32_t instance_id = 0;
-        std::uint32_t joint = 0;
-        std::uint32_t kind = 0;
-    };
-
-    using event_packet = std::array<std::uint8_t, 28>;
-    event_packet encode_event(const attachment_event& event);
-    std::optional<attachment_event> decode_event(const std::uint8_t* bytes, std::size_t size);
-
-    using packet = std::array<std::uint8_t, 40>;
-    packet encode(const resource& state);
-    std::optional<resource> decode(const std::uint8_t* data, std::size_t bytes);
-} // namespace net::animation
-
+// [srv/shared/weapon/weapon.hpp]
 
 
 // [srv/shared/net/message.hpp]
@@ -127,16 +43,6 @@ namespace net::message
     std::optional<resource> decode(const std::uint8_t* data, std::size_t size);
     bool newer(std::uint32_t sequence, std::uint32_t previous);
 } // namespace net::message
-
-
-#include <network/secure.hpp>
-#include <network/endpoint.hpp>
-#include <network/session.hpp>
-
-// [srv/shared/net/weapon.hpp]
-
-
-// [srv/shared/weapon/weapon.hpp]
 
 
 
@@ -617,233 +523,6 @@ namespace weapon
 
 
 
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <optional>
-
-namespace net::weapon
-{
-    using action = ::weapon::action;
-    using result = ::weapon::result;
-    using reload_phase = ::weapon::reload_phase;
-
-    struct command
-    {
-        std::uint32_t token = 0, sequence = 0;
-        action kind = action::fire;
-        float yaw = 0, pitch = 0;
-        std::uint32_t weapon_id = 0;
-    };
-
-    struct snapshot
-    {
-        std::uint32_t token = 0, sequence = 0, tick = 0;
-        std::uint32_t magazine = 0, reserve = 0;
-        reload_phase reload = reload_phase::none;
-        result outcome = result::none;
-        float reload_elapsed = 0, reload_duration = 0, refill_time = 0;
-        std::uint32_t weapon_id = 0;
-        std::uint32_t active_weapon_id = 0;
-    };
-
-    struct shot
-    {
-        snapshot state;
-        ::weapon::hit impact;
-    };
-
-    using command_packet = std::array<std::uint8_t, 32>;
-    using snapshot_packet = std::array<std::uint8_t, 56>;
-    using shot_packet = std::array<std::uint8_t, 92>;
-    command_packet encode_command(const command& value);
-    std::optional<command> decode_command(const std::uint8_t* bytes, std::size_t size);
-    snapshot_packet encode_snapshot(const snapshot& value);
-    std::optional<snapshot> decode_snapshot(const std::uint8_t* bytes, std::size_t size);
-    shot_packet encode_shot(const shot& value);
-    std::optional<shot> decode_shot(const std::uint8_t* bytes, std::size_t size);
-} // namespace net::weapon
-
-
-
-// [srv/shared/player/movement.hpp]
-
-
-#include <spatial/index.hpp>
-
-#include <cstdint>
-#include <vector>
-
-namespace player
-{
-    enum button : std::uint32_t {
-        forward = 1u << 0,
-        backward = 1u << 1,
-        left = 1u << 2,
-        right = 1u << 3,
-        sprint = 1u << 4
-    };
-
-    inline constexpr std::uint32_t valid_buttons = 31;
-
-    struct input {
-        std::uint32_t sequence = 0;
-        std::uint32_t buttons = 0;
-        float yaw = 0;
-    };
-
-    struct parameters_t {
-        vk::util::math::vec3 spawn;
-        float walk_speed, sprint_speed, gravity, radius, height;
-    };
-
-    void configure(parameters_t values);
-    const parameters_t& parameters();
-
-    struct state {
-        vk::util::math::vec3 position{};
-        vk::util::math::vec3 velocity{};
-        bool grounded = false;
-    };
-
-    struct box {
-        vk::util::math::vec3 min;
-        vk::util::math::vec3 max;
-    };
-
-    using collision_world = std::vector<box>;
-    
-    spatial::index build_index(const collision_world& world);
-    collision_world build_colliders(const ::scene::state& scene);
-    collision_world build_colliders(
-        const std::vector<::scene::mesh>& meshes,
-        const std::vector<::scene::instance>& instances
-    );
-    void step(state& player, const input& input, const collision_world& world, const spatial::index* broadphase = nullptr);
-} // namespace player
-
-
-
-
-
-#include <cstddef>
-#include <filesystem>
-#include <functional>
-#include <memory>
-#include <string>
-#include <vector>
-
-namespace srv::application
-{
-    struct model_request
-    {
-        std::filesystem::path path;
-        ::scene::transform pose;
-        std::uint32_t animation;
-    };
-
-    struct weapon_command_context
-    {
-        const net::weapon::command& command;
-        const ::weapon::definition& definition;
-        ::weapon::state& state;
-        const ::player::state& player;
-        double now;
-        const ::weapon::world& world;
-    };
-
-    using weapon_command_handler = std::function<::weapon::hit(weapon_command_context&)>;
-
-    struct state
-    {
-        game::options::state options;
-        net::secure::resource socket;
-        std::unique_ptr<net::session> scene_transport;
-        scene::state scene;
-        // Live authoritative point-light versions for editor replication.
-        std::vector<std::uint32_t> editor_light_versions;
-        std::uint32_t editor_light_revision=1;
-        std::vector<model_request> models;
-        bool scene_configured = false;
-        std::shared_ptr<scene::state> importing;
-        std::size_t next_texture = 0;
-        std::size_t next_skin = 0;
-        std::size_t next_mesh = 0;
-        std::size_t next_instance = 0;
-        std::size_t animation_cursor = 0;
-        struct pending_event { net::animation::attachment_event event; std::uint32_t repeats = 3; };
-        std::vector<pending_event> attachment_events;
-        std::uint32_t next_event = 0;
-        player::collision_world colliders;
-        ::weapon::world weapon_world;
-        ::weapon::registry weapons;
-        weapon_command_handler on_weapon_command;
-        std::function<bool(const net::endpoint::resource&)> editor_permission;
-        spatial::index collision_index;
-        struct batch {
-            std::vector<std::uint8_t> bytes;
-            bool final=false;
-        };
-        std::vector<batch> scene_batches;
-        std::uint32_t tick = 0;
-        bool initialized = false;
-    };
-
-    state* get();
-    // The game defines both its initial scene and model imports before init().
-    void set_scene(::scene::state scene);
-    void load_model(std::filesystem::path path, ::scene::transform pose,
-                    std::uint32_t animation);
-    // Register game rules and receive authenticated, owned, equipped weapon commands.
-    void add_weapon(::weapon::definition definition);
-    void on_weapon_command(weapon_command_handler handler);
-    // No client can change the level unless this policy explicitly permits it.
-    void on_editor_permission(std::function<bool(const net::endpoint::resource&)> handler);
-    void init();
-    // Publish append-only mesh/instance batches; called on the server thread.
-    // Background jobs return a completion that invokes append_scene().
-    void begin_stream();
-    void append_scene(::scene::state patch, bool final = false);
-    // Call on the authoritative server tick (not from an import worker).
-    bool play_animation(std::uint32_t instance_id, std::uint32_t clip,
-                        std::uint32_t overlay = UINT32_MAX, float blend = 0.0f,
-                        std::uint32_t mask_root = UINT32_MAX);
-    // Send a named game effect at a skeleton socket; replicated to clients.
-    bool emit_attachment_event(std::uint32_t instance_id, std::uint32_t joint,
-                               std::uint32_t kind);
-    int run();
-    void shutdown() noexcept;
-} // namespace srv::application
-
-
-
-// [srv/game/application.hpp]
-
-#include <atomic>
-
-namespace game::application
-{
-    struct state
-    {
-        std::atomic<bool> stop{false};
-    };
-
-    state* get();
-} // namespace game::application
-
-
-
-#include <network/socket.hpp>
-
-
-
-// [weapons.hpp]
-
-
-// [srv/shared/weapon/gun.hpp]
-
-
-
 #include <cstdint>
 #include <filesystem>
 #include <map>
@@ -915,234 +594,6 @@ namespace game_weapons
     std::vector<::weapon::gun> all();
 }
 
-
-
-#include <algorithm>
-#include <array>
-#include <cstdint>
-#include <atomic>
-#include <csignal>
-#include <exception>
-#include <iostream>
-#include <limits>
-#include <stdexcept>
-#include <utility>
-
-namespace
-{
-    void quad(::scene::mesh& mesh, vk::util::math::vec3 a, vk::util::math::vec3 b, vk::util::math::vec3 c, vk::util::math::vec3 d, vk::util::math::vec3 normal)
-    {
-        const auto base = static_cast<std::uint32_t>(mesh.vertices.size());
-
-        mesh.vertices.push_back({a, normal, 0, 0});
-        mesh.vertices.push_back({b, normal, 1, 0});
-        mesh.vertices.push_back({c, normal, 1, 1});
-        mesh.vertices.push_back({d, normal, 0, 1});
-
-        mesh.indices.insert(mesh.indices.end(), {
-            base, base + 1, base + 2,
-            base, base + 2, base + 3,
-        });
-    }
-
-    ::scene::mesh make_rect(std::uint32_t id, float x, float y, float z,
-                            std::array<float, 4> color, float roughness = 0.85f)
-    {
-        ::scene::mesh mesh;
-        mesh.id = id;
-        mesh.surface.base_color = color;
-        mesh.surface.roughness = roughness;
-    
-        quad(mesh, {-x, -y,  z}, { x, -y,  z}, { x,  y,  z}, {-x,  y,  z}, { 0,  0,  1});
-        quad(mesh, { x, -y, -z}, {-x, -y, -z}, {-x,  y, -z}, { x,  y, -z}, { 0,  0, -1});
-        quad(mesh, {-x, -y, -z}, {-x, -y,  z}, {-x,  y,  z}, {-x,  y, -z}, {-1,  0,  0});
-        quad(mesh, { x, -y,  z}, { x, -y, -z}, { x,  y, -z}, { x,  y,  z}, { 1,  0,  0});
-        quad(mesh, {-x,  y,  z}, { x,  y,  z}, { x,  y, -z}, {-x,  y, -z}, { 0,  1,  0});
-        quad(mesh, {-x, -y, -z}, { x, -y, -z}, { x, -y,  z}, {-x, -y,  z}, { 0, -1,  0});
-    
-        return mesh;
-    }
-
-    void place(::scene::state& initial_scene,std::uint32_t id,
-               std::uint32_t mesh,vk::util::math::vec3 position)
-    {
-        ::scene::instance object{};
-        object.id = id;
-        object.mesh_id = mesh;
-        object.pose.position = position;
-
-        // World collision bounds follow actual transformed scene vertices.
-        const auto geometry = std::find_if(
-            initial_scene.meshes.begin(), initial_scene.meshes.end(),
-            [mesh](const ::scene::mesh& item) { return item.id == mesh; });
-        if (geometry == initial_scene.meshes.end())
-            throw std::runtime_error("No mesh for scene collision bounds");
-
-        ::scene::collision_box bounds{};
-        const auto infinity = std::numeric_limits<float>::infinity();
-        bounds.minimum = { infinity, infinity, infinity };
-        bounds.maximum = {-infinity,-infinity,-infinity };
-        for (const auto& vertex : geometry->vertices)
-        {
-            const auto& p = vertex.position;
-            const auto& scale = object.pose.scale;
-            const auto local = vk::util::math::vec3{
-                p.x * scale.x, p.y * scale.y, p.z * scale.z
-            };
-            const auto rotated = vk::util::math::rotate(
-                object.pose.rotation, local);
-            const auto world = position + rotated;
-            bounds.minimum.x = std::min(bounds.minimum.x, world.x);
-            bounds.minimum.y = std::min(bounds.minimum.y, world.y);
-            bounds.minimum.z = std::min(bounds.minimum.z, world.z);
-            bounds.maximum.x = std::max(bounds.maximum.x, world.x);
-            bounds.maximum.y = std::max(bounds.maximum.y, world.y);
-            bounds.maximum.z = std::max(bounds.maximum.z, world.z);
-        }
-        initial_scene.instances.push_back(object);
-        initial_scene.collision_boxes.push_back(bounds);
-    }
-
-    // Define level geometry, instances, imported models and lights here.
-    ::scene::state make_level()
-    {
-        ::scene::state initial_scene;
-        // Checker floor with three white cubes; no surrounding test walls.
-        // Floor surface stays at y=0 for gameplay collisions.
-
-        auto floor=make_rect(1,10.f,.1f,10.f,{1.f,1.f,1.f,1.f});
-        floor.surface.procedural_pattern=1;
-        auto cube=make_rect(2,.5f,.5f,.5f,{1.f,1.f,1.f,1.f});
-        initial_scene.meshes.push_back(std::move(floor));
-        initial_scene.meshes.push_back(std::move(cube));
-        place(initial_scene,1,1, {0, -0.1f, 0});
-        place(initial_scene,2,2, {-2.f, .5f, 0});
-        place(initial_scene,3,2, {0, .5f, 0});
-        place(initial_scene,4,2, {2.f, .5f, 0});
-        // Imported models: path, world position/scale, animation clip.
-        ::scene::transform mermaid{};
-        mermaid.position = {0.0f,1.0f,0.5f/3.0f};
-        mermaid.scale = {1.5f,1.5f,1.5f};
-        srv::application::load_model("assets/mermaid/mermaid.glb", mermaid, 0);
-
-        // Level-authored lights: position, radius, RGB, intensity.
-        // Keep the example light in view from the default player spawn,
-        // so its Hell2024 LIGHT label is immediately selectable in ? mode.
-        initial_scene.lights.push_back({
-            {0.0f,3.0f,1.0f},6.0f,{1.0f,0.5f,0.2f},4.0f
-        });
-
-        return initial_scene;
-    }
-
-    void stop(int)
-    {
-        game::application::get()->stop.store(true, std::memory_order_relaxed);
-    }
-}
-
-int main(int argc, char** argv)
-{
-    try
-    {
-        game::options::state settings{};
-        settings.bind_host = "0.0.0.0";
-        settings.port = 27015;
-        settings.duration = 0;
-        settings.headless = false;
-        settings.help = false;
-        game::options::init(argc, argv, game::options::mode::server_only,
-                            std::move(settings));
-        if (game::options::get()->help)
-        {
-            game::options::print_help();
-            return 0;
-        }
-
-        player::configure({
-            {0, 0, 4}, // spawn
-            4.0f,      // walking speed
-            14.0f,     // sprint speed
-            20.0f,     // gravity
-            0.3f,      // player radius (collision width)
-            1.8f       // player height (collision and camera)
-        });
-
-        // One game-authored gun profile supplies both the server's
-        // authoritative rules and the client's models, controls and clips.
-        for(const auto& gun:game_weapons::all())
-            srv::application::add_weapon(gun.rules);
-        srv::application::on_weapon_command(
-        [](srv::application::weapon_command_context& event)
-        {
-            const auto result = ::weapon::apply(
-                event.state,
-                event.command.sequence,
-                event.command.kind,
-                event.now,
-                event.definition
-            );
-
-            if (result != ::weapon::result::fired)
-                return ::weapon::hit{};
-
-            return ::weapon::trace(event.world,
-                event.player.position,
-                weapon::direction(
-                    event.command.yaw,
-                    event.command.pitch
-                ),
-                event.definition.range
-            );
-        });
-
-        net::socket::init();
-        std::signal(SIGINT, stop);
-        std::signal(SIGTERM, stop);
-        srv::application::set_scene(make_level());
-        // The level editor is a developer-only operation. Only local DTLS
-        // clients may change this server's lights; other peers can observe
-        // the replicated results but cannot mutate the world.
-        srv::application::on_editor_permission(
-            [](const net::endpoint::resource& peer)
-            {
-                if(peer.address.ss_family==AF_INET)
-                {
-                    const auto* address=
-                        reinterpret_cast<const sockaddr_in*>(&peer.address);
-                    const auto* octets=reinterpret_cast<const unsigned char*>(
-                        &address->sin_addr);
-                    return octets[0]==127; // 127.0.0.0/8
-                }
-                if(peer.address.ss_family==AF_INET6)
-                {
-                    const auto* address=
-                        reinterpret_cast<const sockaddr_in6*>(&peer.address);
-                    return IN6_IS_ADDR_LOOPBACK(&address->sin6_addr)!=0;
-                }
-                return false;
-            });
-
-        srv::application::init();
-        const int result = srv::application::run();
-        srv::application::shutdown();
-        net::socket::shutdown();
-        game::options::shutdown();
-        return result;
-    }
-    catch (const std::exception& e)
-    {
-        srv::application::shutdown();
-        net::socket::shutdown();
-        game::options::shutdown();
-        std::cerr << "vulkan-server: " << e.what() << '\n';
-        return 1;
-    }
-}
-
-
-
-// [weapons.cpp]
 
 
 // [srv/shared/weapon/metadata.hpp]
@@ -1419,8 +870,6 @@ namespace srv::assets
 } // namespace srv::assets
 
 
-
-#undef STB_IMAGE_IMPLEMENTATION
 
 // [srv/assets/model.cpp]
 
@@ -2006,84 +1455,680 @@ namespace srv::assets
 
 
 
-// [srv/app/application.cpp]
+// [srv/shared/net/animation.cpp]
+
+// [srv/shared/net/animation.hpp]
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+
+namespace net::animation {
+    packet encode(const resource& state) {
+        packet p{'A','N','I','M'};
+        net::movement::detail::fields(p.data()+4,1u,state.token,state.server_tick,
+            state.instance_id,state.clip,state.start_tick,state.overlay,
+            state.mask_root,state.blend);
+        return p;
+    }
+    std::optional<resource> decode(const std::uint8_t* p,std::size_t n) {
+        if(!p||n!=packet{}.size()||p[0]!='A'||p[1]!='N'||
+           p[2]!='I'||p[3]!='M'||net::movement::detail::get(p+4)!=1u)
+            return std::nullopt;
+        resource v{};
+        net::movement::detail::fields(p+8,v.token,v.server_tick,v.instance_id,
+            v.clip,v.start_tick,v.overlay,v.mask_root,v.blend);
+        if(!v.token||!v.instance_id||!std::isfinite(v.blend)||
+           v.blend<0||v.blend>1)return std::nullopt;
+        return v;
+    }
+    event_packet encode_event(const attachment_event& e) {
+        event_packet p{'E','V','N','T'};
+        net::movement::detail::fields(p.data()+4,e.token,e.tick,e.sequence,
+            e.instance_id,e.joint,e.kind);
+        return p;
+    }
+    std::optional<attachment_event> decode_event(const std::uint8_t* p,std::size_t n) {
+        if(!p||n!=event_packet{}.size()||p[0]!='E'||p[1]!='V'||
+           p[2]!='N'||p[3]!='T')return std::nullopt;
+        attachment_event v{};
+        net::movement::detail::fields(p+4,v.token,v.tick,v.sequence,
+            v.instance_id,v.joint,v.kind);
+        if(!v.token||!v.instance_id||!v.sequence)return std::nullopt;
+        return v;
+    }
+} // namespace net::animation
 
 
 
+#include <cmath>
+#include <cstring>
 
-#include <jobs/pool.hpp>
-
-// [srv/network/session.hpp]
-
-#include <network/endpoint.hpp>
-
-
-
-#include <chrono>
-#include <deque>
-#include <vector>
-
-namespace srv::session
+namespace net::animation
 {
-    struct resource
+    namespace
     {
-        net::endpoint::resource endpoint;
-        std::uint32_t token = 0;
-        std::uint32_t last_sequence = 0;
-        bool has_sequence = false;
-        bool active = false;
-        std::chrono::steady_clock::time_point last_seen;
-        ::player::state avatar;
-
-        struct owned_weapon
+        void write(std::uint8_t* out, std::uint32_t value)
         {
-            std::uint32_t id = 0;
-            ::weapon::state state;
-            std::optional<net::weapon::snapshot> published;
-        };
+            out[0] = std::uint8_t(value >> 24);
+            out[1] = std::uint8_t(value >> 16);
+            out[2] = std::uint8_t(value >> 8);
+            out[3] = std::uint8_t(value);
+        }
 
-        std::vector<owned_weapon> weapons;
-        std::uint32_t active_weapon = 0;
-        std::uint32_t weapon_sequence = 0;
-        std::deque<net::weapon::command> weapon_commands;
-        // Independent idempotent sequence for the DTLS editor channel.
-        std::uint32_t editor_light_sequence=0;
-        std::uint32_t editor_light_index=UINT32_MAX;
-
-        struct pending_shot
+        std::uint32_t read(const std::uint8_t* in)
         {
-            net::weapon::shot value;
-            std::uint32_t repeats = 3;
-        };
+            return (std::uint32_t(in[0]) << 24) |
+                (std::uint32_t(in[1]) << 16) |
+                (std::uint32_t(in[2]) << 8) | std::uint32_t(in[3]);
+        }
+    }
 
-        std::deque<pending_shot> shots;
-        std::optional<net::weapon::shot> last_shot;
-        std::deque<::player::input> inputs;
-        std::uint32_t processed_input = 0;
-        std::uint32_t scene_request = 0;
-        bool scene_pending = false;
-        std::uint32_t queued_scene_batch=UINT32_MAX;
-        std::chrono::steady_clock::time_point queued_scene_at{};
-    };
-
-    struct state
+    packet encode(const resource& state)
     {
-        std::vector<resource> clients;
-    };
+        packet bytes{};
+        bytes[0] = 'A';
+        bytes[1] = 'N';
+        bytes[2] = 'I';
+        bytes[3] = 'M';
+        write(bytes.data() + 4, 1);
+        write(bytes.data() + 8, state.token);
+        write(bytes.data() + 12, state.server_tick);
+        write(bytes.data() + 16, state.instance_id);
+        write(bytes.data() + 20, state.clip);
+        write(bytes.data() + 24, state.start_tick);
+        write(bytes.data() + 28, state.overlay);
+        write(bytes.data() + 32, state.mask_root);
+        std::uint32_t bits = 0;
+        std::memcpy(&bits, &state.blend, sizeof(bits));
+        write(bytes.data() + 36, bits);
+        return bytes;
+    }
 
-    state* get();
-    void init();
-    void expire(std::chrono::steady_clock::time_point now);
-    void shutdown();
-} // namespace srv::session
+    std::optional<resource> decode(const std::uint8_t* bytes, std::size_t size)
+    {
+        if (!bytes || size != packet{}.size() ||
+            bytes[0] != 'A' || bytes[1] != 'N' ||
+            bytes[2] != 'I' || bytes[3] != 'M' ||
+            read(bytes + 4) != 1)
+            return std::nullopt;
+
+        resource result;
+        result.token = read(bytes + 8);
+        result.server_tick = read(bytes + 12);
+        result.instance_id = read(bytes + 16);
+        result.clip = read(bytes + 20);
+        result.start_tick = read(bytes + 24);
+        result.overlay = read(bytes + 28);
+        result.mask_root = read(bytes + 32);
+        const auto bits = read(bytes + 36);
+        std::memcpy(&result.blend, &bits, sizeof(result.blend));
+        if (!result.token || !result.instance_id ||
+            !std::isfinite(result.blend) ||
+            result.blend < 0 || result.blend > 1)
+            return std::nullopt;
+        return result;
+    }
+    event_packet encode_event(const attachment_event& event)
+    {
+        event_packet bytes{};
+        bytes[0] = 'E';
+        bytes[1] = 'V';
+        bytes[2] = 'N';
+        bytes[3] = 'T';
+        write(bytes.data() + 4, event.token);
+        write(bytes.data() + 8, event.tick);
+        write(bytes.data() + 12, event.sequence);
+        write(bytes.data() + 16, event.instance_id);
+        write(bytes.data() + 20, event.joint);
+        write(bytes.data() + 24, event.kind);
+        return bytes;
+    }
+
+    std::optional<attachment_event> decode_event(const std::uint8_t* bytes,
+                                                  std::size_t size)
+    {
+        if (!bytes || size != event_packet{}.size() ||
+            bytes[0] != 'E' || bytes[1] != 'V' ||
+            bytes[2] != 'N' || bytes[3] != 'T')
+            return std::nullopt;
+        attachment_event event;
+        event.token = read(bytes + 4);
+        event.tick = read(bytes + 8);
+        event.sequence = read(bytes + 12);
+        event.instance_id = read(bytes + 16);
+        event.joint = read(bytes + 20);
+        event.kind = read(bytes + 24);
+        return event.token && event.instance_id && event.sequence ?
+            std::optional<attachment_event>(event) : std::nullopt;
+    }
+} // namespace net::animation
 
 
 
+// [srv/shared/net/message.cpp]
 
-// [srv/shared/net/editor_light.hpp]
+
+namespace net::message {
+    packet encode(const resource& message) {
+        packet p{'V','G','A','M',1,std::uint8_t(message.type),0,0};
+        net::movement::detail::fields(p.data()+8,
+            message.sequence,message.token,message.value);
+        return p;
+    }
+    std::optional<resource> decode(const std::uint8_t* p,std::size_t size) {
+        if(!p||size!=packet_size||p[0]!='V'||p[1]!='G'||p[2]!='A'||
+           p[3]!='M'||p[4]!=1||p[5]<1||p[5]>6||p[6]||p[7])
+            return std::nullopt;
+        resource v{};
+        v.type=type(p[5]);
+        net::movement::detail::fields(p+8,v.sequence,v.token,v.value);
+        return v;
+    }
+    bool newer(std::uint32_t sequence,std::uint32_t previous) {
+        const auto difference=sequence-previous;
+        return difference!=0&&difference<0x80000000u;
+    }
+} // namespace net::message
+
+
+
+// [srv/shared/net/scene_stream.cpp]
+
+#include <stb_image.h>
+#include <climits>
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <stdexcept>
+#include <utility>
+
+namespace net::scene_stream {
+namespace {
+    using bytes=std::vector<std::uint8_t>;
+    using vec3=vk::util::math::vec3;
+
+    struct cursor {const bytes& data;std::size_t pos;};
+    std::size_t left(const cursor& c) {return c.data.size()-c.pos;}
+
+    void put(bytes& b,std::uint32_t value) {
+        b.push_back(std::uint8_t(value>>24));
+        b.push_back(std::uint8_t(value>>16));
+        b.push_back(std::uint8_t(value>>8));
+        b.push_back(std::uint8_t(value));
+    }
+    void put(bytes& b,float value) {
+        if(!std::isfinite(value))throw std::runtime_error("Non-finite scene value");
+        put(b,std::bit_cast<std::uint32_t>(value));
+    }
+    void put(bytes& b,vec3 value) {
+        put(b,value.x);put(b,value.y);put(b,value.z);
+    }
+    template<class... T>
+    void put_all(bytes& b,const T&... values) {(put(b,values),...);}
+
+    bool take(cursor& c,std::uint32_t& value) {
+        if(left(c)<4)return false;
+        const auto* p=c.data.data()+c.pos;
+        value=(std::uint32_t(p[0])<<24)|(std::uint32_t(p[1])<<16)|
+              (std::uint32_t(p[2])<<8)|std::uint32_t(p[3]);
+        c.pos+=4;
+        return true;
+    }
+    bool take(cursor& c,float& value) {
+        std::uint32_t bits=0;
+        if(!take(c,bits))return false;
+        value=std::bit_cast<float>(bits);
+        return std::isfinite(value);
+    }
+    bool take(cursor& c,vec3& value) {
+        return take(c,value.x)&&take(c,value.y)&&take(c,value.z);
+    }
+    template<class... T>
+    bool take_all(cursor& c,T&... values) {return (take(c,values)&&...);}
+
+    void material_put(bytes& out,const ::scene::material& m) {
+        for(auto x:m.base_color)put(out,x);
+        for(auto x:m.emissive)put(out,x);
+        put_all(out,m.metallic,m.roughness,m.occlusion,m.alpha_cutoff,
+            m.base_color_texture,m.metallic_roughness_texture,
+            m.normal_texture,m.occlusion_texture,m.emissive_texture,
+            m.alpha_mode,std::uint32_t(m.double_sided),m.procedural_pattern);
+    }
+    bool material_take(cursor& in,::scene::material& m) {
+        for(auto& x:m.base_color)if(!take(in,x))return false;
+        for(auto& x:m.emissive)if(!take(in,x))return false;
+        std::uint32_t double_sided=0;
+        if(!take_all(in,m.metallic,m.roughness,m.occlusion,m.alpha_cutoff,
+            m.base_color_texture,m.metallic_roughness_texture,m.normal_texture,
+            m.occlusion_texture,m.emissive_texture,m.alpha_mode,
+            double_sided,m.procedural_pattern))return false;
+        if(double_sided>1||m.alpha_mode>2||m.procedural_pattern>1)return false;
+        m.double_sided=double_sided!=0;
+        return true;
+    }
+    void append(bytes& out,const bytes& src) {
+        out.insert(out.end(),src.begin(),src.end());
+    }
+    std::uint32_t hash(const std::uint8_t* src,std::size_t size) {
+        std::uint32_t result=2166136261u;
+        for(std::size_t i=0;i<size;++i)result=(result^src[i])*16777619u;
+        return result;
+    }
+    bool valid_box(const vec3& a,const vec3& b) {
+        return std::isfinite(a.x)&&std::isfinite(a.y)&&std::isfinite(a.z)&&
+               std::isfinite(b.x)&&std::isfinite(b.y)&&std::isfinite(b.z)&&
+               a.x<b.x&&a.y<b.y&&a.z<b.z;
+    }
+    bool valid_light(const ::scene::point_light& l) {
+        return std::isfinite(l.radius)&&l.radius>0&&
+               std::isfinite(l.strength)&&l.strength>=0&&
+               l.color.x>=0&&l.color.y>=0&&l.color.z>=0;
+    }
+}
+
+std::vector<std::uint8_t> serialize(const ::scene::state& scene) {
+    if(scene.meshes.size()>max_scene_bytes/12 ||
+       scene.instances.size()>max_scene_bytes/48 ||scene.lights.size()>64)
+        throw std::runtime_error("Scene snapshot exceeds maximum batch size");
+    bytes out{'S','C','N','A'};
+    put_all(out,std::uint32_t(scene.meshes.size()),
+        std::uint32_t(scene.instances.size()),std::uint32_t(scene.textures.size()),
+        std::uint32_t(scene.skins.size()),
+        std::uint32_t(scene.collision_boxes.size()),
+        std::uint32_t(scene.lights.size()));
+
+    for(const auto& t:scene.textures) {
+        const bool encoded=!t.encoded.empty();
+        const auto& payload=encoded?t.encoded:t.pixels;
+        const auto raw=std::uint64_t(t.width)*t.height*4u;
+        if(!t.id||!t.width||!t.height||raw>max_scene_bytes-20||
+           (!encoded&&raw!=t.pixels.size())||payload.empty()||
+           payload.size()>max_scene_bytes-20||
+           out.size()+20+payload.size()>max_scene_bytes)
+            throw std::runtime_error("Invalid texture or scene batch too large");
+        put_all(out,t.id,t.width,t.height,std::uint32_t(encoded),
+            std::uint32_t(payload.size()));
+        append(out,payload);
+    }
+
+    for(const auto& skin:scene.skins) {
+        if(!skin.id||skin.skeleton.empty()||skin.inverse_bind.empty()||
+           skin.inverse_bind.size()>1024)
+            throw std::runtime_error("Invalid skeletal asset");
+        put_all(out,skin.id,std::uint32_t(skin.inverse_bind.size()),
+            std::uint32_t(skin.skeleton.size()),std::uint32_t(skin.clips.size()));
+        append(out,skin.skeleton);
+        for(const auto& matrix:skin.inverse_bind)
+            for(float value:matrix)put(out,value);
+        for(const auto& clip:skin.clips) {
+            if(clip.name.size()>255||clip.bytes.empty())
+                throw std::runtime_error("Invalid skeletal animation clip");
+            put(out,std::uint32_t(clip.name.size()));
+            out.insert(out.end(),clip.name.begin(),clip.name.end());
+            put(out,std::uint32_t(clip.bytes.size()));
+            append(out,clip.bytes);
+        }
+        if(out.size()>max_scene_bytes)
+            throw std::runtime_error("Skeletal asset exceeds scene batch budget");
+    }
+
+    for(const auto& m:scene.meshes) {
+        if(m.vertices.empty()||m.indices.empty()||m.indices.size()%3||
+           m.vertices.size()>max_scene_bytes/64||m.indices.size()>max_scene_bytes/4)
+            throw std::runtime_error("Invalid scene mesh");
+        put_all(out,m.id,m.skin_id,std::uint32_t(m.vertices.size()),
+            std::uint32_t(m.indices.size()));
+        material_put(out,m.surface);
+        for(const auto& v:m.vertices) {
+            put_all(out,v.position,v.normal,v.u,v.v);
+            if(m.skin_id) {
+                for(auto joint:v.joints)put(out,joint);
+                for(auto weight:v.weights)put(out,weight);
+            }
+        }
+        for(auto index:m.indices) {
+            if(index>=m.vertices.size())
+                throw std::runtime_error("Scene mesh index out of bounds");
+            put(out,index);
+        }
+        if(out.size()>max_scene_bytes)
+            throw std::runtime_error("Scene snapshot exceeds maximum batch size");
+    }
+
+    for(const auto& i:scene.instances) {
+        put_all(out,i.id,i.mesh_id,i.animation,i.animation_tick,
+            i.overlay_animation,i.overlay_root,i.overlay_weight,
+            i.pose.position,i.pose.scale,i.pose.rotation.x,
+            i.pose.rotation.y,i.pose.rotation.z,i.pose.rotation.w);
+    }
+    for(const auto& b:scene.collision_boxes) {
+        if(!valid_box(b.minimum,b.maximum))
+            throw std::runtime_error("Invalid scene collision bounds");
+        put_all(out,b.minimum,b.maximum);
+    }
+    for(const auto& l:scene.lights) {
+        if(!valid_light(l))throw std::runtime_error("Invalid scene light");
+        put_all(out,l.position,l.radius,l.color,l.strength);
+    }
+    if(out.size()>max_scene_bytes)
+        throw std::runtime_error("Scene snapshot exceeds maximum batch size");
+    return out;
+}
+
+bool deserialize(const std::vector<std::uint8_t>& bytes,::scene::state& scene) {
+    if(bytes.size()<28||bytes.size()>max_scene_bytes||
+       bytes[0]!='S'||bytes[1]!='C'||bytes[2]!='N'||bytes[3]!='A')
+        return false;
+    cursor in{bytes,4};
+    std::uint32_t meshes=0,instances=0,textures=0,skins=0,boxes=0,lights=0;
+    if(!take_all(in,meshes,instances,textures,skins,boxes,lights)||
+       lights>64||lights>left(in)/32||boxes>left(in)/24||
+       textures>left(in)/20||skins>left(in)/16||
+       meshes>left(in)/12||instances>left(in)/48)return false;
+
+    ::scene::state result;
+    result.meshes.reserve(meshes);
+    result.instances.reserve(instances);
+    result.textures.reserve(textures);
+    result.skins.reserve(skins);
+    result.collision_boxes.reserve(boxes);
+    result.lights.reserve(lights);
+
+    for(std::uint32_t i=0;i<textures;++i) {
+        ::scene::texture t;
+        std::uint32_t encoding=0,length=0;
+        if(!take_all(in,t.id,t.width,t.height,encoding,length)||
+           !t.id||!t.width||!t.height||encoding>1||length>left(in)||
+           std::uint64_t(t.width)*t.height*4u>max_scene_bytes-20)return false;
+        if(encoding==0) {
+            if(std::uint64_t(t.width)*t.height*4u!=length)return false;
+            t.pixels.assign(bytes.begin()+in.pos,bytes.begin()+in.pos+length);
+        } else {
+            if(length>INT_MAX||t.width>INT_MAX||t.height>INT_MAX)return false;
+            int w=0,h=0,c=0;
+            auto* p=stbi_load_from_memory(bytes.data()+in.pos,int(length),&w,&h,&c,4);
+            if(!p||w!=int(t.width)||h!=int(t.height)) {
+                stbi_image_free(p);
+                return false;
+            }
+            t.pixels.assign(p,p+std::size_t(w)*h*4u);
+            stbi_image_free(p);
+        }
+        in.pos+=length;
+        result.textures.push_back(std::move(t));
+    }
+
+    for(std::uint32_t i=0;i<skins;++i) {
+        ::scene::skin skin;
+        std::uint32_t joints=0,length=0,clips=0;
+        if(!take_all(in,skin.id,joints,length,clips)||
+           !skin.id||!joints||joints>1024||length>left(in)||
+           std::uint64_t(joints)*64>left(in)-length||
+           clips>max_scene_bytes/8)return false;
+        skin.skeleton.assign(bytes.begin()+in.pos,bytes.begin()+in.pos+length);
+        in.pos+=length;
+        skin.inverse_bind.resize(joints);
+        for(auto& matrix:skin.inverse_bind)
+            for(auto& value:matrix)if(!take(in,value))return false;
+        for(std::uint32_t j=0;j<clips;++j) {
+            std::uint32_t name=0,size=0;
+            if(!take(in,name)||name>255||name>left(in))return false;
+            ::scene::clip clip;
+            clip.name.assign(reinterpret_cast<const char*>(bytes.data()+in.pos),name);
+            in.pos+=name;
+            if(!take(in,size)||!size||size>left(in))return false;
+            clip.bytes.assign(bytes.begin()+in.pos,bytes.begin()+in.pos+size);
+            in.pos+=size;
+            skin.clips.push_back(std::move(clip));
+        }
+        result.skins.push_back(std::move(skin));
+    }
+
+    for(std::uint32_t i=0;i<meshes;++i) {
+        ::scene::mesh mesh;
+        std::uint32_t vertices=0,indices=0;
+        if(!take_all(in,mesh.id,mesh.skin_id,vertices,indices)||
+           !vertices||!indices||indices%3||left(in)<76||
+           std::uint64_t(vertices)*(mesh.skin_id?64u:32u)+
+           std::uint64_t(indices)*4u>left(in)-76)return false;
+        if(!material_take(in,mesh.surface))return false;
+        mesh.vertices.resize(vertices);
+        mesh.indices.resize(indices);
+        for(auto& v:mesh.vertices) {
+            if(!take_all(in,v.position,v.normal,v.u,v.v))return false;
+            if(mesh.skin_id) {
+                for(auto& joint:v.joints)if(!take(in,joint))return false;
+                for(auto& weight:v.weights)
+                    if(!take(in,weight)||weight<0||weight>1)return false;
+            }
+        }
+        for(auto& index:mesh.indices)
+            if(!take(in,index)||index>=vertices)return false;
+        result.meshes.push_back(std::move(mesh));
+    }
+
+    if(instances>left(in)/48)return false;
+    for(std::uint32_t i=0;i<instances;++i) {
+        ::scene::instance item;
+        if(!take_all(in,item.id,item.mesh_id,item.animation,item.animation_tick,
+           item.overlay_animation,item.overlay_root,item.overlay_weight,
+           item.pose.position,item.pose.scale,item.pose.rotation.x,
+           item.pose.rotation.y,item.pose.rotation.z,item.pose.rotation.w)||
+           item.overlay_weight<0||item.overlay_weight>1)return false;
+        result.instances.push_back(std::move(item));
+    }
+    for(std::uint32_t i=0;i<boxes;++i) {
+        ::scene::collision_box b{};
+        if(!take_all(in,b.minimum,b.maximum)||!valid_box(b.minimum,b.maximum))
+            return false;
+        result.collision_boxes.push_back(b);
+    }
+    for(std::uint32_t i=0;i<lights;++i) {
+        ::scene::point_light l{};
+        if(!take_all(in,l.position,l.radius,l.color,l.strength)||!valid_light(l))
+            return false;
+        result.lights.push_back(l);
+    }
+    if(left(in))return false;
+    scene=std::move(result);
+    return true;
+}
+
+std::uint32_t checksum(const std::vector<std::uint8_t>& bytes) {
+    return hash(bytes.data(),bytes.size());
+}
+std::vector<std::uint8_t> encode_batch(const std::vector<std::uint8_t>& bytes,
+                                      std::uint32_t token,std::uint32_t batch,bool final) {
+    if(bytes.empty()||bytes.size()>max_scene_bytes||!token||batch>=65535)
+        throw std::invalid_argument("invalid scene batch");
+    std::vector<std::uint8_t> result{'V','G','S','C',1,std::uint8_t(final),0,0};
+    put_all(result,token,batch,checksum(bytes));
+    append(result,bytes);
+    return result;
+}
+bool decode_batch(const std::vector<std::uint8_t>& bytes,batch_payload& result) {
+    if(bytes.size()<=20||bytes.size()>max_scene_bytes+20||
+       bytes[0]!='V'||bytes[1]!='G'||bytes[2]!='S'||bytes[3]!='C'||
+       bytes[4]!=1||bytes[5]>1||bytes[6]||bytes[7])return false;
+    cursor in{bytes,8};
+    std::uint32_t token=0,batch=0,expected=0;
+    if(!take_all(in,token,batch,expected)||!token||batch>=65535)return false;
+    const auto got=hash(bytes.data()+20,bytes.size()-20);
+    if(expected!=got)return false;
+    result={token,batch,bytes[5]!=0,
+        std::vector<std::uint8_t>(bytes.begin()+20,bytes.end())};
+    return true;
+}
+} // namespace net::scene_stream
+
+
+
+// [srv/shared/net/weapon.cpp]
+
+// [srv/shared/net/weapon.hpp]
+
+
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+
+namespace net::weapon {
+namespace {
+    using namespace net::movement::detail;
+    bool header(const std::uint8_t* p,std::size_t n,std::size_t expected,std::uint8_t type) {
+        return p&&n==expected&&p[0]=='V'&&p[1]=='G'&&p[2]=='U'&&
+            p[3]=='N'&&p[4]==2&&p[5]==type&&!p[6]&&!p[7];
+    }
+    void write_state(std::uint8_t* p,const snapshot& v) {
+        fields(p+8,v.token,v.sequence,v.tick,v.magazine,v.reserve,
+            std::uint32_t(v.reload),std::uint32_t(v.outcome),
+            v.reload_elapsed,v.reload_duration,v.refill_time,
+            v.weapon_id,v.active_weapon_id);
+    }
+    std::optional<snapshot> read_state(const std::uint8_t* p) {
+        snapshot v{};
+        std::uint32_t reload=0,outcome=0;
+        fields(p+8,v.token,v.sequence,v.tick,v.magazine,v.reserve,reload,outcome,
+            v.reload_elapsed,v.reload_duration,v.refill_time,
+            v.weapon_id,v.active_weapon_id);
+        v.reload=reload_phase(reload);
+        v.outcome=result(outcome);
+        if(!v.token||!v.weapon_id||!v.active_weapon_id||reload>2||
+           outcome>std::uint32_t(result::equipped)||
+           !std::isfinite(v.reload_elapsed)||!std::isfinite(v.reload_duration)||
+           !std::isfinite(v.refill_time)||v.reload_elapsed<0||
+           v.reload_duration<0||v.refill_time<0||
+           v.reload_elapsed>v.reload_duration||v.refill_time>v.reload_duration)
+            return std::nullopt;
+        return v;
+    }
+}
+command_packet encode_command(const command& v) {
+    command_packet p{'V','G','U','N',2,1,0,0};
+    net::movement::detail::fields(p.data()+8,
+        v.token,v.sequence,std::uint32_t(v.kind),v.yaw,v.pitch,v.weapon_id);
+    return p;
+}
+std::optional<command> decode_command(const std::uint8_t* p,std::size_t n) {
+    if(!header(p,n,command_packet{}.size(),1))return std::nullopt;
+    command v{};
+    std::uint32_t kind=0;
+    net::movement::detail::fields(p+8,v.token,v.sequence,kind,v.yaw,v.pitch,v.weapon_id);
+    v.kind=action(kind);
+    if(!v.token||!v.sequence||!v.weapon_id||kind<1||kind>3||
+       !std::isfinite(v.yaw)||!std::isfinite(v.pitch)||
+       std::abs(v.yaw)>1000||std::abs(v.pitch)>1.570797f)
+        return std::nullopt;
+    return v;
+}
+snapshot_packet encode_snapshot(const snapshot& v) {
+    snapshot_packet p{'V','G','U','N',2,2,0,0};
+    write_state(p.data(),v);
+    return p;
+}
+std::optional<snapshot> decode_snapshot(const std::uint8_t* p,std::size_t n) {
+    if(!header(p,n,snapshot_packet{}.size(),2))return std::nullopt;
+    return read_state(p);
+}
+shot_packet encode_shot(const shot& v) {
+    shot_packet p{'V','G','U','N',2,3,0,0};
+    write_state(p.data(),v.state);
+    const auto& h=v.impact;
+    net::movement::detail::fields(p.data()+56,std::uint32_t(h.impacted),
+        h.position.x,h.position.y,h.position.z,
+        h.normal.x,h.normal.y,h.normal.z,h.instance,h.triangle);
+    return p;
+}
+std::optional<shot> decode_shot(const std::uint8_t* p,std::size_t n) {
+    if(!header(p,n,shot_packet{}.size(),3))return std::nullopt;
+    const auto state=read_state(p);
+    if(!state)return std::nullopt;
+    shot v{};
+    v.state=*state;
+    std::uint32_t impacted=0;
+    auto& h=v.impact;
+    net::movement::detail::fields(p+56,impacted,
+        h.position.x,h.position.y,h.position.z,
+        h.normal.x,h.normal.y,h.normal.z,h.instance,h.triangle);
+    if(impacted>1)return std::nullopt;
+    h.impacted=impacted==1;
+    const auto finite=[](float x){return std::isfinite(x)&&std::abs(x)<1000000.f;};
+    if(!finite(h.position.x)||!finite(h.position.y)||!finite(h.position.z)||
+       !finite(h.normal.x)||!finite(h.normal.y)||!finite(h.normal.z))
+        return std::nullopt;
+    if(h.impacted&&(state->outcome!=result::fired||!h.instance||
+       std::abs(vk::util::math::length_squared(h.normal)-1.f)>.01f))
+        return std::nullopt;
+    return v;
+}
+} // namespace net::weapon
+
+
 
 
 // [srv/shared/net/movement.hpp]
+
+
+// [srv/shared/player/movement.hpp]
+
+
+#include <spatial/index.hpp>
+
+#include <cstdint>
+#include <vector>
+
+namespace player
+{
+    enum button : std::uint32_t {
+        forward = 1u << 0,
+        backward = 1u << 1,
+        left = 1u << 2,
+        right = 1u << 3,
+        sprint = 1u << 4
+    };
+
+    inline constexpr std::uint32_t valid_buttons = 31;
+
+    struct input {
+        std::uint32_t sequence = 0;
+        std::uint32_t buttons = 0;
+        float yaw = 0;
+    };
+
+    struct parameters_t {
+        vk::util::math::vec3 spawn;
+        float walk_speed, sprint_speed, gravity, radius, height;
+    };
+
+    void configure(parameters_t values);
+    const parameters_t& parameters();
+
+    struct state {
+        vk::util::math::vec3 position{};
+        vk::util::math::vec3 velocity{};
+        bool grounded = false;
+    };
+
+    struct box {
+        vk::util::math::vec3 min;
+        vk::util::math::vec3 max;
+    };
+
+    using collision_world = std::vector<box>;
+    
+    spatial::index build_index(const collision_world& world);
+    collision_world build_colliders(const ::scene::state& scene);
+    collision_world build_colliders(
+        const std::vector<::scene::mesh>& meshes,
+        const std::vector<::scene::instance>& instances
+    );
+    void step(state& player, const input& input, const collision_world& world, const spatial::index* broadphase = nullptr);
+} // namespace player
 
 
 
@@ -2213,6 +2258,1017 @@ namespace net::movement
 
 
 
+namespace net::weapon
+{
+    namespace
+    {
+        using namespace net::movement::detail;
+
+        bool
+        header(const std::uint8_t* p, std::size_t size, std::size_t expected, std::uint8_t kind)
+        {
+            return p && size == expected && p[0] == 'V' && p[1] == 'G' && p[2] == 'U' &&
+                   p[3] == 'N' && p[4] == 2 && p[5] == kind && !p[6] && !p[7];
+        }
+
+        void write_state(std::uint8_t* p, const snapshot& v)
+        {
+            put(p + 8, v.token);
+            put(p + 12, v.sequence);
+            put(p + 16, v.tick);
+            put(p + 20, v.magazine);
+            put(p + 24, v.reserve);
+            put(p + 28, std::uint32_t(v.reload));
+            put(p + 32, std::uint32_t(v.outcome));
+            put_float(p + 36, v.reload_elapsed);
+            put_float(p + 40, v.reload_duration);
+            put_float(p + 44, v.refill_time);
+            put(p + 48, v.weapon_id);
+            put(p + 52, v.active_weapon_id);
+        }
+
+        std::optional<snapshot> read_state(const std::uint8_t* p)
+        {
+            snapshot v;
+            v.token = get(p + 8);
+            v.sequence = get(p + 12);
+            v.tick = get(p + 16);
+            v.magazine = get(p + 20);
+            v.reserve = get(p + 24);
+            v.reload = reload_phase(get(p + 28));
+            v.outcome = result(get(p + 32));
+            v.reload_elapsed = get_float(p + 36);
+            v.reload_duration = get_float(p + 40);
+            v.refill_time = get_float(p + 44);
+            v.weapon_id = get(p + 48);
+            v.active_weapon_id = get(p + 52);
+            if (!v.token || !v.weapon_id || !v.active_weapon_id || get(p + 28) > 2 ||
+                get(p + 32) > std::uint32_t(result::equipped) ||
+                !std::isfinite(v.reload_elapsed) || !std::isfinite(v.reload_duration) ||
+                !std::isfinite(v.refill_time) || v.reload_elapsed < 0 || v.reload_duration < 0 ||
+                v.refill_time < 0 ||
+                v.reload_elapsed > v.reload_duration || v.refill_time > v.reload_duration)
+            {
+                return std::nullopt;
+            }
+            return v;
+        }
+    } // namespace
+
+    command_packet encode_command(const command& v)
+    {
+        command_packet p{'V', 'G', 'U', 'N', 2, 1, 0, 0};
+        put(p.data() + 8, v.token);
+        put(p.data() + 12, v.sequence);
+        put(p.data() + 16, std::uint32_t(v.kind));
+        put_float(p.data() + 20, v.yaw);
+        put_float(p.data() + 24, v.pitch);
+        put(p.data() + 28, v.weapon_id);
+        return p;
+    }
+
+    std::optional<command> decode_command(const std::uint8_t* p, std::size_t size)
+    {
+        if (!header(p, size, command_packet{}.size(), 1))
+        {
+            return std::nullopt;
+        }
+        command v{
+            get(p + 8), get(p + 12), action(get(p + 16)), get_float(p + 20), get_float(p + 24), get(p + 28)
+        };
+        if (!v.token || !v.sequence || !v.weapon_id || get(p + 16) < 1 || get(p + 16) > 3 ||
+            !std::isfinite(v.yaw) || !std::isfinite(v.pitch) || std::abs(v.yaw) > 1000 ||
+            std::abs(v.pitch) > 1.570797f)
+        {
+            return std::nullopt;
+        }
+        return v;
+    }
+
+    snapshot_packet encode_snapshot(const snapshot& v)
+    {
+        snapshot_packet p{'V', 'G', 'U', 'N', 2, 2, 0, 0};
+        write_state(p.data(), v);
+        return p;
+    }
+
+    std::optional<snapshot> decode_snapshot(const std::uint8_t* p, std::size_t size)
+    {
+        if (!header(p, size, snapshot_packet{}.size(), 2))
+        {
+            return std::nullopt;
+        }
+        return read_state(p);
+    }
+
+    shot_packet encode_shot(const shot& v)
+    {
+        shot_packet p{'V', 'G', 'U', 'N', 2, 3, 0, 0};
+        write_state(p.data(), v.state);
+        const auto& h = v.impact;
+        put(p.data() + 56, h.impacted ? 1 : 0);
+        put_float(p.data() + 60, h.position.x);
+        put_float(p.data() + 64, h.position.y);
+        put_float(p.data() + 68, h.position.z);
+        put_float(p.data() + 72, h.normal.x);
+        put_float(p.data() + 76, h.normal.y);
+        put_float(p.data() + 80, h.normal.z);
+        put(p.data() + 84, h.instance);
+        put(p.data() + 88, h.triangle);
+        return p;
+    }
+
+    std::optional<shot> decode_shot(const std::uint8_t* p, std::size_t size)
+    {
+        if (!header(p, size, shot_packet{}.size(), 3))
+        {
+            return std::nullopt;
+        }
+        const auto state = read_state(p);
+        if (!state || get(p + 56) > 1)
+        {
+            return std::nullopt;
+        }
+        shot v{
+            *state,
+            {get(p + 56) == 1,
+             {get_float(p + 60), get_float(p + 64), get_float(p + 68)},
+             {get_float(p + 72), get_float(p + 76), get_float(p + 80)},
+             get(p + 84),
+             get(p + 88)}
+        };
+        const auto& h = v.impact;
+        auto finite = [](float x)
+        {
+            return std::isfinite(x) && std::abs(x) < 1000000;
+        };
+        if (!finite(h.position.x) || !finite(h.position.y) || !finite(h.position.z) ||
+            !finite(h.normal.x) || !finite(h.normal.y) || !finite(h.normal.z))
+        {
+            return std::nullopt;
+        }
+        if (h.impacted && (state->outcome != result::fired || !h.instance ||
+                           std::abs(vk::util::math::length_squared(h.normal) - 1.0f) > 0.01f))
+        {
+            return std::nullopt;
+        }
+        return v;
+    }
+} // namespace net::weapon
+
+
+
+// [srv/shared/player/movement.cpp]
+
+
+// [srv/shared/net/limits.hpp]
+#include <cstddef>
+#include <cstdint>
+
+namespace net::limits
+{
+    inline constexpr std::uint32_t tick_hz = 60;
+    inline constexpr std::uint32_t max_clients = 64;
+    inline constexpr std::uint32_t timeout_seconds = 5;
+    inline constexpr std::uint32_t receive_packets = 256;
+    inline constexpr std::uint32_t receive_ms = 2;
+    inline constexpr std::uint32_t inputs_per_tick = 4;
+    inline constexpr std::uint32_t animation_period = 6;
+    inline constexpr std::uint32_t animations_per_tick = 64;
+    inline constexpr std::uint32_t generation_slack_ms = 2;
+    inline constexpr std::uint32_t generation_commit_ticks = 8;
+    inline constexpr std::uint32_t connection_timeout_ms = 3000;
+    inline constexpr std::uint32_t retry_ms = 250;
+    inline constexpr std::uint32_t retry_max_ms = 1000;
+    inline constexpr std::uint32_t heartbeat_ms = 50;
+    inline constexpr std::uint32_t scene_request_ms = 100;
+    inline constexpr std::uint32_t movement_ms = 16;
+}
+
+
+#include <optional>
+#include <stdexcept>
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <vector>
+#include <numeric>
+
+namespace player {
+namespace {
+    using namespace vk::util::math;
+    std::optional<parameters_t> configured;
+
+    bool overlaps_xz(vec3 p,const box& b) {
+        const float r=parameters().radius;
+        return p.x+r>b.min.x && p.x-r<b.max.x &&
+               p.z+r>b.min.z && p.z-r<b.max.z;
+    }
+    bool overlaps_y(float y,const box& b) {
+        return y<b.max.y && y+parameters().height>b.min.y;
+    }
+}
+void configure(parameters_t p) {
+    if(!std::isfinite(p.spawn.x)||!std::isfinite(p.spawn.y)||
+       !std::isfinite(p.spawn.z)||!std::isfinite(p.walk_speed)||
+       !std::isfinite(p.sprint_speed)||!std::isfinite(p.gravity)||
+       !std::isfinite(p.radius)||!std::isfinite(p.height)||
+       p.walk_speed<=0||p.sprint_speed<=0||p.gravity<=0||
+       p.radius<=0||p.height<=0)
+        throw std::invalid_argument("Player parameters must be specified by the server");
+    configured=p;
+}
+const parameters_t& parameters() {
+    if(!configured)throw std::logic_error("Player parameters not yet received from server");
+    return *configured;
+}
+collision_world build_colliders(const ::scene::state& scene) {
+    return build_colliders(scene.meshes,scene.instances);
+}
+collision_world build_colliders(const std::vector<::scene::mesh>& meshes,
+                                const std::vector<::scene::instance>& instances) {
+    using namespace vk::util::math;
+    collision_world boxes;
+    boxes.reserve(instances.size());
+    for(const auto& instance:instances) {
+        const auto mesh=std::find_if(meshes.begin(),meshes.end(),
+            [&](const ::scene::mesh& m){return m.id==instance.mesh_id;});
+        if(mesh==meshes.end()||mesh->vertices.empty())continue;
+        const float limit=std::numeric_limits<float>::max();
+        box b{{limit,limit,limit},{-limit,-limit,-limit}};
+        const auto& pose=instance.pose;
+        for(const auto& v:mesh->vertices) {
+            const vec3 scaled{
+                v.position.x*pose.scale.x,v.position.y*pose.scale.y,
+                v.position.z*pose.scale.z};
+            const vec3 p=pose.position+rotate(pose.rotation,scaled);
+            b.min={std::min(b.min.x,p.x),std::min(b.min.y,p.y),std::min(b.min.z,p.z)};
+            b.max={std::max(b.max.x,p.x),std::max(b.max.y,p.y),std::max(b.max.z,p.z)};
+        }
+        boxes.push_back(b);
+    }
+    return boxes;
+}
+spatial::index build_index(const collision_world& boxes) {
+    std::vector<spatial::bounds> bounds;
+    bounds.reserve(boxes.size());
+    for(const auto& box:boxes)bounds.push_back({box.min,box.max});
+    spatial::index index;
+    index.rebuild(std::move(bounds));
+    return index;
+}
+void step(state& p,const input& keys,const collision_world& world,
+          const spatial::index* broadphase) {
+    using namespace vk::util::math;
+    const auto& settings=parameters();
+    const float radius=settings.radius,height=settings.height;
+    const float dt=1.f/float(net::limits::tick_hz);
+    const vec3 front{std::sin(keys.yaw),0,-std::cos(keys.yaw)};
+    const vec3 side{std::cos(keys.yaw),0,std::sin(keys.yaw)};
+    vec3 movement{};
+    if(keys.buttons&forward)movement=movement+front;
+    if(keys.buttons&backward)movement=movement-front;
+    if(keys.buttons&right)movement=movement+side;
+    if(keys.buttons&left)movement=movement-side;
+    if(length_squared(movement)>1.f)movement=normalize(movement);
+    const float speed=keys.buttons&sprint?settings.sprint_speed:settings.walk_speed;
+    p.velocity.x=movement.x*speed;
+    p.velocity.z=movement.z*speed;
+    const vec3 previous=p.position;
+
+    // Reuse candidate storage across fixed ticks; no per-frame heap churn.
+    thread_local std::vector<std::uint32_t> candidates;
+    candidates.clear();
+    if(broadphase) {
+        const float horizontal=radius+std::max(settings.walk_speed,settings.sprint_speed)*dt+.01f;
+        const float vertical=std::abs(p.velocity.y)*dt+settings.gravity*dt*dt+.05f;
+        broadphase->query({{
+            p.position.x-horizontal,p.position.y-vertical,p.position.z-horizontal},{
+            p.position.x+horizontal,p.position.y+height+vertical,p.position.z+horizontal}},
+            [&](std::uint32_t id){candidates.push_back(id);});
+    } else {
+        candidates.resize(world.size());
+        std::iota(candidates.begin(),candidates.end(),0u);
+    }
+
+    // Resolve X and Z with the same axis-separated rule.
+    for(int axis=0;axis<2;++axis) {
+        float& position=axis?p.position.z:p.position.x;
+        const float velocity=axis?p.velocity.z:p.velocity.x;
+        const float old=position;
+        position+=velocity*dt;
+        for(const auto id:candidates) {
+            const auto& b=world[id];
+            if(!overlaps_y(p.position.y,b)||!overlaps_xz(p.position,b))continue;
+            const float lo=axis?b.min.z:b.min.x;
+            const float hi=axis?b.max.z:b.max.x;
+            if(velocity>0&&old+radius<=lo)position=lo-radius;
+            else if(velocity<0&&old-radius>=hi)position=hi+radius;
+        }
+    }
+
+    p.velocity.y-=settings.gravity*dt;
+    p.position.y+=p.velocity.y*dt;
+    p.grounded=false;
+    for(const auto id:candidates) {
+        const auto& b=world[id];
+        if(!overlaps_xz(p.position,b))continue;
+        if(p.velocity.y<=0 && previous.y>=b.max.y-.0001f &&
+           p.position.y<b.max.y) {
+            p.position.y=b.max.y;
+            p.velocity.y=0;
+            p.grounded=true;
+        } else if(p.velocity.y>0 && previous.y+height<=b.min.y &&
+                  p.position.y+height>b.min.y) {
+            p.position.y=b.min.y-height;
+            p.velocity.y=0;
+        }
+    }
+}
+} // namespace player
+
+
+
+// [srv/game/options.cpp]
+
+// [srv/game/options.hpp]
+
+#include "util/math/vector.hpp"
+#include <cstdint>
+#include <string>
+
+namespace game::options {
+    state* get() {
+        static state value;
+        return &value;
+    }
+    void init(int argc,char** argv,mode selected_mode,state initial) {
+        initial.mode=selected_mode;
+        bool host_given=false,bind_given=false;
+        for(int i=1;i<argc;++i) {
+            const std::string arg=argv[i];
+            if(arg=="--help") {initial.help=true;continue;}
+            if(arg=="--headless") {initial.headless=true;continue;}
+            if(arg!="--port"&&arg!="--duration"&&arg!="--host"&&arg!="--bind")
+                throw std::invalid_argument("Unknown option: "+arg);
+            if(++i==argc)throw std::invalid_argument("Missing value for "+arg);
+            const std::string value=argv[i];
+            std::size_t end=0;
+            if(arg=="--port") {
+                const auto port=std::stoul(value,&end);
+                if(end!=value.size()||value.empty()||value[0]=='-'||!port||port>65535)
+                    throw std::invalid_argument("Port must be in 1..65535");
+                initial.port=std::uint16_t(port);
+            } else if(arg=="--duration") {
+                initial.duration=std::stod(value,&end);
+                if(end!=value.size()||!std::isfinite(initial.duration)||initial.duration<=0)
+                    throw std::invalid_argument("Duration must be a positive number of seconds");
+            } else if(arg=="--host") {
+                initial.host=value;
+                host_given=true;
+            } else {
+                initial.bind_host=value;
+                bind_given=true;
+            }
+        }
+        if(!initial.help) {
+            if(initial.mode==mode::server_only && initial.headless)
+                throw std::invalid_argument("--headless requires a client mode");
+            if(initial.mode!=mode::client_only && host_given)
+                throw std::invalid_argument("--host is only supported by vulkan-client");
+            if(initial.mode==mode::client_only && bind_given)
+                throw std::invalid_argument("--bind is only supported by vulkan-server");
+        }
+        if(!initial.port||
+           (initial.mode==mode::server_only && initial.bind_host.empty()))
+            throw std::invalid_argument("A server bind address and UDP port are required");
+        if(initial.mode==mode::client_only) {
+            const auto& g=initial.graphics;
+            if(initial.host.empty()||g.width<=0||g.height<=0||g.title.empty()||
+               g.vertex_shader.empty()||g.fragment_shader.empty()||
+               g.gbuffer==gbuffer_precision::unspecified||
+               g.surface==surface_format::unspecified||
+               g.depth==depth_precision::unspecified||
+               g.present==presentation::unspecified||
+               g.culling_shader.empty()||g.lighting_shader.empty()||
+               g.tonemap_shader.empty()||g.fullscreen_shader.empty()||
+               g.presentation_shader.empty()||g.exposure<0)
+                throw std::invalid_argument("Client graphics configuration is incomplete");
+        }
+        *get()=std::move(initial);
+    }
+    void print_help() {
+        const bool server=get()->mode==mode::server_only;
+        std::cout<<(server?"Usage: vulkan-server [OPTIONS]\n\n":
+                            "Usage: vulkan-client [OPTIONS]\n\n");
+        std::cout<<"Options:\n  --port PORT         UDP port (configured in server.cpp or client.cpp)\n";
+        if(server)
+            std::cout<<"  --bind ADDRESS      Server listen address (server.cpp)\n";
+        else
+            std::cout<<"  --host HOST         Server address (client.cpp)\n"
+                     <<"  --headless          Run the client without a window\n";
+        std::cout<<"  --duration SECONDS  Stop automatically after the given time\n"
+                 <<"  --help              Show this help\n";
+    }
+    void shutdown() {*get()={};}
+} // namespace game::options
+
+
+
+#include <cmath>
+#include <iostream>
+#include <stdexcept>
+#include <utility>
+
+namespace game::options
+{
+    state* get()
+    {
+        static state data;
+        return &data;
+    }
+
+    void init(int argc, char** argv, mode selected_mode, state configured)
+    {
+        state result = std::move(configured);
+        result.mode = selected_mode;
+        bool host_specified = false;
+        bool bind_specified = false;
+
+        for (int i = 1; i < argc; ++i)
+        {
+            const std::string option = argv[i];
+
+            if (option == "--help")
+            {
+                result.help = true;
+                continue;
+            }
+
+            if (option == "--headless")
+            {
+                result.headless = true;
+                continue;
+            }
+
+            if (option != "--port" && option != "--duration" && option != "--host" &&
+                option != "--bind")
+            {
+                throw std::invalid_argument("Unknown option: " + option);
+            }
+
+            if (++i == argc)
+            {
+                throw std::invalid_argument("Missing value for " + option);
+            }
+
+            const std::string value = argv[i];
+            std::size_t end = 0;
+
+            if (option == "--port")
+            {
+                const auto port = std::stoul(value, &end);
+
+                if (end != value.size() || port == 0 || port > 65535 || value.front() == '-')
+                {
+                    throw std::invalid_argument("Port must be in 1..65535");
+                }
+
+                result.port = static_cast<std::uint16_t>(port);
+            }
+            else if (option == "--duration")
+            {
+                result.duration = std::stod(value, &end);
+
+                if (end != value.size() || !std::isfinite(result.duration) || result.duration <= 0)
+                {
+                    throw std::invalid_argument("Duration must be a positive number of seconds");
+                }
+            }
+            else if (option == "--host")
+            {
+                result.host = value;
+                host_specified = true;
+            }
+            else
+            {
+                result.bind_host = value;
+                bind_specified = true;
+            }
+        }
+
+        if (!result.help)
+        {
+            if (result.mode == mode::server_only && result.headless)
+            {
+                throw std::invalid_argument("--headless requires a client mode");
+            }
+
+            if (result.mode != mode::client_only && host_specified)
+            {
+                throw std::invalid_argument(
+                    "--host is only supported by vulkan-client"
+                );
+            }
+
+            if (result.mode == mode::client_only && bind_specified)
+            {
+                throw std::invalid_argument("--bind is only supported by vulkan-server");
+            }
+        }
+
+        if (!result.port || (result.mode == mode::server_only && result.bind_host.empty()))
+            throw std::invalid_argument("A server bind address and UDP port are required");
+
+        if (result.mode == mode::client_only)
+        {
+            const auto& g = result.graphics;
+            if (result.host.empty() || g.width <= 0 || g.height <= 0 ||
+                g.title.empty() || g.vertex_shader.empty() || g.fragment_shader.empty() ||
+                g.gbuffer == gbuffer_precision::unspecified ||
+                g.surface == surface_format::unspecified ||
+                g.depth == depth_precision::unspecified ||
+                g.present == presentation::unspecified ||
+                g.culling_shader.empty() || g.lighting_shader.empty() ||
+                g.tonemap_shader.empty() || g.fullscreen_shader.empty() ||
+                g.presentation_shader.empty() || g.exposure < 0)
+                throw std::invalid_argument("Client graphics configuration is incomplete");
+        }
+        *get() = std::move(result);
+    }
+
+    void print_help()
+    {
+        const bool server = get()->mode == mode::server_only;
+        std::cout << (server ? "Usage: vulkan-server [OPTIONS]\n\n"
+                            : "Usage: vulkan-client [OPTIONS]\n\n")
+                  << "Options:\n"
+                  << "  --port PORT         UDP port (configured in server.cpp or client.cpp)\n";
+        if (server)
+            std::cout << "  --bind ADDRESS      Server listen address (server.cpp)\n";
+        else
+            std::cout << "  --host HOST         Server address (client.cpp)\n"
+                      << "  --headless          Run the client without a window\n";
+        std::cout << "  --duration SECONDS  Stop automatically after the given time\n"
+                  << "  --help              Show this help\n";
+    }
+
+    void shutdown()
+    {
+        *get() = {};
+    }
+} // namespace game::options
+
+
+
+// [srv/game/state.cpp]
+
+// [srv/game/application.hpp]
+
+#include <atomic>
+
+namespace game::application
+{
+    struct state
+    {
+        std::atomic<bool> stop{false};
+    };
+
+    state* get();
+} // namespace game::application
+
+
+
+namespace game::application
+{
+    state* get()
+    {
+        static state data;
+        return &data;
+    }
+} // namespace game::application
+
+
+#undef STB_IMAGE_IMPLEMENTATION
+
+#ifndef VULKAN_GAME_SHARED_ONLY
+
+// [server.cpp]
+
+// [srv/app/application.hpp]
+
+
+
+
+#include <network/secure.hpp>
+#include <network/endpoint.hpp>
+#include <network/session.hpp>
+
+
+
+
+
+#include <cstddef>
+#include <filesystem>
+#include <functional>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace srv::application
+{
+    struct model_request
+    {
+        std::filesystem::path path;
+        ::scene::transform pose;
+        std::uint32_t animation;
+    };
+
+    struct weapon_command_context
+    {
+        const net::weapon::command& command;
+        const ::weapon::definition& definition;
+        ::weapon::state& state;
+        const ::player::state& player;
+        double now;
+        const ::weapon::world& world;
+    };
+
+    using weapon_command_handler = std::function<::weapon::hit(weapon_command_context&)>;
+
+    struct state
+    {
+        game::options::state options;
+        net::secure::resource socket;
+        std::unique_ptr<net::session> scene_transport;
+        scene::state scene;
+        // Live authoritative point-light versions for editor replication.
+        std::vector<std::uint32_t> editor_light_versions;
+        std::uint32_t editor_light_revision=1;
+        std::vector<model_request> models;
+        bool scene_configured = false;
+        std::shared_ptr<scene::state> importing;
+        std::size_t next_texture = 0;
+        std::size_t next_skin = 0;
+        std::size_t next_mesh = 0;
+        std::size_t next_instance = 0;
+        std::size_t animation_cursor = 0;
+        struct pending_event { net::animation::attachment_event event; std::uint32_t repeats = 3; };
+        std::vector<pending_event> attachment_events;
+        std::uint32_t next_event = 0;
+        player::collision_world colliders;
+        ::weapon::world weapon_world;
+        ::weapon::registry weapons;
+        weapon_command_handler on_weapon_command;
+        std::function<bool(const net::endpoint::resource&)> editor_permission;
+        spatial::index collision_index;
+        struct batch {
+            std::vector<std::uint8_t> bytes;
+            bool final=false;
+        };
+        std::vector<batch> scene_batches;
+        std::uint32_t tick = 0;
+        bool initialized = false;
+    };
+
+    state* get();
+    // The game defines both its initial scene and model imports before init().
+    void set_scene(::scene::state scene);
+    void load_model(std::filesystem::path path, ::scene::transform pose,
+                    std::uint32_t animation);
+    // Register game rules and receive authenticated, owned, equipped weapon commands.
+    void add_weapon(::weapon::definition definition);
+    void on_weapon_command(weapon_command_handler handler);
+    // No client can change the level unless this policy explicitly permits it.
+    void on_editor_permission(std::function<bool(const net::endpoint::resource&)> handler);
+    void init();
+    // Publish append-only mesh/instance batches; called on the server thread.
+    // Background jobs return a completion that invokes append_scene().
+    void begin_stream();
+    void append_scene(::scene::state patch, bool final = false);
+    // Call on the authoritative server tick (not from an import worker).
+    bool play_animation(std::uint32_t instance_id, std::uint32_t clip,
+                        std::uint32_t overlay = UINT32_MAX, float blend = 0.0f,
+                        std::uint32_t mask_root = UINT32_MAX);
+    // Send a named game effect at a skeleton socket; replicated to clients.
+    bool emit_attachment_event(std::uint32_t instance_id, std::uint32_t joint,
+                               std::uint32_t kind);
+    int run();
+    void shutdown() noexcept;
+} // namespace srv::application
+
+
+
+
+#include <network/socket.hpp>
+
+
+
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <atomic>
+#include <csignal>
+#include <exception>
+#include <iostream>
+#include <limits>
+#include <stdexcept>
+#include <utility>
+
+namespace
+{
+    void quad(::scene::mesh& mesh, vk::util::math::vec3 a, vk::util::math::vec3 b, vk::util::math::vec3 c, vk::util::math::vec3 d, vk::util::math::vec3 normal)
+    {
+        const auto base = static_cast<std::uint32_t>(mesh.vertices.size());
+
+        mesh.vertices.push_back({a, normal, 0, 0});
+        mesh.vertices.push_back({b, normal, 1, 0});
+        mesh.vertices.push_back({c, normal, 1, 1});
+        mesh.vertices.push_back({d, normal, 0, 1});
+
+        mesh.indices.insert(mesh.indices.end(), {
+            base, base + 1, base + 2,
+            base, base + 2, base + 3,
+        });
+    }
+
+    ::scene::mesh make_rect(std::uint32_t id, float x, float y, float z,
+                            std::array<float, 4> color, float roughness = 0.85f)
+    {
+        ::scene::mesh mesh;
+        mesh.id = id;
+        mesh.surface.base_color = color;
+        mesh.surface.roughness = roughness;
+    
+        quad(mesh, {-x, -y,  z}, { x, -y,  z}, { x,  y,  z}, {-x,  y,  z}, { 0,  0,  1});
+        quad(mesh, { x, -y, -z}, {-x, -y, -z}, {-x,  y, -z}, { x,  y, -z}, { 0,  0, -1});
+        quad(mesh, {-x, -y, -z}, {-x, -y,  z}, {-x,  y,  z}, {-x,  y, -z}, {-1,  0,  0});
+        quad(mesh, { x, -y,  z}, { x, -y, -z}, { x,  y, -z}, { x,  y,  z}, { 1,  0,  0});
+        quad(mesh, {-x,  y,  z}, { x,  y,  z}, { x,  y, -z}, {-x,  y, -z}, { 0,  1,  0});
+        quad(mesh, {-x, -y, -z}, { x, -y, -z}, { x, -y,  z}, {-x, -y,  z}, { 0, -1,  0});
+    
+        return mesh;
+    }
+
+    void place(::scene::state& initial_scene,std::uint32_t id,
+               std::uint32_t mesh,vk::util::math::vec3 position)
+    {
+        ::scene::instance object{};
+        object.id = id;
+        object.mesh_id = mesh;
+        object.pose.position = position;
+
+        // World collision bounds follow actual transformed scene vertices.
+        const auto geometry = std::find_if(
+            initial_scene.meshes.begin(), initial_scene.meshes.end(),
+            [mesh](const ::scene::mesh& item) { return item.id == mesh; });
+        if (geometry == initial_scene.meshes.end())
+            throw std::runtime_error("No mesh for scene collision bounds");
+
+        ::scene::collision_box bounds{};
+        const auto infinity = std::numeric_limits<float>::infinity();
+        bounds.minimum = { infinity, infinity, infinity };
+        bounds.maximum = {-infinity,-infinity,-infinity };
+        for (const auto& vertex : geometry->vertices)
+        {
+            const auto& p = vertex.position;
+            const auto& scale = object.pose.scale;
+            const auto local = vk::util::math::vec3{
+                p.x * scale.x, p.y * scale.y, p.z * scale.z
+            };
+            const auto rotated = vk::util::math::rotate(
+                object.pose.rotation, local);
+            const auto world = position + rotated;
+            bounds.minimum.x = std::min(bounds.minimum.x, world.x);
+            bounds.minimum.y = std::min(bounds.minimum.y, world.y);
+            bounds.minimum.z = std::min(bounds.minimum.z, world.z);
+            bounds.maximum.x = std::max(bounds.maximum.x, world.x);
+            bounds.maximum.y = std::max(bounds.maximum.y, world.y);
+            bounds.maximum.z = std::max(bounds.maximum.z, world.z);
+        }
+        initial_scene.instances.push_back(object);
+        initial_scene.collision_boxes.push_back(bounds);
+    }
+
+    // Define level geometry, instances, imported models and lights here.
+    ::scene::state make_level()
+    {
+        ::scene::state initial_scene;
+        // Checker floor with three white cubes; no surrounding test walls.
+        // Floor surface stays at y=0 for gameplay collisions.
+
+        auto floor=make_rect(1,10.f,.1f,10.f,{1.f,1.f,1.f,1.f});
+        floor.surface.procedural_pattern=1;
+        auto cube=make_rect(2,.5f,.5f,.5f,{1.f,1.f,1.f,1.f});
+        initial_scene.meshes.push_back(std::move(floor));
+        initial_scene.meshes.push_back(std::move(cube));
+        place(initial_scene,1,1, {0, -0.1f, 0});
+        place(initial_scene,2,2, {-2.f, .5f, 0});
+        place(initial_scene,3,2, {0, .5f, 0});
+        place(initial_scene,4,2, {2.f, .5f, 0});
+        // Imported models: path, world position/scale, animation clip.
+        ::scene::transform mermaid{};
+        mermaid.position = {0.0f,1.0f,0.5f/3.0f};
+        mermaid.scale = {1.5f,1.5f,1.5f};
+        srv::application::load_model("assets/mermaid/mermaid.glb", mermaid, 0);
+
+        // Level-authored lights: position, radius, RGB, intensity.
+        // Keep the example light in view from the default player spawn,
+        // so its Hell2024 LIGHT label is immediately selectable in ? mode.
+        initial_scene.lights.push_back({
+            {0.0f,3.0f,1.0f},6.0f,{1.0f,0.5f,0.2f},4.0f
+        });
+
+        return initial_scene;
+    }
+
+    void stop(int)
+    {
+        game::application::get()->stop.store(true, std::memory_order_relaxed);
+    }
+}
+
+int main(int argc, char** argv)
+{
+    try
+    {
+        game::options::state settings{};
+        settings.bind_host = "0.0.0.0";
+        settings.port = 27015;
+        settings.duration = 0;
+        settings.headless = false;
+        settings.help = false;
+        game::options::init(argc, argv, game::options::mode::server_only,
+                            std::move(settings));
+        if (game::options::get()->help)
+        {
+            game::options::print_help();
+            return 0;
+        }
+
+        player::configure({
+            {0, 0, 4}, // spawn
+            4.0f,      // walking speed
+            14.0f,     // sprint speed
+            20.0f,     // gravity
+            0.3f,      // player radius (collision width)
+            1.8f       // player height (collision and camera)
+        });
+
+        // One game-authored gun profile supplies both the server's
+        // authoritative rules and the client's models, controls and clips.
+        for(const auto& gun:game_weapons::all())
+            srv::application::add_weapon(gun.rules);
+        srv::application::on_weapon_command(
+        [](srv::application::weapon_command_context& event)
+        {
+            const auto result = ::weapon::apply(
+                event.state,
+                event.command.sequence,
+                event.command.kind,
+                event.now,
+                event.definition
+            );
+
+            if (result != ::weapon::result::fired)
+                return ::weapon::hit{};
+
+            return ::weapon::trace(event.world,
+                event.player.position,
+                weapon::direction(
+                    event.command.yaw,
+                    event.command.pitch
+                ),
+                event.definition.range
+            );
+        });
+
+        net::socket::init();
+        std::signal(SIGINT, stop);
+        std::signal(SIGTERM, stop);
+        srv::application::set_scene(make_level());
+        // The level editor is a developer-only operation. Only local DTLS
+        // clients may change this server's lights; other peers can observe
+        // the replicated results but cannot mutate the world.
+        srv::application::on_editor_permission(
+            [](const net::endpoint::resource& peer)
+            {
+                if(peer.address.ss_family==AF_INET)
+                {
+                    const auto* address=
+                        reinterpret_cast<const sockaddr_in*>(&peer.address);
+                    const auto* octets=reinterpret_cast<const unsigned char*>(
+                        &address->sin_addr);
+                    return octets[0]==127; // 127.0.0.0/8
+                }
+                if(peer.address.ss_family==AF_INET6)
+                {
+                    const auto* address=
+                        reinterpret_cast<const sockaddr_in6*>(&peer.address);
+                    return IN6_IS_ADDR_LOOPBACK(&address->sin6_addr)!=0;
+                }
+                return false;
+            });
+
+        srv::application::init();
+        const int result = srv::application::run();
+        srv::application::shutdown();
+        net::socket::shutdown();
+        game::options::shutdown();
+        return result;
+    }
+    catch (const std::exception& e)
+    {
+        srv::application::shutdown();
+        net::socket::shutdown();
+        game::options::shutdown();
+        std::cerr << "vulkan-server: " << e.what() << '\n';
+        return 1;
+    }
+}
+
+
+
+// [srv/app/application.cpp]
+
+
+
+
+#include <jobs/pool.hpp>
+
+// [srv/network/session.hpp]
+
+#include <network/endpoint.hpp>
+
+
+
+#include <chrono>
+#include <deque>
+#include <vector>
+
+namespace srv::session
+{
+    struct resource
+    {
+        net::endpoint::resource endpoint;
+        std::uint32_t token = 0;
+        std::uint32_t last_sequence = 0;
+        bool has_sequence = false;
+        bool active = false;
+        std::chrono::steady_clock::time_point last_seen;
+        ::player::state avatar;
+
+        struct owned_weapon
+        {
+            std::uint32_t id = 0;
+            ::weapon::state state;
+            std::optional<net::weapon::snapshot> published;
+        };
+
+        std::vector<owned_weapon> weapons;
+        std::uint32_t active_weapon = 0;
+        std::uint32_t weapon_sequence = 0;
+        std::deque<net::weapon::command> weapon_commands;
+        // Independent idempotent sequence for the DTLS editor channel.
+        std::uint32_t editor_light_sequence=0;
+        std::uint32_t editor_light_index=UINT32_MAX;
+
+        struct pending_shot
+        {
+            net::weapon::shot value;
+            std::uint32_t repeats = 3;
+        };
+
+        std::deque<pending_shot> shots;
+        std::optional<net::weapon::shot> last_shot;
+        std::deque<::player::input> inputs;
+        std::uint32_t processed_input = 0;
+        std::uint32_t scene_request = 0;
+        bool scene_pending = false;
+        std::uint32_t queued_scene_batch=UINT32_MAX;
+        std::chrono::steady_clock::time_point queued_scene_at{};
+    };
+
+    struct state
+    {
+        std::vector<resource> clients;
+    };
+
+    state* get();
+    void init();
+    void expire(std::chrono::steady_clock::time_point now);
+    void shutdown();
+} // namespace srv::session
+
+
+
+
+// [srv/shared/net/editor_light.hpp]
+
+
+
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -2302,31 +3358,6 @@ namespace net::editor_light
 
 
 #include <network/endpoint.hpp>
-
-// [srv/shared/net/limits.hpp]
-#include <cstddef>
-#include <cstdint>
-
-namespace net::limits
-{
-    inline constexpr std::uint32_t tick_hz = 60;
-    inline constexpr std::uint32_t max_clients = 64;
-    inline constexpr std::uint32_t timeout_seconds = 5;
-    inline constexpr std::uint32_t receive_packets = 256;
-    inline constexpr std::uint32_t receive_ms = 2;
-    inline constexpr std::uint32_t inputs_per_tick = 4;
-    inline constexpr std::uint32_t animation_period = 6;
-    inline constexpr std::uint32_t animations_per_tick = 64;
-    inline constexpr std::uint32_t generation_slack_ms = 2;
-    inline constexpr std::uint32_t generation_commit_ticks = 8;
-    inline constexpr std::uint32_t connection_timeout_ms = 3000;
-    inline constexpr std::uint32_t retry_ms = 250;
-    inline constexpr std::uint32_t retry_max_ms = 1000;
-    inline constexpr std::uint32_t heartbeat_ms = 50;
-    inline constexpr std::uint32_t scene_request_ms = 100;
-    inline constexpr std::uint32_t movement_ms = 16;
-}
-
 
 
 
@@ -3593,725 +4624,4 @@ namespace srv::session
 } // namespace srv::session
 
 
-
-// [srv/shared/net/animation.cpp]
-// Flat animation and attachment-event packets, shared 32-bit field encoding.
-#include <cmath>
-namespace net::animation {
-    packet encode(const resource& state) {
-        packet p{'A','N','I','M'};
-        net::movement::detail::fields(p.data()+4,1u,state.token,state.server_tick,
-            state.instance_id,state.clip,state.start_tick,state.overlay,
-            state.mask_root,state.blend);
-        return p;
-    }
-    std::optional<resource> decode(const std::uint8_t* p,std::size_t n) {
-        if(!p||n!=packet{}.size()||p[0]!='A'||p[1]!='N'||
-           p[2]!='I'||p[3]!='M'||net::movement::detail::get(p+4)!=1u)
-            return std::nullopt;
-        resource v{};
-        net::movement::detail::fields(p+8,v.token,v.server_tick,v.instance_id,
-            v.clip,v.start_tick,v.overlay,v.mask_root,v.blend);
-        if(!v.token||!v.instance_id||!std::isfinite(v.blend)||
-           v.blend<0||v.blend>1)return std::nullopt;
-        return v;
-    }
-    event_packet encode_event(const attachment_event& e) {
-        event_packet p{'E','V','N','T'};
-        net::movement::detail::fields(p.data()+4,e.token,e.tick,e.sequence,
-            e.instance_id,e.joint,e.kind);
-        return p;
-    }
-    std::optional<attachment_event> decode_event(const std::uint8_t* p,std::size_t n) {
-        if(!p||n!=event_packet{}.size()||p[0]!='E'||p[1]!='V'||
-           p[2]!='N'||p[3]!='T')return std::nullopt;
-        attachment_event v{};
-        net::movement::detail::fields(p+4,v.token,v.tick,v.sequence,
-            v.instance_id,v.joint,v.kind);
-        if(!v.token||!v.instance_id||!v.sequence)return std::nullopt;
-        return v;
-    }
-} // namespace net::animation
-
-// [srv/shared/net/message.cpp]
-namespace net::message {
-    packet encode(const resource& message) {
-        packet p{'V','G','A','M',1,std::uint8_t(message.type),0,0};
-        net::movement::detail::fields(p.data()+8,
-            message.sequence,message.token,message.value);
-        return p;
-    }
-    std::optional<resource> decode(const std::uint8_t* p,std::size_t size) {
-        if(!p||size!=packet_size||p[0]!='V'||p[1]!='G'||p[2]!='A'||
-           p[3]!='M'||p[4]!=1||p[5]<1||p[5]>6||p[6]||p[7])
-            return std::nullopt;
-        resource v{};
-        v.type=type(p[5]);
-        net::movement::detail::fields(p+8,v.sequence,v.token,v.value);
-        return v;
-    }
-    bool newer(std::uint32_t sequence,std::uint32_t previous) {
-        const auto difference=sequence-previous;
-        return difference!=0&&difference<0x80000000u;
-    }
-} // namespace net::message
-
-// [srv/shared/net/scene_stream.cpp]
-// Data-oriented scene codec: fixed-field packets, contiguous payloads, bounded input.
-#include <stb_image.h>
-#include <bit>
-#include <climits>
-#include <algorithm>
-#include <cmath>
-#include <cstring>
-#include <limits>
-#include <stdexcept>
-#include <utility>
-
-namespace net::scene_stream {
-namespace {
-    using bytes=std::vector<std::uint8_t>;
-    using vec3=vk::util::math::vec3;
-
-    struct cursor {const bytes& data;std::size_t pos;};
-    std::size_t left(const cursor& c) {return c.data.size()-c.pos;}
-
-    void put(bytes& b,std::uint32_t value) {
-        b.push_back(std::uint8_t(value>>24));
-        b.push_back(std::uint8_t(value>>16));
-        b.push_back(std::uint8_t(value>>8));
-        b.push_back(std::uint8_t(value));
-    }
-    void put(bytes& b,float value) {
-        if(!std::isfinite(value))throw std::runtime_error("Non-finite scene value");
-        put(b,std::bit_cast<std::uint32_t>(value));
-    }
-    void put(bytes& b,vec3 value) {
-        put(b,value.x);put(b,value.y);put(b,value.z);
-    }
-    template<class... T>
-    void put_all(bytes& b,const T&... values) {(put(b,values),...);}
-
-    bool take(cursor& c,std::uint32_t& value) {
-        if(left(c)<4)return false;
-        const auto* p=c.data.data()+c.pos;
-        value=(std::uint32_t(p[0])<<24)|(std::uint32_t(p[1])<<16)|
-              (std::uint32_t(p[2])<<8)|std::uint32_t(p[3]);
-        c.pos+=4;
-        return true;
-    }
-    bool take(cursor& c,float& value) {
-        std::uint32_t bits=0;
-        if(!take(c,bits))return false;
-        value=std::bit_cast<float>(bits);
-        return std::isfinite(value);
-    }
-    bool take(cursor& c,vec3& value) {
-        return take(c,value.x)&&take(c,value.y)&&take(c,value.z);
-    }
-    template<class... T>
-    bool take_all(cursor& c,T&... values) {return (take(c,values)&&...);}
-
-    void material_put(bytes& out,const ::scene::material& m) {
-        for(auto x:m.base_color)put(out,x);
-        for(auto x:m.emissive)put(out,x);
-        put_all(out,m.metallic,m.roughness,m.occlusion,m.alpha_cutoff,
-            m.base_color_texture,m.metallic_roughness_texture,
-            m.normal_texture,m.occlusion_texture,m.emissive_texture,
-            m.alpha_mode,std::uint32_t(m.double_sided),m.procedural_pattern);
-    }
-    bool material_take(cursor& in,::scene::material& m) {
-        for(auto& x:m.base_color)if(!take(in,x))return false;
-        for(auto& x:m.emissive)if(!take(in,x))return false;
-        std::uint32_t double_sided=0;
-        if(!take_all(in,m.metallic,m.roughness,m.occlusion,m.alpha_cutoff,
-            m.base_color_texture,m.metallic_roughness_texture,m.normal_texture,
-            m.occlusion_texture,m.emissive_texture,m.alpha_mode,
-            double_sided,m.procedural_pattern))return false;
-        if(double_sided>1||m.alpha_mode>2||m.procedural_pattern>1)return false;
-        m.double_sided=double_sided!=0;
-        return true;
-    }
-    void append(bytes& out,const bytes& src) {
-        out.insert(out.end(),src.begin(),src.end());
-    }
-    std::uint32_t hash(const std::uint8_t* src,std::size_t size) {
-        std::uint32_t result=2166136261u;
-        for(std::size_t i=0;i<size;++i)result=(result^src[i])*16777619u;
-        return result;
-    }
-    bool valid_box(const vec3& a,const vec3& b) {
-        return std::isfinite(a.x)&&std::isfinite(a.y)&&std::isfinite(a.z)&&
-               std::isfinite(b.x)&&std::isfinite(b.y)&&std::isfinite(b.z)&&
-               a.x<b.x&&a.y<b.y&&a.z<b.z;
-    }
-    bool valid_light(const ::scene::point_light& l) {
-        return std::isfinite(l.radius)&&l.radius>0&&
-               std::isfinite(l.strength)&&l.strength>=0&&
-               l.color.x>=0&&l.color.y>=0&&l.color.z>=0;
-    }
-}
-
-std::vector<std::uint8_t> serialize(const ::scene::state& scene) {
-    if(scene.meshes.size()>max_scene_bytes/12 ||
-       scene.instances.size()>max_scene_bytes/48 ||scene.lights.size()>64)
-        throw std::runtime_error("Scene snapshot exceeds maximum batch size");
-    bytes out{'S','C','N','A'};
-    put_all(out,std::uint32_t(scene.meshes.size()),
-        std::uint32_t(scene.instances.size()),std::uint32_t(scene.textures.size()),
-        std::uint32_t(scene.skins.size()),
-        std::uint32_t(scene.collision_boxes.size()),
-        std::uint32_t(scene.lights.size()));
-
-    for(const auto& t:scene.textures) {
-        const bool encoded=!t.encoded.empty();
-        const auto& payload=encoded?t.encoded:t.pixels;
-        const auto raw=std::uint64_t(t.width)*t.height*4u;
-        if(!t.id||!t.width||!t.height||raw>max_scene_bytes-20||
-           (!encoded&&raw!=t.pixels.size())||payload.empty()||
-           payload.size()>max_scene_bytes-20||
-           out.size()+20+payload.size()>max_scene_bytes)
-            throw std::runtime_error("Invalid texture or scene batch too large");
-        put_all(out,t.id,t.width,t.height,std::uint32_t(encoded),
-            std::uint32_t(payload.size()));
-        append(out,payload);
-    }
-
-    for(const auto& skin:scene.skins) {
-        if(!skin.id||skin.skeleton.empty()||skin.inverse_bind.empty()||
-           skin.inverse_bind.size()>1024)
-            throw std::runtime_error("Invalid skeletal asset");
-        put_all(out,skin.id,std::uint32_t(skin.inverse_bind.size()),
-            std::uint32_t(skin.skeleton.size()),std::uint32_t(skin.clips.size()));
-        append(out,skin.skeleton);
-        for(const auto& matrix:skin.inverse_bind)
-            for(float value:matrix)put(out,value);
-        for(const auto& clip:skin.clips) {
-            if(clip.name.size()>255||clip.bytes.empty())
-                throw std::runtime_error("Invalid skeletal animation clip");
-            put(out,std::uint32_t(clip.name.size()));
-            out.insert(out.end(),clip.name.begin(),clip.name.end());
-            put(out,std::uint32_t(clip.bytes.size()));
-            append(out,clip.bytes);
-        }
-        if(out.size()>max_scene_bytes)
-            throw std::runtime_error("Skeletal asset exceeds scene batch budget");
-    }
-
-    for(const auto& m:scene.meshes) {
-        if(m.vertices.empty()||m.indices.empty()||m.indices.size()%3||
-           m.vertices.size()>max_scene_bytes/64||m.indices.size()>max_scene_bytes/4)
-            throw std::runtime_error("Invalid scene mesh");
-        put_all(out,m.id,m.skin_id,std::uint32_t(m.vertices.size()),
-            std::uint32_t(m.indices.size()));
-        material_put(out,m.surface);
-        for(const auto& v:m.vertices) {
-            put_all(out,v.position,v.normal,v.u,v.v);
-            if(m.skin_id) {
-                for(auto joint:v.joints)put(out,joint);
-                for(auto weight:v.weights)put(out,weight);
-            }
-        }
-        for(auto index:m.indices) {
-            if(index>=m.vertices.size())
-                throw std::runtime_error("Scene mesh index out of bounds");
-            put(out,index);
-        }
-        if(out.size()>max_scene_bytes)
-            throw std::runtime_error("Scene snapshot exceeds maximum batch size");
-    }
-
-    for(const auto& i:scene.instances) {
-        put_all(out,i.id,i.mesh_id,i.animation,i.animation_tick,
-            i.overlay_animation,i.overlay_root,i.overlay_weight,
-            i.pose.position,i.pose.scale,i.pose.rotation.x,
-            i.pose.rotation.y,i.pose.rotation.z,i.pose.rotation.w);
-    }
-    for(const auto& b:scene.collision_boxes) {
-        if(!valid_box(b.minimum,b.maximum))
-            throw std::runtime_error("Invalid scene collision bounds");
-        put_all(out,b.minimum,b.maximum);
-    }
-    for(const auto& l:scene.lights) {
-        if(!valid_light(l))throw std::runtime_error("Invalid scene light");
-        put_all(out,l.position,l.radius,l.color,l.strength);
-    }
-    if(out.size()>max_scene_bytes)
-        throw std::runtime_error("Scene snapshot exceeds maximum batch size");
-    return out;
-}
-
-bool deserialize(const std::vector<std::uint8_t>& bytes,::scene::state& scene) {
-    if(bytes.size()<28||bytes.size()>max_scene_bytes||
-       bytes[0]!='S'||bytes[1]!='C'||bytes[2]!='N'||bytes[3]!='A')
-        return false;
-    cursor in{bytes,4};
-    std::uint32_t meshes=0,instances=0,textures=0,skins=0,boxes=0,lights=0;
-    if(!take_all(in,meshes,instances,textures,skins,boxes,lights)||
-       lights>64||lights>left(in)/32||boxes>left(in)/24||
-       textures>left(in)/20||skins>left(in)/16||
-       meshes>left(in)/12||instances>left(in)/48)return false;
-
-    ::scene::state result;
-    result.meshes.reserve(meshes);
-    result.instances.reserve(instances);
-    result.textures.reserve(textures);
-    result.skins.reserve(skins);
-    result.collision_boxes.reserve(boxes);
-    result.lights.reserve(lights);
-
-    for(std::uint32_t i=0;i<textures;++i) {
-        ::scene::texture t;
-        std::uint32_t encoding=0,length=0;
-        if(!take_all(in,t.id,t.width,t.height,encoding,length)||
-           !t.id||!t.width||!t.height||encoding>1||length>left(in)||
-           std::uint64_t(t.width)*t.height*4u>max_scene_bytes-20)return false;
-        if(encoding==0) {
-            if(std::uint64_t(t.width)*t.height*4u!=length)return false;
-            t.pixels.assign(bytes.begin()+in.pos,bytes.begin()+in.pos+length);
-        } else {
-            if(length>INT_MAX||t.width>INT_MAX||t.height>INT_MAX)return false;
-            int w=0,h=0,c=0;
-            auto* p=stbi_load_from_memory(bytes.data()+in.pos,int(length),&w,&h,&c,4);
-            if(!p||w!=int(t.width)||h!=int(t.height)) {
-                stbi_image_free(p);
-                return false;
-            }
-            t.pixels.assign(p,p+std::size_t(w)*h*4u);
-            stbi_image_free(p);
-        }
-        in.pos+=length;
-        result.textures.push_back(std::move(t));
-    }
-
-    for(std::uint32_t i=0;i<skins;++i) {
-        ::scene::skin skin;
-        std::uint32_t joints=0,length=0,clips=0;
-        if(!take_all(in,skin.id,joints,length,clips)||
-           !skin.id||!joints||joints>1024||length>left(in)||
-           std::uint64_t(joints)*64>left(in)-length||
-           clips>max_scene_bytes/8)return false;
-        skin.skeleton.assign(bytes.begin()+in.pos,bytes.begin()+in.pos+length);
-        in.pos+=length;
-        skin.inverse_bind.resize(joints);
-        for(auto& matrix:skin.inverse_bind)
-            for(auto& value:matrix)if(!take(in,value))return false;
-        for(std::uint32_t j=0;j<clips;++j) {
-            std::uint32_t name=0,size=0;
-            if(!take(in,name)||name>255||name>left(in))return false;
-            ::scene::clip clip;
-            clip.name.assign(reinterpret_cast<const char*>(bytes.data()+in.pos),name);
-            in.pos+=name;
-            if(!take(in,size)||!size||size>left(in))return false;
-            clip.bytes.assign(bytes.begin()+in.pos,bytes.begin()+in.pos+size);
-            in.pos+=size;
-            skin.clips.push_back(std::move(clip));
-        }
-        result.skins.push_back(std::move(skin));
-    }
-
-    for(std::uint32_t i=0;i<meshes;++i) {
-        ::scene::mesh mesh;
-        std::uint32_t vertices=0,indices=0;
-        if(!take_all(in,mesh.id,mesh.skin_id,vertices,indices)||
-           !vertices||!indices||indices%3||left(in)<76||
-           std::uint64_t(vertices)*(mesh.skin_id?64u:32u)+
-           std::uint64_t(indices)*4u>left(in)-76)return false;
-        if(!material_take(in,mesh.surface))return false;
-        mesh.vertices.resize(vertices);
-        mesh.indices.resize(indices);
-        for(auto& v:mesh.vertices) {
-            if(!take_all(in,v.position,v.normal,v.u,v.v))return false;
-            if(mesh.skin_id) {
-                for(auto& joint:v.joints)if(!take(in,joint))return false;
-                for(auto& weight:v.weights)
-                    if(!take(in,weight)||weight<0||weight>1)return false;
-            }
-        }
-        for(auto& index:mesh.indices)
-            if(!take(in,index)||index>=vertices)return false;
-        result.meshes.push_back(std::move(mesh));
-    }
-
-    if(instances>left(in)/48)return false;
-    for(std::uint32_t i=0;i<instances;++i) {
-        ::scene::instance item;
-        if(!take_all(in,item.id,item.mesh_id,item.animation,item.animation_tick,
-           item.overlay_animation,item.overlay_root,item.overlay_weight,
-           item.pose.position,item.pose.scale,item.pose.rotation.x,
-           item.pose.rotation.y,item.pose.rotation.z,item.pose.rotation.w)||
-           item.overlay_weight<0||item.overlay_weight>1)return false;
-        result.instances.push_back(std::move(item));
-    }
-    for(std::uint32_t i=0;i<boxes;++i) {
-        ::scene::collision_box b{};
-        if(!take_all(in,b.minimum,b.maximum)||!valid_box(b.minimum,b.maximum))
-            return false;
-        result.collision_boxes.push_back(b);
-    }
-    for(std::uint32_t i=0;i<lights;++i) {
-        ::scene::point_light l{};
-        if(!take_all(in,l.position,l.radius,l.color,l.strength)||!valid_light(l))
-            return false;
-        result.lights.push_back(l);
-    }
-    if(left(in))return false;
-    scene=std::move(result);
-    return true;
-}
-
-std::uint32_t checksum(const std::vector<std::uint8_t>& bytes) {
-    return hash(bytes.data(),bytes.size());
-}
-std::vector<std::uint8_t> encode_batch(const std::vector<std::uint8_t>& bytes,
-                                      std::uint32_t token,std::uint32_t batch,bool final) {
-    if(bytes.empty()||bytes.size()>max_scene_bytes||!token||batch>=65535)
-        throw std::invalid_argument("invalid scene batch");
-    std::vector<std::uint8_t> result{'V','G','S','C',1,std::uint8_t(final),0,0};
-    put_all(result,token,batch,checksum(bytes));
-    append(result,bytes);
-    return result;
-}
-bool decode_batch(const std::vector<std::uint8_t>& bytes,batch_payload& result) {
-    if(bytes.size()<=20||bytes.size()>max_scene_bytes+20||
-       bytes[0]!='V'||bytes[1]!='G'||bytes[2]!='S'||bytes[3]!='C'||
-       bytes[4]!=1||bytes[5]>1||bytes[6]||bytes[7])return false;
-    cursor in{bytes,8};
-    std::uint32_t token=0,batch=0,expected=0;
-    if(!take_all(in,token,batch,expected)||!token||batch>=65535)return false;
-    const auto got=hash(bytes.data()+20,bytes.size()-20);
-    if(expected!=got)return false;
-    result={token,batch,bytes[5]!=0,
-        std::vector<std::uint8_t>(bytes.begin()+20,bytes.end())};
-    return true;
-}
-} // namespace net::scene_stream
-
-// [srv/shared/net/weapon.cpp]
-// Wire fields are fixed-size and share the movement field codec.
-namespace net::weapon {
-namespace {
-    using namespace net::movement::detail;
-    bool header(const std::uint8_t* p,std::size_t n,std::size_t expected,std::uint8_t type) {
-        return p&&n==expected&&p[0]=='V'&&p[1]=='G'&&p[2]=='U'&&
-            p[3]=='N'&&p[4]==2&&p[5]==type&&!p[6]&&!p[7];
-    }
-    void write_state(std::uint8_t* p,const snapshot& v) {
-        fields(p+8,v.token,v.sequence,v.tick,v.magazine,v.reserve,
-            std::uint32_t(v.reload),std::uint32_t(v.outcome),
-            v.reload_elapsed,v.reload_duration,v.refill_time,
-            v.weapon_id,v.active_weapon_id);
-    }
-    std::optional<snapshot> read_state(const std::uint8_t* p) {
-        snapshot v{};
-        std::uint32_t reload=0,outcome=0;
-        fields(p+8,v.token,v.sequence,v.tick,v.magazine,v.reserve,reload,outcome,
-            v.reload_elapsed,v.reload_duration,v.refill_time,
-            v.weapon_id,v.active_weapon_id);
-        v.reload=reload_phase(reload);
-        v.outcome=result(outcome);
-        if(!v.token||!v.weapon_id||!v.active_weapon_id||reload>2||
-           outcome>std::uint32_t(result::equipped)||
-           !std::isfinite(v.reload_elapsed)||!std::isfinite(v.reload_duration)||
-           !std::isfinite(v.refill_time)||v.reload_elapsed<0||
-           v.reload_duration<0||v.refill_time<0||
-           v.reload_elapsed>v.reload_duration||v.refill_time>v.reload_duration)
-            return std::nullopt;
-        return v;
-    }
-}
-command_packet encode_command(const command& v) {
-    command_packet p{'V','G','U','N',2,1,0,0};
-    net::movement::detail::fields(p.data()+8,
-        v.token,v.sequence,std::uint32_t(v.kind),v.yaw,v.pitch,v.weapon_id);
-    return p;
-}
-std::optional<command> decode_command(const std::uint8_t* p,std::size_t n) {
-    if(!header(p,n,command_packet{}.size(),1))return std::nullopt;
-    command v{};
-    std::uint32_t kind=0;
-    net::movement::detail::fields(p+8,v.token,v.sequence,kind,v.yaw,v.pitch,v.weapon_id);
-    v.kind=action(kind);
-    if(!v.token||!v.sequence||!v.weapon_id||kind<1||kind>3||
-       !std::isfinite(v.yaw)||!std::isfinite(v.pitch)||
-       std::abs(v.yaw)>1000||std::abs(v.pitch)>1.570797f)
-        return std::nullopt;
-    return v;
-}
-snapshot_packet encode_snapshot(const snapshot& v) {
-    snapshot_packet p{'V','G','U','N',2,2,0,0};
-    write_state(p.data(),v);
-    return p;
-}
-std::optional<snapshot> decode_snapshot(const std::uint8_t* p,std::size_t n) {
-    if(!header(p,n,snapshot_packet{}.size(),2))return std::nullopt;
-    return read_state(p);
-}
-shot_packet encode_shot(const shot& v) {
-    shot_packet p{'V','G','U','N',2,3,0,0};
-    write_state(p.data(),v.state);
-    const auto& h=v.impact;
-    net::movement::detail::fields(p.data()+56,std::uint32_t(h.impacted),
-        h.position.x,h.position.y,h.position.z,
-        h.normal.x,h.normal.y,h.normal.z,h.instance,h.triangle);
-    return p;
-}
-std::optional<shot> decode_shot(const std::uint8_t* p,std::size_t n) {
-    if(!header(p,n,shot_packet{}.size(),3))return std::nullopt;
-    const auto state=read_state(p);
-    if(!state)return std::nullopt;
-    shot v{};
-    v.state=*state;
-    std::uint32_t impacted=0;
-    auto& h=v.impact;
-    net::movement::detail::fields(p+56,impacted,
-        h.position.x,h.position.y,h.position.z,
-        h.normal.x,h.normal.y,h.normal.z,h.instance,h.triangle);
-    if(impacted>1)return std::nullopt;
-    h.impacted=impacted==1;
-    const auto finite=[](float x){return std::isfinite(x)&&std::abs(x)<1000000.f;};
-    if(!finite(h.position.x)||!finite(h.position.y)||!finite(h.position.z)||
-       !finite(h.normal.x)||!finite(h.normal.y)||!finite(h.normal.z))
-        return std::nullopt;
-    if(h.impacted&&(state->outcome!=result::fired||!h.instance||
-       std::abs(vk::util::math::length_squared(h.normal)-1.f)>.01f))
-        return std::nullopt;
-    return v;
-}
-} // namespace net::weapon
-
-// [srv/shared/player/movement.cpp]
-// Fixed-tick data update: one flat player state, contiguous colliders and spatial index.
-#include <optional>
-#include <stdexcept>
-#include <algorithm>
-#include <cmath>
-#include <limits>
-#include <vector>
-#include <numeric>
-namespace player {
-namespace {
-    using namespace vk::util::math;
-    std::optional<parameters_t> configured;
-
-    bool overlaps_xz(vec3 p,const box& b) {
-        const float r=parameters().radius;
-        return p.x+r>b.min.x && p.x-r<b.max.x &&
-               p.z+r>b.min.z && p.z-r<b.max.z;
-    }
-    bool overlaps_y(float y,const box& b) {
-        return y<b.max.y && y+parameters().height>b.min.y;
-    }
-}
-void configure(parameters_t p) {
-    if(!std::isfinite(p.spawn.x)||!std::isfinite(p.spawn.y)||
-       !std::isfinite(p.spawn.z)||!std::isfinite(p.walk_speed)||
-       !std::isfinite(p.sprint_speed)||!std::isfinite(p.gravity)||
-       !std::isfinite(p.radius)||!std::isfinite(p.height)||
-       p.walk_speed<=0||p.sprint_speed<=0||p.gravity<=0||
-       p.radius<=0||p.height<=0)
-        throw std::invalid_argument("Player parameters must be specified by the server");
-    configured=p;
-}
-const parameters_t& parameters() {
-    if(!configured)throw std::logic_error("Player parameters not yet received from server");
-    return *configured;
-}
-collision_world build_colliders(const ::scene::state& scene) {
-    return build_colliders(scene.meshes,scene.instances);
-}
-collision_world build_colliders(const std::vector<::scene::mesh>& meshes,
-                                const std::vector<::scene::instance>& instances) {
-    using namespace vk::util::math;
-    collision_world boxes;
-    boxes.reserve(instances.size());
-    for(const auto& instance:instances) {
-        const auto mesh=std::find_if(meshes.begin(),meshes.end(),
-            [&](const ::scene::mesh& m){return m.id==instance.mesh_id;});
-        if(mesh==meshes.end()||mesh->vertices.empty())continue;
-        const float limit=std::numeric_limits<float>::max();
-        box b{{limit,limit,limit},{-limit,-limit,-limit}};
-        const auto& pose=instance.pose;
-        for(const auto& v:mesh->vertices) {
-            const vec3 scaled{
-                v.position.x*pose.scale.x,v.position.y*pose.scale.y,
-                v.position.z*pose.scale.z};
-            const vec3 p=pose.position+rotate(pose.rotation,scaled);
-            b.min={std::min(b.min.x,p.x),std::min(b.min.y,p.y),std::min(b.min.z,p.z)};
-            b.max={std::max(b.max.x,p.x),std::max(b.max.y,p.y),std::max(b.max.z,p.z)};
-        }
-        boxes.push_back(b);
-    }
-    return boxes;
-}
-spatial::index build_index(const collision_world& boxes) {
-    std::vector<spatial::bounds> bounds;
-    bounds.reserve(boxes.size());
-    for(const auto& box:boxes)bounds.push_back({box.min,box.max});
-    spatial::index index;
-    index.rebuild(std::move(bounds));
-    return index;
-}
-void step(state& p,const input& keys,const collision_world& world,
-          const spatial::index* broadphase) {
-    using namespace vk::util::math;
-    const auto& settings=parameters();
-    const float radius=settings.radius,height=settings.height;
-    const float dt=1.f/float(net::limits::tick_hz);
-    const vec3 front{std::sin(keys.yaw),0,-std::cos(keys.yaw)};
-    const vec3 side{std::cos(keys.yaw),0,std::sin(keys.yaw)};
-    vec3 movement{};
-    if(keys.buttons&forward)movement=movement+front;
-    if(keys.buttons&backward)movement=movement-front;
-    if(keys.buttons&right)movement=movement+side;
-    if(keys.buttons&left)movement=movement-side;
-    if(length_squared(movement)>1.f)movement=normalize(movement);
-    const float speed=keys.buttons&sprint?settings.sprint_speed:settings.walk_speed;
-    p.velocity.x=movement.x*speed;
-    p.velocity.z=movement.z*speed;
-    const vec3 previous=p.position;
-
-    // Reuse candidate storage across fixed ticks; no per-frame heap churn.
-    thread_local std::vector<std::uint32_t> candidates;
-    candidates.clear();
-    if(broadphase) {
-        const float horizontal=radius+std::max(settings.walk_speed,settings.sprint_speed)*dt+.01f;
-        const float vertical=std::abs(p.velocity.y)*dt+settings.gravity*dt*dt+.05f;
-        broadphase->query({{
-            p.position.x-horizontal,p.position.y-vertical,p.position.z-horizontal},{
-            p.position.x+horizontal,p.position.y+height+vertical,p.position.z+horizontal}},
-            [&](std::uint32_t id){candidates.push_back(id);});
-    } else {
-        candidates.resize(world.size());
-        std::iota(candidates.begin(),candidates.end(),0u);
-    }
-
-    // Resolve X and Z with the same axis-separated rule.
-    for(int axis=0;axis<2;++axis) {
-        float& position=axis?p.position.z:p.position.x;
-        const float velocity=axis?p.velocity.z:p.velocity.x;
-        const float old=position;
-        position+=velocity*dt;
-        for(const auto id:candidates) {
-            const auto& b=world[id];
-            if(!overlaps_y(p.position.y,b)||!overlaps_xz(p.position,b))continue;
-            const float lo=axis?b.min.z:b.min.x;
-            const float hi=axis?b.max.z:b.max.x;
-            if(velocity>0&&old+radius<=lo)position=lo-radius;
-            else if(velocity<0&&old-radius>=hi)position=hi+radius;
-        }
-    }
-
-    p.velocity.y-=settings.gravity*dt;
-    p.position.y+=p.velocity.y*dt;
-    p.grounded=false;
-    for(const auto id:candidates) {
-        const auto& b=world[id];
-        if(!overlaps_xz(p.position,b))continue;
-        if(p.velocity.y<=0 && previous.y>=b.max.y-.0001f &&
-           p.position.y<b.max.y) {
-            p.position.y=b.max.y;
-            p.velocity.y=0;
-            p.grounded=true;
-        } else if(p.velocity.y>0 && previous.y+height<=b.min.y &&
-                  p.position.y+height>b.min.y) {
-            p.position.y=b.min.y-height;
-            p.velocity.y=0;
-        }
-    }
-}
-} // namespace player
-
-// [srv/game/options.cpp]
-#include <cmath>
-#include <iostream>
-#include <stdexcept>
-#include <utility>
-namespace game::options {
-    state* get() {
-        static state value;
-        return &value;
-    }
-    void init(int argc,char** argv,mode selected_mode,state initial) {
-        initial.mode=selected_mode;
-        bool host_given=false,bind_given=false;
-        for(int i=1;i<argc;++i) {
-            const std::string arg=argv[i];
-            if(arg=="--help") {initial.help=true;continue;}
-            if(arg=="--headless") {initial.headless=true;continue;}
-            if(arg!="--port"&&arg!="--duration"&&arg!="--host"&&arg!="--bind")
-                throw std::invalid_argument("Unknown option: "+arg);
-            if(++i==argc)throw std::invalid_argument("Missing value for "+arg);
-            const std::string value=argv[i];
-            std::size_t end=0;
-            if(arg=="--port") {
-                const auto port=std::stoul(value,&end);
-                if(end!=value.size()||value.empty()||value[0]=='-'||!port||port>65535)
-                    throw std::invalid_argument("Port must be in 1..65535");
-                initial.port=std::uint16_t(port);
-            } else if(arg=="--duration") {
-                initial.duration=std::stod(value,&end);
-                if(end!=value.size()||!std::isfinite(initial.duration)||initial.duration<=0)
-                    throw std::invalid_argument("Duration must be a positive number of seconds");
-            } else if(arg=="--host") {
-                initial.host=value;
-                host_given=true;
-            } else {
-                initial.bind_host=value;
-                bind_given=true;
-            }
-        }
-        if(!initial.help) {
-            if(initial.mode==mode::server_only && initial.headless)
-                throw std::invalid_argument("--headless requires a client mode");
-            if(initial.mode!=mode::client_only && host_given)
-                throw std::invalid_argument("--host is only supported by vulkan-client");
-            if(initial.mode==mode::client_only && bind_given)
-                throw std::invalid_argument("--bind is only supported by vulkan-server");
-        }
-        if(!initial.port||
-           (initial.mode==mode::server_only && initial.bind_host.empty()))
-            throw std::invalid_argument("A server bind address and UDP port are required");
-        if(initial.mode==mode::client_only) {
-            const auto& g=initial.graphics;
-            if(initial.host.empty()||g.width<=0||g.height<=0||g.title.empty()||
-               g.vertex_shader.empty()||g.fragment_shader.empty()||
-               g.gbuffer==gbuffer_precision::unspecified||
-               g.surface==surface_format::unspecified||
-               g.depth==depth_precision::unspecified||
-               g.present==presentation::unspecified||
-               g.culling_shader.empty()||g.lighting_shader.empty()||
-               g.tonemap_shader.empty()||g.fullscreen_shader.empty()||
-               g.presentation_shader.empty()||g.exposure<0)
-                throw std::invalid_argument("Client graphics configuration is incomplete");
-        }
-        *get()=std::move(initial);
-    }
-    void print_help() {
-        const bool server=get()->mode==mode::server_only;
-        std::cout<<(server?"Usage: vulkan-server [OPTIONS]\n\n":
-                            "Usage: vulkan-client [OPTIONS]\n\n");
-        std::cout<<"Options:\n  --port PORT         UDP port (configured in server.cpp or client.cpp)\n";
-        if(server)
-            std::cout<<"  --bind ADDRESS      Server listen address (server.cpp)\n";
-        else
-            std::cout<<"  --host HOST         Server address (client.cpp)\n"
-                     <<"  --headless          Run the client without a window\n";
-        std::cout<<"  --duration SECONDS  Stop automatically after the given time\n"
-                 <<"  --help              Show this help\n";
-    }
-    void shutdown() {*get()={};}
-} // namespace game::options
-
-// [srv/game/state.cpp]
-
-
-namespace game::application
-{
-    state* get()
-    {
-        static state data;
-        return &data;
-    }
-} // namespace game::application
-
+#endif
