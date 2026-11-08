@@ -8295,112 +8295,43 @@ namespace srv::assets
 
 
 // [srv/shared/net/animation.cpp]
-
-
+// Flat animation and attachment-event packets, shared 32-bit field encoding.
 #include <cmath>
-#include <cstring>
-
-namespace net::animation
-{
-    namespace
-    {
-        void write(std::uint8_t* out, std::uint32_t value)
-        {
-            out[0] = std::uint8_t(value >> 24);
-            out[1] = std::uint8_t(value >> 16);
-            out[2] = std::uint8_t(value >> 8);
-            out[3] = std::uint8_t(value);
-        }
-
-        std::uint32_t read(const std::uint8_t* in)
-        {
-            return (std::uint32_t(in[0]) << 24) |
-                (std::uint32_t(in[1]) << 16) |
-                (std::uint32_t(in[2]) << 8) | std::uint32_t(in[3]);
-        }
+namespace net::animation {
+    packet encode(const resource& state) {
+        packet p{'A','N','I','M'};
+        net::movement::detail::fields(p.data()+4,1u,state.token,state.server_tick,
+            state.instance_id,state.clip,state.start_tick,state.overlay,
+            state.mask_root,state.blend);
+        return p;
     }
-
-    packet encode(const resource& state)
-    {
-        packet bytes{};
-        bytes[0] = 'A';
-        bytes[1] = 'N';
-        bytes[2] = 'I';
-        bytes[3] = 'M';
-        write(bytes.data() + 4, 1);
-        write(bytes.data() + 8, state.token);
-        write(bytes.data() + 12, state.server_tick);
-        write(bytes.data() + 16, state.instance_id);
-        write(bytes.data() + 20, state.clip);
-        write(bytes.data() + 24, state.start_tick);
-        write(bytes.data() + 28, state.overlay);
-        write(bytes.data() + 32, state.mask_root);
-        std::uint32_t bits = 0;
-        std::memcpy(&bits, &state.blend, sizeof(bits));
-        write(bytes.data() + 36, bits);
-        return bytes;
-    }
-
-    std::optional<resource> decode(const std::uint8_t* bytes, std::size_t size)
-    {
-        if (!bytes || size != packet{}.size() ||
-            bytes[0] != 'A' || bytes[1] != 'N' ||
-            bytes[2] != 'I' || bytes[3] != 'M' ||
-            read(bytes + 4) != 1)
+    std::optional<resource> decode(const std::uint8_t* p,std::size_t n) {
+        if(!p||n!=packet{}.size()||p[0]!='A'||p[1]!='N'||
+           p[2]!='I'||p[3]!='M'||net::movement::detail::get(p+4)!=1u)
             return std::nullopt;
-
-        resource result;
-        result.token = read(bytes + 8);
-        result.server_tick = read(bytes + 12);
-        result.instance_id = read(bytes + 16);
-        result.clip = read(bytes + 20);
-        result.start_tick = read(bytes + 24);
-        result.overlay = read(bytes + 28);
-        result.mask_root = read(bytes + 32);
-        const auto bits = read(bytes + 36);
-        std::memcpy(&result.blend, &bits, sizeof(result.blend));
-        if (!result.token || !result.instance_id ||
-            !std::isfinite(result.blend) ||
-            result.blend < 0 || result.blend > 1)
-            return std::nullopt;
-        return result;
+        resource v{};
+        net::movement::detail::fields(p+8,v.token,v.server_tick,v.instance_id,
+            v.clip,v.start_tick,v.overlay,v.mask_root,v.blend);
+        if(!v.token||!v.instance_id||!std::isfinite(v.blend)||
+           v.blend<0||v.blend>1)return std::nullopt;
+        return v;
     }
-    event_packet encode_event(const attachment_event& event)
-    {
-        event_packet bytes{};
-        bytes[0] = 'E';
-        bytes[1] = 'V';
-        bytes[2] = 'N';
-        bytes[3] = 'T';
-        write(bytes.data() + 4, event.token);
-        write(bytes.data() + 8, event.tick);
-        write(bytes.data() + 12, event.sequence);
-        write(bytes.data() + 16, event.instance_id);
-        write(bytes.data() + 20, event.joint);
-        write(bytes.data() + 24, event.kind);
-        return bytes;
+    event_packet encode_event(const attachment_event& e) {
+        event_packet p{'E','V','N','T'};
+        net::movement::detail::fields(p.data()+4,e.token,e.tick,e.sequence,
+            e.instance_id,e.joint,e.kind);
+        return p;
     }
-
-    std::optional<attachment_event> decode_event(const std::uint8_t* bytes,
-                                                  std::size_t size)
-    {
-        if (!bytes || size != event_packet{}.size() ||
-            bytes[0] != 'E' || bytes[1] != 'V' ||
-            bytes[2] != 'N' || bytes[3] != 'T')
-            return std::nullopt;
-        attachment_event event;
-        event.token = read(bytes + 4);
-        event.tick = read(bytes + 8);
-        event.sequence = read(bytes + 12);
-        event.instance_id = read(bytes + 16);
-        event.joint = read(bytes + 20);
-        event.kind = read(bytes + 24);
-        return event.token && event.instance_id && event.sequence ?
-            std::optional<attachment_event>(event) : std::nullopt;
+    std::optional<attachment_event> decode_event(const std::uint8_t* p,std::size_t n) {
+        if(!p||n!=event_packet{}.size()||p[0]!='E'||p[1]!='V'||
+           p[2]!='N'||p[3]!='T')return std::nullopt;
+        attachment_event v{};
+        net::movement::detail::fields(p+4,v.token,v.tick,v.sequence,
+            v.instance_id,v.joint,v.kind);
+        if(!v.token||!v.instance_id||!v.sequence)return std::nullopt;
+        return v;
     }
 } // namespace net::animation
-
-
 
 // [srv/shared/net/message.cpp]
 
