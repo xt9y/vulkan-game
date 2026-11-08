@@ -50,6 +50,9 @@ namespace scene
         float radius=1.0f;
         vk::util::math::vec3 color{1.0f,1.0f,1.0f};
         float strength=1.0f;
+        // Server editor deletion preserves a stable light slot and its ID.
+        // Disabled slots contribute zero light and can be reused by Insert.
+        bool enabled=true;
     };
 
     struct state {
