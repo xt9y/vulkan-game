@@ -189,6 +189,28 @@ int main(int argc, char** argv)
         std::signal(SIGINT, stop);
         std::signal(SIGTERM, stop);
         srv::application::set_scene(make_level());
+        // The level editor is a developer-only operation. Only local DTLS
+        // clients may change this server's lights; other peers can observe
+        // the replicated results but cannot mutate the world.
+        srv::application::on_editor_permission(
+            [](const net::endpoint::resource& peer)
+            {
+                if(peer.address.ss_family==AF_INET)
+                {
+                    const auto* address=
+                        reinterpret_cast<const sockaddr_in*>(&peer.address);
+                    const auto* octets=reinterpret_cast<const unsigned char*>(
+                        &address->sin_addr);
+                    return octets[0]==127; // 127.0.0.0/8
+                }
+                if(peer.address.ss_family==AF_INET6)
+                {
+                    const auto* address=
+                        reinterpret_cast<const sockaddr_in6*>(&peer.address);
+                    return IN6_IS_ADDR_LOOPBACK(&address->sin6_addr)!=0;
+                }
+                return false;
+            });
 
         srv::application::init();
         const int result = srv::application::run();
