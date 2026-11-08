@@ -289,12 +289,19 @@ namespace clt::connection
             get()->authority.reset();
             get()->server_parameters.reset();
         }
+        {
+            std::lock_guard<std::mutex> lock(get()->editor_mutex);
+            get()->editor_outgoing.clear();
+            get()->editor_sequence=0;
+        }
 
         {
             std::lock_guard<std::mutex> lock(get()->scene_mutex);
             get()->scene.reset();
             get()->pending_scene.clear();
             get()->last_publish = {};
+            get()->light_versions.fill(0);
+            get()->light_pending.fill(std::nullopt);
         }
 
         {
@@ -325,12 +332,19 @@ namespace clt::connection
             get()->outgoing.clear();
             get()->authority.reset();
         }
+        {
+            std::lock_guard<std::mutex> lock(get()->editor_mutex);
+            get()->editor_outgoing.clear();
+            get()->editor_sequence=0;
+        }
 
         {
             std::lock_guard<std::mutex> lock(get()->scene_mutex);
             get()->scene.reset();
             get()->pending_scene.clear();
             get()->last_publish = {};
+            get()->light_versions.fill(0);
+            get()->light_pending.fill(std::nullopt);
         }
 
         net::secure::destroy(get()->socket);
@@ -386,6 +400,7 @@ namespace clt::connection
                 auto next_scene_send = next_send;
                 auto next_move_send = next_send;
                 auto next_weapon_send = next_send;
+                auto next_editor_send = next_send;
                 auto last_received = next_send;
                 auto retry = std::chrono::milliseconds(net::limits::retry_ms);
                 std::array<std::uint8_t,1473> buffer{};
@@ -399,6 +414,11 @@ namespace clt::connection
                         data.weapon_shots.clear();
                         data.weapon_ack = data.weapon_tick = 0;
                         data.weapon_versions.clear();
+                    }
+                    {
+                        std::lock_guard<std::mutex> lock(data.editor_mutex);
+                        data.editor_outgoing.clear();
+                        data.editor_sequence=0;
                     }
                     transport.clear();
                     transport.open(server);
@@ -416,6 +436,8 @@ namespace clt::connection
                     data.scene.reset();
                     data.pending_scene.clear();
                     data.last_publish = {};
+                    data.light_versions.fill(0);
+                    data.light_pending.fill(std::nullopt);
                     {
                         std::lock_guard<std::mutex> animation_lock(data.animation_mutex);
                         data.animations.clear();
@@ -445,6 +467,40 @@ namespace clt::connection
                             break;
                         }
 
+                        if(const auto update=net::editor_light::decode(
+                            buffer.data(),*size))
+                        {
+                            if(net::endpoint::equal(peer,server) &&
+                               update->token==token &&
+                               data.connected.load(std::memory_order_relaxed) &&
+                               (update->type==net::editor_light::kind::state ||
+                                update->type==net::editor_light::kind::ack))
+                            {
+                                if(update->type==net::editor_light::kind::ack)
+                                {
+                                    std::lock_guard<std::mutex> lock(data.editor_mutex);
+                                    if(!data.editor_outgoing.empty() &&
+                                       data.editor_outgoing.front().sequence==
+                                           update->sequence)
+                                    {
+                                        data.editor_outgoing.pop_front();
+                                        std::clog<<"clt: editor light "<<update->index
+                                                 <<" confirmed by server\n";
+                                    }
+                                }
+                                {
+                                    std::lock_guard<std::mutex> lock(data.scene_mutex);
+                                    auto& revision=data.light_versions[update->index];
+                                    if(net::message::newer(update->revision,revision))
+                                    {
+                                        revision=update->revision;
+                                        data.light_pending[update->index]=*update;
+                                    }
+                                }
+                                last_received=now;
+                            }
+                            continue;
+                        }
                         auto accept_weapon = [&](const net::weapon::snapshot& update)
                         {
                             std::lock_guard<std::mutex> lock(data.weapon_mutex);
@@ -787,6 +843,26 @@ namespace clt::connection
                     else
                     {
                         unacknowledged.clear();
+                    }
+
+                    if(data.connected.load(std::memory_order_relaxed) &&
+                       now>=next_editor_send)
+                    {
+                        std::optional<net::editor_light::resource> pending;
+                        {
+                            std::lock_guard<std::mutex> lock(data.editor_mutex);
+                            if(!data.editor_outgoing.empty())
+                                pending=data.editor_outgoing.front();
+                        }
+                        if(pending)
+                        {
+                            pending->token=token;
+                            const auto bytes=net::editor_light::encode(*pending);
+                            net::secure::send(data.socket,server,
+                                              bytes.data(),bytes.size());
+                        }
+                        // Retransmit until the matching server ACK arrives.
+                        next_editor_send=now+50ms;
                     }
 
                     auto wake = data.connected.load(std::memory_order_relaxed) && !scene_ready
