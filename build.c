@@ -90,23 +90,23 @@ void build(C_Build* b)
 {
     compile_shaders();
     prepare_editor_assets();
-    C_Dependency* engine =
-        c_git(b, "VulkanEngine", "https://github.com/xt9y/vulkan-engine.git", "4b792b574727115d7478f414e11e9540e848404e");
-    c_dep_cbuild(engine, "VulkanEngine", C_TARGET_STATIC_LIBRARY);
-    c_dep_include(engine, ".");
+    C_Dependency* wrapper =
+        c_git(b, "VulkanWrapper", "https://github.com/xt9y/vulkan-wrapper.git", "0d4e7e2ff59516ad9225015dffb22c5f487c485c");
+    c_dep_cbuild(wrapper, "VulkanWrapper", C_TARGET_STATIC_LIBRARY);
+    c_dep_include(wrapper, ".");
 
     // Each VulkanSystems module is fetched through its own standalone build.
     // Pin all modules to the same commit. c.lock otherwise retains old main
     // revisions, causing missing headers when modules gain new APIs.
     // Never rely on vulkan-systems/build.c or link a monolithic VulkanSystems.
     C_Dependency* gpu =
-        c_git(b, "VulkanGPU", "https://github.com/xt9y/vulkan-systems.git", "7e115b3b6479ef51720aef3c31ef7d27a7213e79");
+        c_git(b, "VulkanGPU", "https://github.com/xt9y/vulkan-systems.git", "2c4fb95fcdd5544ab8a4f28ae119e7fbbe95fdb9");
     c_dep_subdir(gpu, "gpu");
     c_dep_cbuild(gpu, "VulkanGPU", C_TARGET_STATIC_LIBRARY);
     c_dep_include(gpu, ".");
 
     C_Dependency* render =
-        c_git(b, "VulkanRender", "https://github.com/xt9y/vulkan-systems.git", "7e115b3b6479ef51720aef3c31ef7d27a7213e79");
+        c_git(b, "VulkanRender", "https://github.com/xt9y/vulkan-systems.git", "2c4fb95fcdd5544ab8a4f28ae119e7fbbe95fdb9");
     c_dep_subdir(render, "render");
     c_dep_cbuild(render, "VulkanRender", C_TARGET_STATIC_LIBRARY);
     c_dep_include(render, ".");
@@ -114,14 +114,14 @@ void build(C_Build* b)
     c_dep_include(render, "../gpu");
 
     C_Dependency* bvh =
-        c_git(b, "VulkanBVH", "https://github.com/xt9y/vulkan-systems.git", "7e115b3b6479ef51720aef3c31ef7d27a7213e79");
+        c_git(b, "VulkanBVH", "https://github.com/xt9y/vulkan-systems.git", "2c4fb95fcdd5544ab8a4f28ae119e7fbbe95fdb9");
     c_dep_subdir(bvh, "bvh");
     c_dep_cbuild(bvh, "VulkanBVH", C_TARGET_STATIC_LIBRARY);
     c_dep_include(bvh, ".");
 
     // The dedicated server needs no GPU, BVH or presentation dependencies.
     C_Dependency* network =
-        c_git(b, "VulkanNetwork", "https://github.com/xt9y/vulkan-systems.git", "7e115b3b6479ef51720aef3c31ef7d27a7213e79");
+        c_git(b, "VulkanNetwork", "https://github.com/xt9y/vulkan-systems.git", "2c4fb95fcdd5544ab8a4f28ae119e7fbbe95fdb9");
     c_dep_subdir(network, "network");
     c_dep_cbuild(network, "VulkanNetwork", C_TARGET_STATIC_LIBRARY);
     c_dep_include(network, ".");
@@ -137,20 +137,20 @@ void build(C_Build* b)
     c_dep_link(crypto, "mbedcrypto");
 
     C_Dependency* spatial =
-        c_git(b, "VulkanSpatial", "https://github.com/xt9y/vulkan-systems.git", "7e115b3b6479ef51720aef3c31ef7d27a7213e79");
+        c_git(b, "VulkanSpatial", "https://github.com/xt9y/vulkan-systems.git", "2c4fb95fcdd5544ab8a4f28ae119e7fbbe95fdb9");
     c_dep_subdir(spatial, "spatial");
     c_dep_cbuild(spatial, "VulkanSpatial", C_TARGET_STATIC_LIBRARY);
     c_dep_include(spatial, ".");
 
     C_Dependency* jobs =
-        c_git(b, "VulkanJobs", "https://github.com/xt9y/vulkan-systems.git", "7e115b3b6479ef51720aef3c31ef7d27a7213e79");
+        c_git(b, "VulkanJobs", "https://github.com/xt9y/vulkan-systems.git", "2c4fb95fcdd5544ab8a4f28ae119e7fbbe95fdb9");
     c_dep_subdir(jobs, "jobs");
     c_dep_cbuild(jobs, "VulkanJobs", C_TARGET_STATIC_LIBRARY);
     c_dep_include(jobs, ".");
 
     // Optional, renderer-independent editor: no scene or server dependencies.
     C_Dependency* editor =
-        c_git(b, "VulkanEditor", "https://github.com/xt9y/vulkan-systems.git", "editor-xfont-v4");
+        c_git(b, "VulkanEditor", "https://github.com/xt9y/vulkan-systems.git", "2c4fb95fcdd5544ab8a4f28ae119e7fbbe95fdb9");
     c_dep_subdir(editor, "editor");
     c_dep_cbuild(editor, "VulkanEditor", C_TARGET_STATIC_LIBRARY);
     c_dep_include(editor, ".");
@@ -222,7 +222,7 @@ void build(C_Build* b)
     c_use(server, crypto);
     c_use(server, spatial);
     c_use(server, jobs);
-    c_use(server, engine);
+    c_use(server, wrapper);
     c_use(server, headers);
     c_use(server, fastgltf);
     c_use(server, ozz);
@@ -253,7 +253,7 @@ void build(C_Build* b)
     c_include(client, ".");
     c_warnings_strict(client);
     c_flag(client, "-std=c++20");
-    // Dependents first, providers after: Render -> GPU -> Engine.
+    // Dependents first, providers after: Render -> GPU -> Wrapper.
     c_use(client, editor);
     c_use(client, render);
     c_use(client, bvh);
@@ -262,7 +262,7 @@ void build(C_Build* b)
     c_use(client, crypto);
     c_use(client, spatial);
     c_use(client, jobs);
-    c_use(client, engine);
+    c_use(client, wrapper);
     c_use(client, headers);
     c_use(client, glfw);
     c_use(client, fastgltf);
