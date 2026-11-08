@@ -401,6 +401,8 @@ namespace clt::connection
                 auto next_move_send = next_send;
                 auto next_weapon_send = next_send;
                 auto next_editor_send = next_send;
+                std::uint32_t editor_retry_sequence=0;
+                std::uint32_t editor_retry_attempts=0;
                 auto last_received = next_send;
                 auto retry = std::chrono::milliseconds(net::limits::retry_ms);
                 std::array<std::uint8_t,1473> buffer{};
@@ -857,10 +859,37 @@ namespace clt::connection
                         }
                         if(pending)
                         {
-                            pending->token=token;
-                            const auto bytes=net::editor_light::encode(*pending);
-                            net::secure::send(data.socket,server,
-                                              bytes.data(),bytes.size());
+                            if(pending->sequence!=editor_retry_sequence)
+                            {
+                                editor_retry_sequence=pending->sequence;
+                                editor_retry_attempts=0;
+                            }
+                            if(editor_retry_attempts++<100u)
+                            {
+                                pending->token=token;
+                                const auto bytes=net::editor_light::encode(*pending);
+                                net::secure::send(data.socket,server,
+                                                  bytes.data(),bytes.size());
+                            }
+                            else
+                            {
+                                // Invalid permissions or rejected edits
+                                // cannot hold the command queue indefinitely.
+                                std::lock_guard<std::mutex> lock(data.editor_mutex);
+                                if(!data.editor_outgoing.empty() &&
+                                   data.editor_outgoing.front().sequence==
+                                       pending->sequence)
+                                    data.editor_outgoing.pop_front();
+                                std::clog<<"clt: editor light request not acknowledged "
+                                         <<"(check server editor permissions)\n";
+                                editor_retry_sequence=0;
+                                editor_retry_attempts=0;
+                            }
+                        }
+                        else
+                        {
+                            editor_retry_sequence=0;
+                            editor_retry_attempts=0;
                         }
                         // Retransmit until the matching server ACK arrives.
                         next_editor_send=now+50ms;
