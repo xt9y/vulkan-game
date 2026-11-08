@@ -7,6 +7,91 @@
 #include <direct.h>
 #endif
 
+#ifndef _WIN32
+#define WRAPPER_PYTHON "python3"
+#else
+#define WRAPPER_PYTHON "python"
+#endif
+
+// The Vulkan libraries are checked-in Git submodules. No duplicate Git
+// checkouts, dependency cache or remote Vulkan cbuild invocation is needed.
+static void prepare_vulkan_submodules(void)
+{
+    static const char* required[]={
+        "third-party/vulkan-wrapper/build.c",
+        "third-party/vulkan-systems/gpu/build.c",
+        "third-party/vulkan-headers/registry/vk.xml"
+    };
+    int missing=0;
+    for(size_t i=0;i<sizeof(required)/sizeof(required[0]);++i)
+    {
+        struct stat info;
+        if(stat(required[i],&info)!=0){missing=1;break;}
+    }
+    if(missing && system("git submodule update --init --recursive")!=0)
+    {
+        fprintf(stderr,"Failed to initialize Vulkan Git submodules\n");
+        exit(1);
+    }
+    for(size_t i=0;i<sizeof(required)/sizeof(required[0]);++i)
+    {
+        struct stat info;
+        if(stat(required[i],&info)!=0)
+        {
+            fprintf(stderr,"Missing Vulkan submodule file: %s\n",required[i]);
+            exit(1);
+        }
+    }
+}
+
+static void local_vulkan_includes(C_Target* target)
+{
+    c_include(target,"third-party/vulkan-wrapper");
+    c_include(target,"third-party/vulkan-wrapper/vk");
+    c_include(target,"third-party/vulkan-headers/include");
+    c_include(target,"build/generated");
+    c_include(target,"third-party/vulkan-systems/gpu");
+    c_include(target,"third-party/vulkan-systems/render");
+    c_include(target,"third-party/vulkan-systems/bvh");
+    c_include(target,"third-party/vulkan-systems/network");
+    c_include(target,"third-party/vulkan-systems/spatial");
+    c_include(target,"third-party/vulkan-systems/jobs");
+    c_include(target,"third-party/vulkan-systems/editor");
+}
+
+static C_Target* local_vulkan_wrapper(C_Build* b)
+{
+    C_Target* target=c_static_library(b,"VulkanWrapper");
+    c_sources(target,"third-party/vulkan-wrapper/vk/*/*.cpp");
+    c_generate(target,"build/generated/generated.cpp",
+        "third-party/vulkan-headers/registry/vk.xml",
+        WRAPPER_PYTHON " third-party/vulkan-wrapper/vk/tools/generate.py "
+        "third-party/vulkan-headers/registry/vk.xml "
+        "build/generated/generated.hpp build/generated/generated.cpp "
+        "--headers third-party/vulkan-headers/include");
+    local_vulkan_includes(target);
+    c_flag(target,"-std=c++17");
+#ifdef __linux__
+    c_link_system(target,"dl");
+#endif
+    return target;
+}
+
+static C_Target* local_vulkan_system(C_Build* b,const char* name,
+                                      const char* folder,C_Target* wrapper)
+{
+    C_Target* target=c_static_library(b,name);
+    char source[256];
+    snprintf(source,sizeof(source),
+             "third-party/vulkan-systems/%s/%s/*.cpp",folder,folder);
+    c_sources(target,source);
+    local_vulkan_includes(target);
+    c_flag(target,"-std=c++17");
+    if(wrapper)c_link_target(target,wrapper);
+    return target;
+}
+
+
 static void compile_shaders(void)
 {
     static const char* sources[] = {
@@ -88,43 +173,15 @@ static void prepare_editor_assets(void)
 
 void build(C_Build* b)
 {
+    prepare_vulkan_submodules();
     compile_shaders();
     prepare_editor_assets();
-    C_Dependency* wrapper =
-        c_git(b, "VulkanWrapper", "https://github.com/xt9y/vulkan-wrapper.git", "0d4e7e2ff59516ad9225015dffb22c5f487c485c");
-    c_dep_cbuild(wrapper, "VulkanWrapper", C_TARGET_STATIC_LIBRARY);
-    c_dep_include(wrapper, ".");
-
-    // Each VulkanSystems module is fetched through its own standalone build.
-    // Pin all modules to the same commit. c.lock otherwise retains old main
-    // revisions, causing missing headers when modules gain new APIs.
-    // Never rely on vulkan-systems/build.c or link a monolithic VulkanSystems.
-    C_Dependency* gpu =
-        c_git(b, "VulkanGPU", "https://github.com/xt9y/vulkan-systems.git", "23d060271ddae8988879aa8d831c82b985b1d5b2");
-    c_dep_subdir(gpu, "gpu");
-    c_dep_cbuild(gpu, "VulkanGPU", C_TARGET_STATIC_LIBRARY);
-    c_dep_include(gpu, ".");
-
-    C_Dependency* render =
-        c_git(b, "VulkanRender", "https://github.com/xt9y/vulkan-systems.git", "23d060271ddae8988879aa8d831c82b985b1d5b2");
-    c_dep_subdir(render, "render");
-    c_dep_cbuild(render, "VulkanRender", C_TARGET_STATIC_LIBRARY);
-    c_dep_include(render, ".");
-    // VulkanRender includes headers from the sibling VulkanGPU module.
-    c_dep_include(render, "../gpu");
-
-    C_Dependency* bvh =
-        c_git(b, "VulkanBVH", "https://github.com/xt9y/vulkan-systems.git", "23d060271ddae8988879aa8d831c82b985b1d5b2");
-    c_dep_subdir(bvh, "bvh");
-    c_dep_cbuild(bvh, "VulkanBVH", C_TARGET_STATIC_LIBRARY);
-    c_dep_include(bvh, ".");
-
-    // The dedicated server needs no GPU, BVH or presentation dependencies.
-    C_Dependency* network =
-        c_git(b, "VulkanNetwork", "https://github.com/xt9y/vulkan-systems.git", "23d060271ddae8988879aa8d831c82b985b1d5b2");
-    c_dep_subdir(network, "network");
-    c_dep_cbuild(network, "VulkanNetwork", C_TARGET_STATIC_LIBRARY);
-    c_dep_include(network, ".");
+    C_Target* wrapper=local_vulkan_wrapper(b);
+    C_Target* gpu=local_vulkan_system(b,"VulkanGPU","gpu",wrapper);
+    C_Target* render=local_vulkan_system(b,"VulkanRender","render",wrapper);
+    c_link_target(render,gpu);
+    C_Target* bvh=local_vulkan_system(b,"VulkanBVH","bvh",wrapper);
+    C_Target* network=local_vulkan_system(b,"VulkanNetwork","network",NULL);
 
     C_Dependency* crypto =
         c_git(b, "MbedTLS", "https://github.com/Mbed-TLS/mbedtls.git",
@@ -136,29 +193,13 @@ void build(C_Build* b)
     c_dep_link(crypto, "mbedx509");
     c_dep_link(crypto, "mbedcrypto");
 
-    C_Dependency* spatial =
-        c_git(b, "VulkanSpatial", "https://github.com/xt9y/vulkan-systems.git", "23d060271ddae8988879aa8d831c82b985b1d5b2");
-    c_dep_subdir(spatial, "spatial");
-    c_dep_cbuild(spatial, "VulkanSpatial", C_TARGET_STATIC_LIBRARY);
-    c_dep_include(spatial, ".");
-
-    C_Dependency* jobs =
-        c_git(b, "VulkanJobs", "https://github.com/xt9y/vulkan-systems.git", "23d060271ddae8988879aa8d831c82b985b1d5b2");
-    c_dep_subdir(jobs, "jobs");
-    c_dep_cbuild(jobs, "VulkanJobs", C_TARGET_STATIC_LIBRARY);
-    c_dep_include(jobs, ".");
-
-    // Optional, renderer-independent editor: no scene or server dependencies.
-    C_Dependency* editor =
-        c_git(b, "VulkanEditor", "https://github.com/xt9y/vulkan-systems.git", "23d060271ddae8988879aa8d831c82b985b1d5b2");
-    c_dep_subdir(editor, "editor");
-    c_dep_cbuild(editor, "VulkanEditor", C_TARGET_STATIC_LIBRARY);
-    c_dep_include(editor, ".");
-
-    C_Dependency* headers =
-        c_git(b, "VulkanHeaders", "https://github.com/KhronosGroup/Vulkan-Headers.git", "9fbc2a782ee3f8a4db64e7d991e23da75e893f44");
-    c_dep_header_only(headers);
-    c_dep_include(headers, "include");
+    C_Target* spatial=local_vulkan_system(b,"VulkanSpatial","spatial",wrapper);
+    C_Target* jobs=local_vulkan_system(b,"VulkanJobs","jobs",NULL);
+#ifndef _WIN32
+    c_link_system(jobs,"pthread");
+#endif
+    C_Target* editor=local_vulkan_system(b,"VulkanEditor","editor",wrapper);
+    c_use(network,crypto); // mbedTLS is required when compiling network/*.cpp.
 
     C_Dependency* fastgltf =
         c_git(b, "fastgltf", "https://github.com/spnda/fastgltf.git", "0b800b4a584704f9e9add67c79c4c8732e552787");
@@ -191,6 +232,7 @@ void build(C_Build* b)
         c_git(b, "stb", "https://github.com/nothings/stb.git", "d14d46f6b44456eb88beac58cba833a4135d4c89");
     c_dep_header_only(stb);
     c_dep_include(stb, ".");
+    c_use(editor,stb); // STB_IMAGE_STATIC bitmap decoder in VulkanEditor.
 
     C_Dependency* glfw = c_git(b, "GLFW", "https://github.com/glfw/glfw.git", "3.4");
     c_dep_cmake(glfw);
@@ -216,14 +258,14 @@ void build(C_Build* b)
     c_sources(server, "srv/game/options.cpp");
     c_sources(server, "srv/game/state.cpp");
     c_include(server, ".");
+    local_vulkan_includes(server);
     c_warnings_strict(server);
     c_flag(server, "-std=c++20");
-    c_use(server, network);
+    c_link_target(server, network);
     c_use(server, crypto);
-    c_use(server, spatial);
-    c_use(server, jobs);
-    c_use(server, wrapper);
-    c_use(server, headers);
+    c_link_target(server, spatial);
+    c_link_target(server, jobs);
+    c_link_target(server, wrapper);
     c_use(server, fastgltf);
     c_use(server, ozz);
     c_use(server, stb);
@@ -251,19 +293,19 @@ void build(C_Build* b)
     c_sources(client, "srv/game/options.cpp");
     c_sources(client, "srv/game/state.cpp");
     c_include(client, ".");
+    local_vulkan_includes(client);
     c_warnings_strict(client);
     c_flag(client, "-std=c++20");
     // Dependents first, providers after: Render -> GPU -> Wrapper.
-    c_use(client, editor);
-    c_use(client, render);
-    c_use(client, bvh);
-    c_use(client, gpu);
-    c_use(client, network);
+    c_link_target(client, editor);
+    c_link_target(client, render);
+    c_link_target(client, bvh);
+    c_link_target(client, gpu);
+    c_link_target(client, network);
     c_use(client, crypto);
-    c_use(client, spatial);
-    c_use(client, jobs);
-    c_use(client, wrapper);
-    c_use(client, headers);
+    c_link_target(client, spatial);
+    c_link_target(client, jobs);
+    c_link_target(client, wrapper);
     c_use(client, glfw);
     c_use(client, fastgltf);
     c_use(client, ozz);
