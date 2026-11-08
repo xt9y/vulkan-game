@@ -9,7 +9,7 @@ vulkan-game
 Build:
   c build vulkan-server
   c build vulkan-client
-The build uses VulkanEngine plus direct standalone VulkanGPU, VulkanRender,
+The build uses VulkanWrapper plus direct standalone VulkanGPU, VulkanRender,
 VulkanBVH, VulkanSpatial, VulkanJobs and VulkanNetwork modules from
 vulkan-systems; it no longer uses the removed root build.c. VulkanNetwork uses Mbed TLS
 3.6.7 with DTLS 1.2 and forward-secret ECDHE-AES-GCM cipher suites.
@@ -70,7 +70,7 @@ testing are required before treating this revision as a release.
 Platform requirements:
   macOS: Vulkan via MoltenVK; Linux: Vulkan driver and X11/XWayland;
   Windows: Vulkan driver and GLFW Win32. The shader compiler
-  glslangValidator must be on PATH. VulkanEngine's generated API needs
+  glslangValidator must be on PATH. VulkanWrapper's generated API needs
   Python 3 (python3 on Unix, python on Windows). Platform builds and
   runtime compatibility still require verification on each OS.
 
