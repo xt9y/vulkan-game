@@ -211,7 +211,11 @@ namespace clt::postprocess
         shaders.tonemap_shader=configured.tonemap_shader;
         shaders.fullscreen_shader=configured.fullscreen_shader;
         shaders.presentation_shader=configured.presentation_shader;
-        pc::create(shaders,gbuffers);
+        pc::presentation_target surface{};
+        surface.images=vk::swapchain::get()->images;
+        surface.format=vk::swapchain::get()->format;
+        surface.extent=vk::swapchain::get()->extent;
+        pc::create(shaders,gbuffers,surface);
     }
 
     void synchronize_scene()
