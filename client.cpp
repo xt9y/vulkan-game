@@ -6594,56 +6594,10 @@ namespace clt::weapon
 
         ::weapon::hit trace_casing(vec3 from, vec3 to)
         {
-            ::weapon::hit result;
-            const auto delta = to - from;
-            const spatial::bounds bounds{
-                {std::min(from.x, to.x) - .004f,
-                 std::min(from.y, to.y) - .004f,
-                 std::min(from.z, to.z) - .004f},
-                {std::max(from.x, to.x) + .004f,
-                 std::max(from.y, to.y) + .004f,
-                 std::max(from.z, to.z) + .004f}
-            };
-            float nearest = 1.2f;
-            const auto& world = get().collision;
-            world.index.query(
-                bounds,
-                [&](std::uint32_t index)
-                {
-                    const auto& t = world.triangles[index];
-                    const auto e1 = t.b - t.a, e2 = t.c - t.a, p = cross(delta, e2);
-                    const float det = dot(e1, p);
-                    if (std::abs(det) < 1e-12f)
-                    {
-                        return;
-                    }
-                    const auto s = from - t.a;
-                    const float u = dot(s, p) / det;
-                    if (u < 0 || u > 1)
-                    {
-                        return;
-                    }
-                    const auto q = cross(s, e1);
-                    const float v = dot(delta, q) / det;
-                    if (v < 0 || u + v > 1)
-                    {
-                        return;
-                    }
-                    const float ratio = dot(e2, q) / det;
-                    if (ratio < 0 || ratio >= nearest || ratio > 1.f)
-                    {
-                        return;
-                    }
-                    auto normal = normalize(cross(e1, e2));
-                    if (dot(normal, delta) > 0)
-                    {
-                        normal = normal * -1.f;
-                    }
-                    nearest = ratio;
-                    result = {true, from + delta * ratio, normal, t.instance, t.index};
-                }
-            );
-            return result;
+            const vec3 travel = to - from;
+            const float distance = length(travel);
+            if (distance < 1e-7f) return {};
+            return ::weapon::trace(get().collision,from,travel / distance,distance);
         }
 
         void add_impact(const ::weapon::hit& impact, const definition& settings)
