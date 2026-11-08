@@ -1,3 +1,4 @@
+#include <tuple>
 // Only two application translation units; shared code resides in server.cpp.
 #define VULKAN_GAME_SHARED_ONLY
 #include "server.cpp"
@@ -1501,127 +1502,70 @@ namespace clt::connection
 
     std::shared_ptr<const scene::state> snapshot()
     {
-        auto& data = *get();
-        std::lock_guard<std::mutex> lock(data.scene_mutex);
-        // Received light changes are applied together with ordinary scene
-        // batches to a new immutable snapshot, never to a renderer-owned one.
-        std::size_t known_lights=data.scene?data.scene->lights.size():0;
-        for(const auto& batch:data.pending_scene)
-            known_lights+=batch.lights.size();
-        bool applicable=false;
-        for(std::size_t i=0;i<data.light_pending.size() && i<=known_lights;++i)
-            if(data.light_pending[i]){applicable=true;break;}
-        if(data.pending_scene.empty() && (!applicable || !data.scene))
+        auto& data=*get();
+        std::lock_guard lock(data.scene_mutex);
+        std::size_t count=data.scene?data.scene->lights.size():0;
+        for(const auto& batch:data.pending_scene) count+=batch.lights.size();
+        bool pending_light=false;
+        for(std::size_t i=0;i<data.light_pending.size()&&i<=count;++i)
+            if(data.light_pending[i]) {pending_light=true;break;}
+        if(data.pending_scene.empty()&&(!pending_light||!data.scene))
             return data.scene;
 
-        const auto now = clock::now();
-        // Keep received batches as independent chunks until publication.
-        // Coalesce bursts without mutating snapshots held by render/physics.
-        if (data.scene && !data.scene_complete.load(std::memory_order_relaxed) &&
-            now - data.last_publish < 16ms)
-        {
-            return data.scene;
-        }
+        const auto now=clock::now();
+        if(data.scene&&!data.scene_complete.load(std::memory_order_relaxed)&&
+           now-data.last_publish<16ms) return data.scene;
 
-        auto combined = std::make_shared<::scene::state>();
-        std::size_t skins = data.scene ? data.scene->skins.size() : 0;
-        std::size_t textures = data.scene ? data.scene->textures.size() : 0;
-        std::size_t meshes = data.scene ? data.scene->meshes.size() : 0;
-        std::size_t instances = data.scene ? data.scene->instances.size() : 0;
-        std::size_t boxes = data.scene ? data.scene->collision_boxes.size() : 0;
-        std::size_t lights = data.scene ? data.scene->lights.size() : 0;
-        for (const auto& patch : data.pending_scene)
+        auto combined=data.scene
+            ? std::make_shared<::scene::state>(*data.scene)
+            : std::make_shared<::scene::state>();
+        const auto append=[&](auto field)
         {
-            skins += patch.skins.size();
-            textures += patch.textures.size();
-            meshes += patch.meshes.size();
-            instances += patch.instances.size();
-            boxes += patch.collision_boxes.size();
-            lights += patch.lights.size();
-        }
-        combined->skins.reserve(skins);
-        combined->textures.reserve(textures);
-        combined->meshes.reserve(meshes);
-        combined->instances.reserve(instances);
-        combined->collision_boxes.reserve(boxes);
-        combined->lights.reserve(lights);
-        if (data.scene)
+            auto& output=(*combined).*field;
+            std::size_t total=output.size();
+            for(const auto& patch:data.pending_scene)
+                total+=(patch.*field).size();
+            output.reserve(total);
+            for(auto& patch:data.pending_scene)
+            {
+                auto& source=patch.*field;
+                output.insert(output.end(),
+                    std::make_move_iterator(source.begin()),
+                    std::make_move_iterator(source.end()));
+            }
+        };
+        append(&::scene::state::skins);
+        append(&::scene::state::textures);
+        append(&::scene::state::meshes);
+        append(&::scene::state::instances);
+        append(&::scene::state::collision_boxes);
+        append(&::scene::state::lights);
+        const auto light_value=[](const ::scene::point_light& l)
         {
-            combined->skins = data.scene->skins;
-            combined->textures = data.scene->textures;
-            combined->meshes = data.scene->meshes;
-            combined->instances = data.scene->instances;
-            combined->collision_boxes = data.scene->collision_boxes;
-            combined->lights = data.scene->lights;
-        }
-        for (auto& patch : data.pending_scene)
-        {
-            combined->skins.insert(
-                combined->skins.end(),
-                std::make_move_iterator(patch.skins.begin()),
-                std::make_move_iterator(patch.skins.end())
-            );
-            combined->textures.insert(
-                combined->textures.end(),
-                std::make_move_iterator(patch.textures.begin()),
-                std::make_move_iterator(patch.textures.end())
-            );
-            combined->meshes.insert(
-                combined->meshes.end(),
-                std::make_move_iterator(patch.meshes.begin()),
-                std::make_move_iterator(patch.meshes.end())
-            );
-            combined->instances.insert(
-                combined->instances.end(),
-                std::make_move_iterator(patch.instances.begin()),
-                std::make_move_iterator(patch.instances.end())
-            );
-            combined->collision_boxes.insert(
-                combined->collision_boxes.end(),
-                std::make_move_iterator(patch.collision_boxes.begin()),
-                std::make_move_iterator(patch.collision_boxes.end())
-            );
-            combined->lights.insert(
-                combined->lights.end(),
-                std::make_move_iterator(patch.lights.begin()),
-                std::make_move_iterator(patch.lights.end())
-            );
-        }
-        bool light_changed=false;
+            return std::tuple{l.position.x,l.position.y,l.position.z,
+                l.radius,l.color.x,l.color.y,l.color.z,l.strength,l.enabled};
+        };
+        bool changed=false;
         for(std::size_t i=0;i<data.light_pending.size();++i)
         {
             auto& pending=data.light_pending[i];
-            if(!pending || i>combined->lights.size())continue;
-            const auto& value=pending->light;
+            if(!pending||i>combined->lights.size())continue;
             if(i==combined->lights.size())
             {
-                combined->lights.push_back(value);
-                light_changed=true;
+                combined->lights.push_back(pending->light);
+                changed=true;
             }
-            else
+            else if(light_value(combined->lights[i])!=light_value(pending->light))
             {
-                const auto& old=combined->lights[i];
-                if(old.position.x!=value.position.x ||
-                   old.position.y!=value.position.y ||
-                   old.position.z!=value.position.z ||
-                   old.radius!=value.radius ||
-                   old.color.x!=value.color.x ||
-                   old.color.y!=value.color.y ||
-                   old.color.z!=value.color.z ||
-                   old.strength!=value.strength ||
-                   old.enabled!=value.enabled)
-                {
-                    combined->lights[i]=value;
-                    light_changed=true;
-                }
+                combined->lights[i]=pending->light;
+                changed=true;
             }
             pending.reset();
         }
-        if(data.pending_scene.empty() && !light_changed)
-            return data.scene;
-        data.scene = std::move(combined);
+        if(data.pending_scene.empty()&&!changed) return data.scene;
+        data.scene=std::move(combined);
         data.pending_scene.clear();
-        data.last_publish = now;
+        data.last_publish=now;
         return data.scene;
     }
 
