@@ -8647,593 +8647,335 @@ namespace net::message
 
 
 // [srv/shared/net/scene_stream.cpp]
-
+// Data-oriented scene codec: fixed-field packets, contiguous payloads, bounded input.
 #include <stb_image.h>
+#include <bit>
 #include <climits>
-
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
-namespace net::scene_stream
-{
-    namespace
-    {
-        void write(std::uint8_t* data, std::uint32_t value)
-        {
-            data[0] = std::uint8_t(value >> 24);
-            data[1] = std::uint8_t(value >> 16);
-            data[2] = std::uint8_t(value >> 8);
-            data[3] = std::uint8_t(value);
-        }
-        
-        std::uint32_t read(const std::uint8_t* data)
-        {
-            return (std::uint32_t(data[0]) << 24) |
-                   (std::uint32_t(data[1]) << 16) |
-                   (std::uint32_t(data[2]) << 8) |
-                   std::uint32_t(data[3]);
-        }
+namespace net::scene_stream {
+namespace {
+    using bytes=std::vector<std::uint8_t>;
+    using vec3=vk::util::math::vec3;
 
-        void add(std::vector<std::uint8_t>& bytes, std::uint32_t value)
-        {
-            const auto index = bytes.size();
-            bytes.resize(index + 4);
-            write(bytes.data() + index, value);
-        }
+    struct cursor {const bytes& data;std::size_t pos;};
+    std::size_t left(const cursor& c) {return c.data.size()-c.pos;}
 
-        void add_float(std::vector<std::uint8_t>& bytes, float value)
-        {
-            if (!std::isfinite(value))
-            {
-                throw std::runtime_error("Non-finite scene value");
-            }
-
-            std::uint32_t bits = 0;
-            std::memcpy(&bits, &value, sizeof(bits));
-            add(bytes, bits);
-        }
-
-        struct reader
-        {
-            const std::vector<std::uint8_t>& bytes;
-            std::size_t offset = 0;
-
-            bool take(std::uint32_t& value)
-            {
-                if (offset > bytes.size() || bytes.size() - offset < 4)
-                {
-                    return false;
-                }
-
-                value = read(bytes.data() + offset);
-                offset += 4;
-                return true;
-            }
-
-            bool take_float(float& value)
-            {
-                std::uint32_t bits = 0;
-
-                if (!take(bits))
-                {
-                    return false;
-                }
-
-                std::memcpy(&value, &bits, sizeof(value));
-                return std::isfinite(value);
-            }
-
-            std::size_t remaining() const
-            {
-                return bytes.size() - offset;
-            }
-        };
-
-        void add_vec3(std::vector<std::uint8_t>& bytes, vk::util::math::vec3 value)
-        {
-            add_float(bytes, value.x);
-            add_float(bytes, value.y);
-            add_float(bytes, value.z);
-        }
-
-        bool take_vec3(reader& input, vk::util::math::vec3& value)
-        {
-            return input.take_float(value.x) &&
-                   input.take_float(value.y) &&
-                   input.take_float(value.z);
-        }
-    } // namespace
-
-    std::vector<std::uint8_t> serialize(const ::scene::state& scene)
-    {
-        // The byte budget, not an arbitrary object count, bounds the snapshot.
-        if (scene.meshes.size() > max_scene_bytes / 12 ||
-            scene.instances.size() > max_scene_bytes / 48 ||
-             scene.lights.size() > 64)
-        {
-            throw std::runtime_error("Scene snapshot exceeds maximum batch size");
-        }
-
-        std::vector<std::uint8_t> bytes{'S', 'C', 'N', 'A'};
-
-        add(bytes, std::uint32_t(scene.meshes.size()));
-        add(bytes, std::uint32_t(scene.instances.size()));
-        add(bytes, std::uint32_t(scene.textures.size()));
-        add(bytes, std::uint32_t(scene.skins.size()));
-        add(bytes, std::uint32_t(scene.collision_boxes.size()));
-        add(bytes, std::uint32_t(scene.lights.size()));
-
-        for (const auto& texture : scene.textures)
-        {
-            const auto raw_size = std::uint64_t(texture.width) * texture.height * 4;
-            const bool compressed = !texture.encoded.empty();
-            const auto& payload = compressed ? texture.encoded : texture.pixels;
-            if (texture.id == 0 || !texture.width || !texture.height ||
-                raw_size > max_scene_bytes - 20 ||
-                (!compressed && raw_size != texture.pixels.size()) ||
-                payload.empty() || payload.size() > max_scene_bytes - 20 ||
-                bytes.size() + 20 + payload.size() > max_scene_bytes)
-                throw std::runtime_error("Invalid texture or scene batch too large");
-            add(bytes, texture.id);
-            add(bytes, texture.width);
-            add(bytes, texture.height);
-            add(bytes, compressed ? 1u : 0u);
-            add(bytes, std::uint32_t(payload.size()));
-            bytes.insert(bytes.end(), payload.begin(), payload.end());
-        }
-
-        for (const auto& skin : scene.skins)
-        {
-            if (!skin.id || skin.skeleton.empty() || skin.inverse_bind.empty() ||
-                skin.inverse_bind.size() > 1024)
-                throw std::runtime_error("Invalid skeletal asset");
-            add(bytes, skin.id);
-            add(bytes, std::uint32_t(skin.inverse_bind.size()));
-            add(bytes, std::uint32_t(skin.skeleton.size()));
-            add(bytes, std::uint32_t(skin.clips.size()));
-            bytes.insert(bytes.end(), skin.skeleton.begin(), skin.skeleton.end());
-            for (const auto& matrix : skin.inverse_bind)
-                for (float value : matrix) add_float(bytes, value);
-            for (const auto& clip : skin.clips)
-            {
-                if (clip.name.size() > 255 || clip.bytes.empty())
-                    throw std::runtime_error("Invalid skeletal animation clip");
-                add(bytes, std::uint32_t(clip.name.size()));
-                bytes.insert(bytes.end(), clip.name.begin(), clip.name.end());
-                add(bytes, std::uint32_t(clip.bytes.size()));
-                bytes.insert(bytes.end(), clip.bytes.begin(), clip.bytes.end());
-            }
-            if (bytes.size() > max_scene_bytes)
-                throw std::runtime_error("Skeletal asset exceeds scene batch budget");
-        }
-
-        for (const auto& mesh : scene.meshes)
-        {
-            if (mesh.vertices.empty() ||
-                mesh.indices.empty() ||
-                mesh.indices.size() % 3 ||
-                mesh.vertices.size() > max_scene_bytes / 64 ||
-                mesh.indices.size() > max_scene_bytes / 4)
-            {
-                throw std::runtime_error("Invalid scene mesh");
-            }
-
-            add(bytes, mesh.id);
-            add(bytes, mesh.skin_id);
-            add(bytes, std::uint32_t(mesh.vertices.size()));
-            add(bytes, std::uint32_t(mesh.indices.size()));
-
-            for (auto value : mesh.surface.base_color) add_float(bytes, value);
-            for (auto value : mesh.surface.emissive) add_float(bytes, value);
-            add_float(bytes, mesh.surface.metallic);
-            add_float(bytes, mesh.surface.roughness);
-            add_float(bytes, mesh.surface.occlusion);
-            add_float(bytes, mesh.surface.alpha_cutoff);
-            add(bytes, mesh.surface.base_color_texture);
-            add(bytes, mesh.surface.metallic_roughness_texture);
-            add(bytes, mesh.surface.normal_texture);
-            add(bytes, mesh.surface.occlusion_texture);
-            add(bytes, mesh.surface.emissive_texture);
-            add(bytes, mesh.surface.alpha_mode);
-            add(bytes, mesh.surface.double_sided ? 1u : 0u);
-            add(bytes, mesh.surface.procedural_pattern);
-
-            for (const auto& vertex : mesh.vertices)
-            {
-                add_vec3(bytes, vertex.position);
-                add_vec3(bytes, vertex.normal);
-                add_float(bytes, vertex.u);
-                add_float(bytes, vertex.v);
-                if (mesh.skin_id)
-                {
-                    for (const auto joint : vertex.joints) add(bytes, joint);
-                    for (const auto weight : vertex.weights) add_float(bytes, weight);
-                }
-            }
-
-            for (auto index : mesh.indices)
-            {
-                if (index >= mesh.vertices.size())
-                {
-                    throw std::runtime_error("Scene mesh index out of bounds");
-                }
-
-                add(bytes, index);
-            }
-
-            if (bytes.size() > max_scene_bytes)
-            {
-                throw std::runtime_error("Scene snapshot exceeds maximum batch size");
-            }
-        }
-
-        for (const auto& instance : scene.instances)
-        {
-            add(bytes, instance.id);
-            add(bytes, instance.mesh_id);
-            add(bytes, instance.animation);
-            add(bytes, instance.animation_tick);
-            add(bytes, instance.overlay_animation);
-            add(bytes, instance.overlay_root);
-            add_float(bytes, instance.overlay_weight);
-            add_vec3(bytes, instance.pose.position);
-            add_vec3(bytes, instance.pose.scale);
-
-            add_float(bytes, instance.pose.rotation.x);
-            add_float(bytes, instance.pose.rotation.y);
-            add_float(bytes, instance.pose.rotation.z);
-            add_float(bytes, instance.pose.rotation.w);
-        }
-
-        for (const auto& box : scene.collision_boxes)
-        {
-            const auto& a = box.minimum;
-            const auto& b = box.maximum;
-            if (!std::isfinite(a.x) || !std::isfinite(a.y) ||
-                !std::isfinite(a.z) || !std::isfinite(b.x) ||
-                !std::isfinite(b.y) || !std::isfinite(b.z) ||
-                a.x >= b.x || a.y >= b.y || a.z >= b.z)
-                throw std::runtime_error("Invalid scene collision bounds");
-            add_vec3(bytes, a);
-            add_vec3(bytes, b);
-        }
-
-        for(const auto& light:scene.lights)
-        {
-            if(!std::isfinite(light.radius) || light.radius<=0 ||
-               !std::isfinite(light.strength) || light.strength<0 ||
-               light.color.x<0 || light.color.y<0 || light.color.z<0)
-                throw std::runtime_error("Invalid scene light");
-            add_vec3(bytes,light.position);
-            add_float(bytes,light.radius);
-            add_vec3(bytes,light.color);
-            add_float(bytes,light.strength);
-        }
-
-        if (bytes.size() > max_scene_bytes)
-        {
-            throw std::runtime_error("Scene snapshot exceeds maximum batch size");
-        }
-
-        return bytes;
+    void put(bytes& b,std::uint32_t value) {
+        b.push_back(std::uint8_t(value>>24));
+        b.push_back(std::uint8_t(value>>16));
+        b.push_back(std::uint8_t(value>>8));
+        b.push_back(std::uint8_t(value));
     }
+    void put(bytes& b,float value) {
+        if(!std::isfinite(value))throw std::runtime_error("Non-finite scene value");
+        put(b,std::bit_cast<std::uint32_t>(value));
+    }
+    void put(bytes& b,vec3 value) {
+        put(b,value.x);put(b,value.y);put(b,value.z);
+    }
+    template<class... T>
+    void put_all(bytes& b,const T&... values) {(put(b,values),...);}
 
-     bool deserialize(
-        const std::vector<std::uint8_t>& bytes,
-        ::scene::state& scene
-    )
-    {
-        if (bytes.size() < 28 ||
-            bytes.size() > max_scene_bytes ||
-            bytes[0] != 'S' ||
-            bytes[1] != 'C' ||
-            bytes[2] != 'N' ||
-            bytes[3] != 'A')
-        {
-            return false;
-        }
-
-        reader input{bytes, 4};
-
-        std::uint32_t mesh_count = 0;
-        std::uint32_t instance_count = 0;
-        std::uint32_t texture_count = 0;
-        std::uint32_t skin_count = 0;
-        std::uint32_t collider_count = 0;
-        std::uint32_t light_count = 0;
-
-        if (!input.take(mesh_count) ||
-            !input.take(instance_count) ||
-            !input.take(texture_count) ||
-            !input.take(skin_count) ||
-            !input.take(collider_count) ||
-            !input.take(light_count) ||
-            light_count > 64 ||
-            light_count > input.remaining() / 32 ||
-            collider_count > input.remaining() / 24 ||
-            texture_count > input.remaining() / 20 ||
-            skin_count > input.remaining() / 16 ||
-            mesh_count > input.remaining() / 12 ||
-            instance_count > input.remaining() / 48)
-        {
-            return false;
-        }
-
-        ::scene::state result;
-        result.meshes.reserve(mesh_count);
-        result.instances.reserve(instance_count);
-        result.textures.reserve(texture_count);
-        result.skins.reserve(skin_count);
-        result.collision_boxes.reserve(collider_count);
-        result.lights.reserve(light_count);
-
-        for (std::uint32_t i = 0; i < texture_count; ++i)
-        {
-            ::scene::texture texture;
-            std::uint32_t encoding = 0, bytes_count = 0;
-            if (!input.take(texture.id) || !input.take(texture.width) ||
-                !input.take(texture.height) || !input.take(encoding) ||
-                !input.take(bytes_count) ||
-                !texture.id || !texture.width || !texture.height ||
-                encoding > 1 || bytes_count > input.remaining() ||
-                std::uint64_t(texture.width) * texture.height * 4 > max_scene_bytes - 20)
-                return false;
-
-            if (encoding == 0)
-            {
-                if (std::uint64_t(texture.width) * texture.height * 4 != bytes_count)
-                    return false;
-                texture.pixels.assign(bytes.begin() + input.offset,
-                                      bytes.begin() + input.offset + bytes_count);
-            }
-            else
-            {
-                if (bytes_count > INT_MAX || texture.width > INT_MAX ||
-                    texture.height > INT_MAX)
-                    return false;
-                int width = 0, height = 0, channels = 0;
-                auto* pixels = stbi_load_from_memory(
-                    bytes.data() + input.offset, int(bytes_count),
-                    &width, &height, &channels, 4);
-                if (!pixels || width != int(texture.width) || height != int(texture.height))
-                {
-                    stbi_image_free(pixels);
-                    return false;
-                }
-                const auto size = std::size_t(width) * height * 4;
-                texture.pixels.assign(pixels, pixels + size);
-                stbi_image_free(pixels);
-            }
-            input.offset += bytes_count;
-            result.textures.push_back(std::move(texture));
-        }
-
-        for (std::uint32_t i = 0; i < skin_count; ++i)
-        {
-            ::scene::skin skin;
-            std::uint32_t joint_count = 0;
-            std::uint32_t skeleton_size = 0;
-            std::uint32_t clips = 0;
-            if (!input.take(skin.id) || !input.take(joint_count) ||
-                !input.take(skeleton_size) || !input.take(clips) ||
-                !skin.id || !joint_count || joint_count > 1024 ||
-                skeleton_size > input.remaining() ||
-                std::uint64_t(joint_count) * 64 > input.remaining() - skeleton_size ||
-                clips > max_scene_bytes / 8) return false;
-            skin.skeleton.assign(bytes.begin() + input.offset,
-                                 bytes.begin() + input.offset + skeleton_size);
-            input.offset += skeleton_size;
-            skin.inverse_bind.resize(joint_count);
-            for (auto& matrix : skin.inverse_bind)
-                for (auto& value : matrix)
-                    if (!input.take_float(value)) return false;
-            for (std::uint32_t j = 0; j < clips; ++j)
-            {
-                std::uint32_t length = 0, size = 0;
-                if (!input.take(length) || length > 255 ||
-                    length > input.remaining()) return false;
-                ::scene::clip clip;
-                clip.name.assign(reinterpret_cast<const char*>(bytes.data() + input.offset), length);
-                input.offset += length;
-                if (!input.take(size) || !size || size > input.remaining()) return false;
-                clip.bytes.assign(bytes.begin() + input.offset,
-                                  bytes.begin() + input.offset + size);
-                input.offset += size;
-                skin.clips.push_back(std::move(clip));
-            }
-            result.skins.push_back(std::move(skin));
-        }
-
-        for (std::uint32_t i = 0; i < mesh_count; ++i)
-        {
-            ::scene::mesh mesh;
-            std::uint32_t vertices = 0;
-            std::uint32_t indices = 0;
-
-            if (!input.take(mesh.id) ||
-                !input.take(mesh.skin_id) ||
-                !input.take(vertices) ||
-                !input.take(indices) ||
-                vertices == 0 || indices == 0 || indices % 3 ||
-                input.remaining() < 76 ||
-                std::uint64_t(vertices) * (mesh.skin_id ? 64 : 32) +
-                    std::uint64_t(indices) * 4 > input.remaining() - 76)
-            {
-                return false;
-            }
-
-            if (input.remaining() < 76) return false;
-            for (auto& value : mesh.surface.base_color)
-                if (!input.take_float(value)) return false;
-            for (auto& value : mesh.surface.emissive)
-                if (!input.take_float(value)) return false;
-            if (!input.take_float(mesh.surface.metallic) ||
-                !input.take_float(mesh.surface.roughness) ||
-                !input.take_float(mesh.surface.occlusion) ||
-                !input.take_float(mesh.surface.alpha_cutoff) ||
-                !input.take(mesh.surface.base_color_texture) ||
-                !input.take(mesh.surface.metallic_roughness_texture) ||
-                !input.take(mesh.surface.normal_texture) ||
-                !input.take(mesh.surface.occlusion_texture) ||
-                !input.take(mesh.surface.emissive_texture) ||
-                !input.take(mesh.surface.alpha_mode)) return false;
-            std::uint32_t double_sided = 0;
-            if (!input.take(double_sided) || double_sided > 1 ||
-                mesh.surface.alpha_mode > 2) return false;
-            mesh.surface.double_sided = double_sided != 0;
-            if (!input.take(mesh.surface.procedural_pattern) ||
-                mesh.surface.procedural_pattern > 1) return false;
-
-            mesh.vertices.resize(vertices);
-            mesh.indices.resize(indices);
-
-            for (auto& vertex : mesh.vertices)
-            {
-                if (!take_vec3(input, vertex.position) ||
-                    !take_vec3(input, vertex.normal) ||
-                    !input.take_float(vertex.u) ||
-                    !input.take_float(vertex.v))
-                {
-                    return false;
-                }
-                if (mesh.skin_id)
-                {
-                    for (auto& joint : vertex.joints)
-                        if (!input.take(joint)) return false;
-                    for (auto& weight : vertex.weights)
-                        if (!input.take_float(weight) || weight < 0 || weight > 1) return false;
-                }
-            }
-
-            for (auto& index : mesh.indices)
-            {
-                if (!input.take(index) || index >= vertices)
-                {
-                    return false;
-                }
-            }
-
-            result.meshes.push_back(std::move(mesh));
-        }
-
-        if (instance_count > input.remaining() / 48)
-        {
-            return false;
-        }
-
-        for (std::uint32_t i = 0; i < instance_count; ++i)
-        {
-            ::scene::instance instance;
-
-            if (!input.take(instance.id) ||
-                !input.take(instance.mesh_id) ||
-                !input.take(instance.animation) ||
-                !input.take(instance.animation_tick) ||
-                !input.take(instance.overlay_animation) ||
-                !input.take(instance.overlay_root) ||
-                !input.take_float(instance.overlay_weight) ||
-                instance.overlay_weight < 0.f || instance.overlay_weight > 1.f ||
-                !take_vec3(input, instance.pose.position) ||
-                !take_vec3(input, instance.pose.scale) ||
-                !input.take_float(instance.pose.rotation.x) ||
-                !input.take_float(instance.pose.rotation.y) ||
-                !input.take_float(instance.pose.rotation.z) ||
-                !input.take_float(instance.pose.rotation.w))
-            {
-                return false;
-            }
-
-            result.instances.push_back(instance);
-        }
-
-        for (std::uint32_t i = 0; i < collider_count; ++i)
-        {
-            ::scene::collision_box box{};
-            if (!take_vec3(input, box.minimum) ||
-                !take_vec3(input, box.maximum))
-                return false;
-            const auto& a = box.minimum;
-            const auto& b = box.maximum;
-            if (!std::isfinite(a.x) || !std::isfinite(a.y) ||
-                !std::isfinite(a.z) || !std::isfinite(b.x) ||
-                !std::isfinite(b.y) || !std::isfinite(b.z) ||
-                a.x >= b.x || a.y >= b.y || a.z >= b.z)
-                return false;
-            result.collision_boxes.push_back(box);
-        }
-
-        for(std::uint32_t i=0;i<light_count;++i)
-        {
-            ::scene::point_light light{};
-            if(!take_vec3(input,light.position) ||
-               !input.take_float(light.radius) ||
-               !take_vec3(input,light.color) ||
-               !input.take_float(light.strength) ||
-               light.radius<=0 || light.strength<0 ||
-               light.color.x<0 || light.color.y<0 || light.color.z<0)
-                return false;
-            result.lights.push_back(light);
-        }
-
-        if (input.remaining() != 0)
-        {
-            return false;
-        }
-
-        scene = std::move(result);
+    bool take(cursor& c,std::uint32_t& value) {
+        if(left(c)<4)return false;
+        const auto* p=c.data.data()+c.pos;
+        value=(std::uint32_t(p[0])<<24)|(std::uint32_t(p[1])<<16)|
+              (std::uint32_t(p[2])<<8)|std::uint32_t(p[3]);
+        c.pos+=4;
         return true;
     }
-
-    std::uint32_t checksum(const std::vector<std::uint8_t>& bytes)
-    {
-        std::uint32_t hash = 2166136261u;
-
-        for (auto byte : bytes)
-        {
-            hash = (hash ^ byte) * 16777619u;
-        }
-
-        return hash;
+    bool take(cursor& c,float& value) {
+        std::uint32_t bits=0;
+        if(!take(c,bits))return false;
+        value=std::bit_cast<float>(bits);
+        return std::isfinite(value);
     }
-    
-    std::vector<std::uint8_t> encode_batch(
-        const std::vector<std::uint8_t>& bytes,std::uint32_t token,
-        std::uint32_t batch,bool final)
-    {
-        if(bytes.empty()||bytes.size()>max_scene_bytes||!token||batch>=65535)
-            throw std::invalid_argument("invalid scene batch");
-        std::vector<std::uint8_t> result(bytes.size()+20);
-        result[0]='V'; result[1]='G'; result[2]='S'; result[3]='C';
-        result[4]=1; result[5]=final?1:0;
-        result[6]=0;result[7]=0;
-        write(result.data()+8,token);
-        write(result.data()+12,batch);
-        write(result.data()+16,checksum(bytes));
-        std::memcpy(result.data()+20,bytes.data(),bytes.size());
+    bool take(cursor& c,vec3& value) {
+        return take(c,value.x)&&take(c,value.y)&&take(c,value.z);
+    }
+    template<class... T>
+    bool take_all(cursor& c,T&... values) {return (take(c,values)&&...);}
+
+    void material_put(bytes& out,const ::scene::material& m) {
+        for(auto x:m.base_color)put(out,x);
+        for(auto x:m.emissive)put(out,x);
+        put_all(out,m.metallic,m.roughness,m.occlusion,m.alpha_cutoff,
+            m.base_color_texture,m.metallic_roughness_texture,
+            m.normal_texture,m.occlusion_texture,m.emissive_texture,
+            m.alpha_mode,std::uint32_t(m.double_sided),m.procedural_pattern);
+    }
+    bool material_take(cursor& in,::scene::material& m) {
+        for(auto& x:m.base_color)if(!take(in,x))return false;
+        for(auto& x:m.emissive)if(!take(in,x))return false;
+        std::uint32_t double_sided=0;
+        if(!take_all(in,m.metallic,m.roughness,m.occlusion,m.alpha_cutoff,
+            m.base_color_texture,m.metallic_roughness_texture,m.normal_texture,
+            m.occlusion_texture,m.emissive_texture,m.alpha_mode,
+            double_sided,m.procedural_pattern))return false;
+        if(double_sided>1||m.alpha_mode>2||m.procedural_pattern>1)return false;
+        m.double_sided=double_sided!=0;
+        return true;
+    }
+    void append(bytes& out,const bytes& src) {
+        out.insert(out.end(),src.begin(),src.end());
+    }
+    std::uint32_t hash(const std::uint8_t* src,std::size_t size) {
+        std::uint32_t result=2166136261u;
+        for(std::size_t i=0;i<size;++i)result=(result^src[i])*16777619u;
         return result;
     }
+    bool valid_box(const vec3& a,const vec3& b) {
+        return std::isfinite(a.x)&&std::isfinite(a.y)&&std::isfinite(a.z)&&
+               std::isfinite(b.x)&&std::isfinite(b.y)&&std::isfinite(b.z)&&
+               a.x<b.x&&a.y<b.y&&a.z<b.z;
+    }
+    bool valid_light(const ::scene::point_light& l) {
+        return std::isfinite(l.radius)&&l.radius>0&&
+               std::isfinite(l.strength)&&l.strength>=0&&
+               l.color.x>=0&&l.color.y>=0&&l.color.z>=0;
+    }
+}
 
-    bool decode_batch(const std::vector<std::uint8_t>& bytes,batch_payload& result)
-    {
-        if(bytes.size()<=20||bytes.size()>max_scene_bytes+20 ||
-           bytes[0]!='V'||bytes[1]!='G'||bytes[2]!='S'||bytes[3]!='C'||
-           bytes[4]!=1||bytes[5]>1||bytes[6]||bytes[7])
-            return false;
-        const auto token=read(bytes.data()+8);
-        const auto batch=read(bytes.data()+12);
-        if(!token||batch>=65535)return false;
-        std::vector<std::uint8_t> scene(bytes.begin()+20,bytes.end());
-        if(checksum(scene)!=read(bytes.data()+16))return false;
-        result={token,batch,bytes[5]!=0,std::move(scene)};
-        return true;
+std::vector<std::uint8_t> serialize(const ::scene::state& scene) {
+    if(scene.meshes.size()>max_scene_bytes/12 ||
+       scene.instances.size()>max_scene_bytes/48 ||scene.lights.size()>64)
+        throw std::runtime_error("Scene snapshot exceeds maximum batch size");
+    bytes out{'S','C','N','A'};
+    put_all(out,std::uint32_t(scene.meshes.size()),
+        std::uint32_t(scene.instances.size()),std::uint32_t(scene.textures.size()),
+        std::uint32_t(scene.skins.size()),
+        std::uint32_t(scene.collision_boxes.size()),
+        std::uint32_t(scene.lights.size()));
+
+    for(const auto& t:scene.textures) {
+        const bool encoded=!t.encoded.empty();
+        const auto& payload=encoded?t.encoded:t.pixels;
+        const auto raw=std::uint64_t(t.width)*t.height*4u;
+        if(!t.id||!t.width||!t.height||raw>max_scene_bytes-20||
+           (!encoded&&raw!=t.pixels.size())||payload.empty()||
+           payload.size()>max_scene_bytes-20||
+           out.size()+20+payload.size()>max_scene_bytes)
+            throw std::runtime_error("Invalid texture or scene batch too large");
+        put_all(out,t.id,t.width,t.height,std::uint32_t(encoded),
+            std::uint32_t(payload.size()));
+        append(out,payload);
     }
 
+    for(const auto& skin:scene.skins) {
+        if(!skin.id||skin.skeleton.empty()||skin.inverse_bind.empty()||
+           skin.inverse_bind.size()>1024)
+            throw std::runtime_error("Invalid skeletal asset");
+        put_all(out,skin.id,std::uint32_t(skin.inverse_bind.size()),
+            std::uint32_t(skin.skeleton.size()),std::uint32_t(skin.clips.size()));
+        append(out,skin.skeleton);
+        for(const auto& matrix:skin.inverse_bind)
+            for(float value:matrix)put(out,value);
+        for(const auto& clip:skin.clips) {
+            if(clip.name.size()>255||clip.bytes.empty())
+                throw std::runtime_error("Invalid skeletal animation clip");
+            put(out,std::uint32_t(clip.name.size()));
+            out.insert(out.end(),clip.name.begin(),clip.name.end());
+            put(out,std::uint32_t(clip.bytes.size()));
+            append(out,clip.bytes);
+        }
+        if(out.size()>max_scene_bytes)
+            throw std::runtime_error("Skeletal asset exceeds scene batch budget");
+    }
+
+    for(const auto& m:scene.meshes) {
+        if(m.vertices.empty()||m.indices.empty()||m.indices.size()%3||
+           m.vertices.size()>max_scene_bytes/64||m.indices.size()>max_scene_bytes/4)
+            throw std::runtime_error("Invalid scene mesh");
+        put_all(out,m.id,m.skin_id,std::uint32_t(m.vertices.size()),
+            std::uint32_t(m.indices.size()));
+        material_put(out,m.surface);
+        for(const auto& v:m.vertices) {
+            put_all(out,v.position,v.normal,v.u,v.v);
+            if(m.skin_id) {
+                for(auto joint:v.joints)put(out,joint);
+                for(auto weight:v.weights)put(out,weight);
+            }
+        }
+        for(auto index:m.indices) {
+            if(index>=m.vertices.size())
+                throw std::runtime_error("Scene mesh index out of bounds");
+            put(out,index);
+        }
+        if(out.size()>max_scene_bytes)
+            throw std::runtime_error("Scene snapshot exceeds maximum batch size");
+    }
+
+    for(const auto& i:scene.instances) {
+        put_all(out,i.id,i.mesh_id,i.animation,i.animation_tick,
+            i.overlay_animation,i.overlay_root,i.overlay_weight,
+            i.pose.position,i.pose.scale,i.pose.rotation.x,
+            i.pose.rotation.y,i.pose.rotation.z,i.pose.rotation.w);
+    }
+    for(const auto& b:scene.collision_boxes) {
+        if(!valid_box(b.minimum,b.maximum))
+            throw std::runtime_error("Invalid scene collision bounds");
+        put_all(out,b.minimum,b.maximum);
+    }
+    for(const auto& l:scene.lights) {
+        if(!valid_light(l))throw std::runtime_error("Invalid scene light");
+        put_all(out,l.position,l.radius,l.color,l.strength);
+    }
+    if(out.size()>max_scene_bytes)
+        throw std::runtime_error("Scene snapshot exceeds maximum batch size");
+    return out;
+}
+
+bool deserialize(const std::vector<std::uint8_t>& bytes,::scene::state& scene) {
+    if(bytes.size()<28||bytes.size()>max_scene_bytes||
+       bytes[0]!='S'||bytes[1]!='C'||bytes[2]!='N'||bytes[3]!='A')
+        return false;
+    cursor in{bytes,4};
+    std::uint32_t meshes=0,instances=0,textures=0,skins=0,boxes=0,lights=0;
+    if(!take_all(in,meshes,instances,textures,skins,boxes,lights)||
+       lights>64||lights>left(in)/32||boxes>left(in)/24||
+       textures>left(in)/20||skins>left(in)/16||
+       meshes>left(in)/12||instances>left(in)/48)return false;
+
+    ::scene::state result;
+    result.meshes.reserve(meshes);
+    result.instances.reserve(instances);
+    result.textures.reserve(textures);
+    result.skins.reserve(skins);
+    result.collision_boxes.reserve(boxes);
+    result.lights.reserve(lights);
+
+    for(std::uint32_t i=0;i<textures;++i) {
+        ::scene::texture t;
+        std::uint32_t encoding=0,length=0;
+        if(!take_all(in,t.id,t.width,t.height,encoding,length)||
+           !t.id||!t.width||!t.height||encoding>1||length>left(in)||
+           std::uint64_t(t.width)*t.height*4u>max_scene_bytes-20)return false;
+        if(encoding==0) {
+            if(std::uint64_t(t.width)*t.height*4u!=length)return false;
+            t.pixels.assign(bytes.begin()+in.pos,bytes.begin()+in.pos+length);
+        } else {
+            if(length>INT_MAX||t.width>INT_MAX||t.height>INT_MAX)return false;
+            int w=0,h=0,c=0;
+            auto* p=stbi_load_from_memory(bytes.data()+in.pos,int(length),&w,&h,&c,4);
+            if(!p||w!=int(t.width)||h!=int(t.height)) {
+                stbi_image_free(p);
+                return false;
+            }
+            t.pixels.assign(p,p+std::size_t(w)*h*4u);
+            stbi_image_free(p);
+        }
+        in.pos+=length;
+        result.textures.push_back(std::move(t));
+    }
+
+    for(std::uint32_t i=0;i<skins;++i) {
+        ::scene::skin skin;
+        std::uint32_t joints=0,length=0,clips=0;
+        if(!take_all(in,skin.id,joints,length,clips)||
+           !skin.id||!joints||joints>1024||length>left(in)||
+           std::uint64_t(joints)*64>left(in)-length||
+           clips>max_scene_bytes/8)return false;
+        skin.skeleton.assign(bytes.begin()+in.pos,bytes.begin()+in.pos+length);
+        in.pos+=length;
+        skin.inverse_bind.resize(joints);
+        for(auto& matrix:skin.inverse_bind)
+            for(auto& value:matrix)if(!take(in,value))return false;
+        for(std::uint32_t j=0;j<clips;++j) {
+            std::uint32_t name=0,size=0;
+            if(!take(in,name)||name>255||name>left(in))return false;
+            ::scene::clip clip;
+            clip.name.assign(reinterpret_cast<const char*>(bytes.data()+in.pos),name);
+            in.pos+=name;
+            if(!take(in,size)||!size||size>left(in))return false;
+            clip.bytes.assign(bytes.begin()+in.pos,bytes.begin()+in.pos+size);
+            in.pos+=size;
+            skin.clips.push_back(std::move(clip));
+        }
+        result.skins.push_back(std::move(skin));
+    }
+
+    for(std::uint32_t i=0;i<meshes;++i) {
+        ::scene::mesh mesh;
+        std::uint32_t vertices=0,indices=0;
+        if(!take_all(in,mesh.id,mesh.skin_id,vertices,indices)||
+           !vertices||!indices||indices%3||left(in)<76||
+           std::uint64_t(vertices)*(mesh.skin_id?64u:32u)+
+           std::uint64_t(indices)*4u>left(in)-76)return false;
+        if(!material_take(in,mesh.surface))return false;
+        mesh.vertices.resize(vertices);
+        mesh.indices.resize(indices);
+        for(auto& v:mesh.vertices) {
+            if(!take_all(in,v.position,v.normal,v.u,v.v))return false;
+            if(mesh.skin_id) {
+                for(auto& joint:v.joints)if(!take(in,joint))return false;
+                for(auto& weight:v.weights)
+                    if(!take(in,weight)||weight<0||weight>1)return false;
+            }
+        }
+        for(auto& index:mesh.indices)
+            if(!take(in,index)||index>=vertices)return false;
+        result.meshes.push_back(std::move(mesh));
+    }
+
+    if(instances>left(in)/48)return false;
+    for(std::uint32_t i=0;i<instances;++i) {
+        ::scene::instance item;
+        if(!take_all(in,item.id,item.mesh_id,item.animation,item.animation_tick,
+           item.overlay_animation,item.overlay_root,item.overlay_weight,
+           item.pose.position,item.pose.scale,item.pose.rotation.x,
+           item.pose.rotation.y,item.pose.rotation.z,item.pose.rotation.w)||
+           item.overlay_weight<0||item.overlay_weight>1)return false;
+        result.instances.push_back(std::move(item));
+    }
+    for(std::uint32_t i=0;i<boxes;++i) {
+        ::scene::collision_box b{};
+        if(!take_all(in,b.minimum,b.maximum)||!valid_box(b.minimum,b.maximum))
+            return false;
+        result.collision_boxes.push_back(b);
+    }
+    for(std::uint32_t i=0;i<lights;++i) {
+        ::scene::point_light l{};
+        if(!take_all(in,l.position,l.radius,l.color,l.strength)||!valid_light(l))
+            return false;
+        result.lights.push_back(l);
+    }
+    if(left(in))return false;
+    scene=std::move(result);
+    return true;
+}
+
+std::uint32_t checksum(const std::vector<std::uint8_t>& bytes) {
+    return hash(bytes.data(),bytes.size());
+}
+std::vector<std::uint8_t> encode_batch(const std::vector<std::uint8_t>& bytes,
+                                      std::uint32_t token,std::uint32_t batch,bool final) {
+    if(bytes.empty()||bytes.size()>max_scene_bytes||!token||batch>=65535)
+        throw std::invalid_argument("invalid scene batch");
+    std::vector<std::uint8_t> result{'V','G','S','C',1,std::uint8_t(final),0,0};
+    put_all(result,token,batch,checksum(bytes));
+    append(result,bytes);
+    return result;
+}
+bool decode_batch(const std::vector<std::uint8_t>& bytes,batch_payload& result) {
+    if(bytes.size()<=20||bytes.size()>max_scene_bytes+20||
+       bytes[0]!='V'||bytes[1]!='G'||bytes[2]!='S'||bytes[3]!='C'||
+       bytes[4]!=1||bytes[5]>1||bytes[6]||bytes[7])return false;
+    cursor in{bytes,8};
+    std::uint32_t token=0,batch=0,expected=0;
+    if(!take_all(in,token,batch,expected)||!token||batch>=65535)return false;
+    const auto got=hash(bytes.data()+20,bytes.size()-20);
+    if(expected!=got)return false;
+    result={token,batch,bytes[5]!=0,
+        std::vector<std::uint8_t>(bytes.begin()+20,bytes.end())};
+    return true;
+}
 } // namespace net::scene_stream
-
-
 
 // [srv/shared/net/weapon.cpp]
 
