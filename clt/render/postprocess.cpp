@@ -183,9 +183,10 @@ namespace clt::postprocess
                     const vec3 b=positions.at(mesh->indices[i+1]);
                     const vec3 c=positions.at(mesh->indices[i+2]);
                     if(length_squared(cross(b-a,c-a))<1e-12f)continue;
-
-                    // pc:: owns light-specific caster filtering.
-                    // This adapter ONLY provides transformed triangles.
+                    // Preserve the original scene-streaming CPU budget.
+                    // The relevance rule lives in pc::, never in the game.
+                    if(!pc::relevant_triangle({a,b,c},prepared->lights))
+                        continue;
                     prepared->triangles.push_back({a,b,c});
                 }
             }
