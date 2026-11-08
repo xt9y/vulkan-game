@@ -10,7 +10,7 @@
 
 namespace net::editor_light
 {
-    enum class kind : std::uint8_t { create=1,edit=2,state=3,ack=4 };
+    enum class kind : std::uint8_t { create=1,edit=2,state=3,ack=4,remove=5 };
     struct resource
     {
         kind type=kind::state;
@@ -42,7 +42,8 @@ namespace net::editor_light
     {
         using namespace net::movement::detail;
         packet result{'V','L','I','T',1,
-            static_cast<std::uint8_t>(item.type),0,0};
+            static_cast<std::uint8_t>(item.type),
+            static_cast<std::uint8_t>(item.light.enabled?1:0),0};
         auto* p=result.data();
         put(p+8,item.token);
         put(p+12,item.sequence);
@@ -64,7 +65,7 @@ namespace net::editor_light
     {
         if(!p || size!=packet{}.size() ||
            p[0]!='V'||p[1]!='L'||p[2]!='I'||p[3]!='T'||
-           p[4]!=1||p[5]<1||p[5]>4||p[6]!=0||p[7]!=0)
+           p[4]!=1||p[5]<1||p[5]>5||p[6]>1||p[7]!=0)
             return std::nullopt;
         using namespace net::movement::detail;
         resource item{};
@@ -77,6 +78,7 @@ namespace net::editor_light
         item.light.radius=get_float(p+36);
         item.light.color={get_float(p+40),get_float(p+44),get_float(p+48)};
         item.light.strength=get_float(p+52);
+        item.light.enabled=p[6]!=0;
         if(!item.token || !item.sequence || !valid(item.light))
             return std::nullopt;
         if(item.type==kind::create && item.index!=UINT32_MAX)
