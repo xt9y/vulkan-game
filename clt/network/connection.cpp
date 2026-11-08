@@ -148,7 +148,8 @@ namespace clt::connection
                    old.color.x!=value.color.x ||
                    old.color.y!=value.color.y ||
                    old.color.z!=value.color.z ||
-                   old.strength!=value.strength)
+                   old.strength!=value.strength ||
+                   old.enabled!=value.enabled)
                 {
                     combined->lights[i]=value;
                     light_changed=true;
@@ -186,7 +187,8 @@ namespace clt::connection
     bool send_editor_light(net::editor_light::resource command)
     {
         if((command.type!=net::editor_light::kind::create &&
-            command.type!=net::editor_light::kind::edit) ||
+            command.type!=net::editor_light::kind::edit &&
+            command.type!=net::editor_light::kind::remove) ||
            !net::editor_light::valid(command.light) ||
            !get()->connected.load(std::memory_order_relaxed))
             return false;
