@@ -2678,109 +2678,68 @@ namespace srv::application
 
 namespace
 {
-    void quad(::scene::mesh& mesh, vk::util::math::vec3 a, vk::util::math::vec3 b, vk::util::math::vec3 c, vk::util::math::vec3 d, vk::util::math::vec3 normal)
+    ::scene::mesh box_mesh(std::uint32_t id,vk::util::math::vec3 h,
+                           bool checker=false)
     {
-        const auto base = static_cast<std::uint32_t>(mesh.vertices.size());
-
-        mesh.vertices.push_back({a, normal, 0, 0});
-        mesh.vertices.push_back({b, normal, 1, 0});
-        mesh.vertices.push_back({c, normal, 1, 1});
-        mesh.vertices.push_back({d, normal, 0, 1});
-
-        mesh.indices.insert(mesh.indices.end(), {
-            base, base + 1, base + 2,
-            base, base + 2, base + 3,
-        });
-    }
-
-    ::scene::mesh make_rect(std::uint32_t id, float x, float y, float z,
-                            std::array<float, 4> color, float roughness = 0.85f)
-    {
-        ::scene::mesh mesh;
-        mesh.id = id;
-        mesh.surface.base_color = color;
-        mesh.surface.roughness = roughness;
-    
-        quad(mesh, {-x, -y,  z}, { x, -y,  z}, { x,  y,  z}, {-x,  y,  z}, { 0,  0,  1});
-        quad(mesh, { x, -y, -z}, {-x, -y, -z}, {-x,  y, -z}, { x,  y, -z}, { 0,  0, -1});
-        quad(mesh, {-x, -y, -z}, {-x, -y,  z}, {-x,  y,  z}, {-x,  y, -z}, {-1,  0,  0});
-        quad(mesh, { x, -y,  z}, { x, -y, -z}, { x,  y, -z}, { x,  y,  z}, { 1,  0,  0});
-        quad(mesh, {-x,  y,  z}, { x,  y,  z}, { x,  y, -z}, {-x,  y, -z}, { 0,  1,  0});
-        quad(mesh, {-x, -y, -z}, { x, -y, -z}, { x, -y,  z}, {-x, -y,  z}, { 0, -1,  0});
-    
+        using vk::util::math::vec3;
+        ::scene::mesh mesh{};
+        mesh.id=id;
+        mesh.surface.base_color={1,1,1,1};
+        mesh.surface.roughness=.85f;
+        mesh.surface.procedural_pattern=checker?1u:0u;
+        const vec3 p[8]={
+            {-h.x,-h.y,-h.z},{ h.x,-h.y,-h.z},
+            { h.x, h.y,-h.z},{-h.x, h.y,-h.z},
+            {-h.x,-h.y, h.z},{ h.x,-h.y, h.z},
+            { h.x, h.y, h.z},{-h.x, h.y, h.z}
+        };
+        const int faces[6][4]={
+            {4,5,6,7},{1,0,3,2},{0,4,7,3},
+            {5,1,2,6},{7,6,2,3},{0,1,5,4}
+        };
+        const vec3 normals[6]={
+            {0,0,1},{0,0,-1},{-1,0,0},
+            {1,0,0},{0,1,0},{0,-1,0}
+        };
+        for(std::uint32_t f=0;f<6;++f)
+        {
+            const auto start=std::uint32_t(mesh.vertices.size());
+            for(int j=0;j<4;++j)
+                mesh.vertices.push_back({
+                    p[faces[f][j]],normals[f],float(j==1||j==2),float(j>=2)
+                });
+            mesh.indices.insert(mesh.indices.end(),{
+                start,start+1,start+2,start,start+2,start+3
+            });
+        }
         return mesh;
     }
-
-    void place(::scene::state& initial_scene,std::uint32_t id,
-               std::uint32_t mesh,vk::util::math::vec3 position)
-    {
-        ::scene::instance object{};
-        object.id = id;
-        object.mesh_id = mesh;
-        object.pose.position = position;
-
-        // World collision bounds follow actual transformed scene vertices.
-        const auto geometry = std::find_if(
-            initial_scene.meshes.begin(), initial_scene.meshes.end(),
-            [mesh](const ::scene::mesh& item) { return item.id == mesh; });
-        if (geometry == initial_scene.meshes.end())
-            throw std::runtime_error("No mesh for scene collision bounds");
-
-        ::scene::collision_box bounds{};
-        const auto infinity = std::numeric_limits<float>::infinity();
-        bounds.minimum = { infinity, infinity, infinity };
-        bounds.maximum = {-infinity,-infinity,-infinity };
-        for (const auto& vertex : geometry->vertices)
-        {
-            const auto& p = vertex.position;
-            const auto& scale = object.pose.scale;
-            const auto local = vk::util::math::vec3{
-                p.x * scale.x, p.y * scale.y, p.z * scale.z
-            };
-            const auto rotated = vk::util::math::rotate(
-                object.pose.rotation, local);
-            const auto world = position + rotated;
-            bounds.minimum.x = std::min(bounds.minimum.x, world.x);
-            bounds.minimum.y = std::min(bounds.minimum.y, world.y);
-            bounds.minimum.z = std::min(bounds.minimum.z, world.z);
-            bounds.maximum.x = std::max(bounds.maximum.x, world.x);
-            bounds.maximum.y = std::max(bounds.maximum.y, world.y);
-            bounds.maximum.z = std::max(bounds.maximum.z, world.z);
-        }
-        initial_scene.instances.push_back(object);
-        initial_scene.collision_boxes.push_back(bounds);
-    }
-
-    // Define level geometry, instances, imported models and lights here.
     ::scene::state make_level()
     {
-        ::scene::state initial_scene;
-        // Checker floor with three white cubes; no surrounding test walls.
-        // Floor surface stays at y=0 for gameplay collisions.
-
-        auto floor=make_rect(1,10.f,.1f,10.f,{1.f,1.f,1.f,1.f});
-        floor.surface.procedural_pattern=1;
-        auto cube=make_rect(2,.5f,.5f,.5f,{1.f,1.f,1.f,1.f});
-        initial_scene.meshes.push_back(std::move(floor));
-        initial_scene.meshes.push_back(std::move(cube));
-        place(initial_scene,1,1, {0, -0.1f, 0});
-        place(initial_scene,2,2, {-2.f, .5f, 0});
-        place(initial_scene,3,2, {0, .5f, 0});
-        place(initial_scene,4,2, {2.f, .5f, 0});
-        // Imported models: path, world position/scale, animation clip.
+        using vk::util::math::vec3;
+        ::scene::state world{};
+        world.meshes.push_back(box_mesh(1,{10,.1f,10},true));
+        world.meshes.push_back(box_mesh(2,{.5f,.5f,.5f}));
+        const auto place=[&](std::uint32_t id,std::uint32_t mesh,
+                             vec3 pos,vec3 half)
+        {
+            ::scene::instance instance{};
+            instance.id=id;
+            instance.mesh_id=mesh;
+            instance.pose.position=pos;
+            world.instances.push_back(instance);
+            world.collision_boxes.push_back({pos-half,pos+half});
+        };
+        place(1,1,{0,-.1f,0},{10,.1f,10});
+        place(2,2,{-2,.5f,0},{.5f,.5f,.5f});
+        place(3,2,{0,.5f,0},{.5f,.5f,.5f});
+        place(4,2,{2,.5f,0},{.5f,.5f,.5f});
         ::scene::transform mermaid{};
-        mermaid.position = {0.0f,1.0f,0.5f/3.0f};
-        mermaid.scale = {1.5f,1.5f,1.5f};
-        srv::application::load_model("assets/mermaid/mermaid.glb", mermaid, 0);
-
-        // Level-authored lights: position, radius, RGB, intensity.
-        // Keep the example light in view from the default player spawn,
-        // so its Hell2024 LIGHT label is immediately selectable in ? mode.
-        initial_scene.lights.push_back({
-            {0.0f,3.0f,1.0f},6.0f,{1.0f,0.5f,0.2f},4.0f
-        });
-
-        return initial_scene;
+        mermaid.position={0,1,.5f/3.f};
+        mermaid.scale={1.5f,1.5f,1.5f};
+        srv::application::load_model("assets/mermaid/mermaid.glb",mermaid,0);
+        world.lights.push_back({{0,3,1},6,{1,.5f,.2f},4});
+        return world;
     }
 
     void stop(int)
