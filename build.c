@@ -100,13 +100,13 @@ void build(C_Build* b)
     // revisions, causing missing headers when modules gain new APIs.
     // Never rely on vulkan-systems/build.c or link a monolithic VulkanSystems.
     C_Dependency* gpu =
-        c_git(b, "VulkanGPU", "https://github.com/xt9y/vulkan-systems.git", "2c4fb95fcdd5544ab8a4f28ae119e7fbbe95fdb9");
+        c_git(b, "VulkanGPU", "https://github.com/xt9y/vulkan-systems.git", "23d060271ddae8988879aa8d831c82b985b1d5b2");
     c_dep_subdir(gpu, "gpu");
     c_dep_cbuild(gpu, "VulkanGPU", C_TARGET_STATIC_LIBRARY);
     c_dep_include(gpu, ".");
 
     C_Dependency* render =
-        c_git(b, "VulkanRender", "https://github.com/xt9y/vulkan-systems.git", "2c4fb95fcdd5544ab8a4f28ae119e7fbbe95fdb9");
+        c_git(b, "VulkanRender", "https://github.com/xt9y/vulkan-systems.git", "23d060271ddae8988879aa8d831c82b985b1d5b2");
     c_dep_subdir(render, "render");
     c_dep_cbuild(render, "VulkanRender", C_TARGET_STATIC_LIBRARY);
     c_dep_include(render, ".");
@@ -114,14 +114,14 @@ void build(C_Build* b)
     c_dep_include(render, "../gpu");
 
     C_Dependency* bvh =
-        c_git(b, "VulkanBVH", "https://github.com/xt9y/vulkan-systems.git", "2c4fb95fcdd5544ab8a4f28ae119e7fbbe95fdb9");
+        c_git(b, "VulkanBVH", "https://github.com/xt9y/vulkan-systems.git", "23d060271ddae8988879aa8d831c82b985b1d5b2");
     c_dep_subdir(bvh, "bvh");
     c_dep_cbuild(bvh, "VulkanBVH", C_TARGET_STATIC_LIBRARY);
     c_dep_include(bvh, ".");
 
     // The dedicated server needs no GPU, BVH or presentation dependencies.
     C_Dependency* network =
-        c_git(b, "VulkanNetwork", "https://github.com/xt9y/vulkan-systems.git", "2c4fb95fcdd5544ab8a4f28ae119e7fbbe95fdb9");
+        c_git(b, "VulkanNetwork", "https://github.com/xt9y/vulkan-systems.git", "23d060271ddae8988879aa8d831c82b985b1d5b2");
     c_dep_subdir(network, "network");
     c_dep_cbuild(network, "VulkanNetwork", C_TARGET_STATIC_LIBRARY);
     c_dep_include(network, ".");
@@ -137,20 +137,20 @@ void build(C_Build* b)
     c_dep_link(crypto, "mbedcrypto");
 
     C_Dependency* spatial =
-        c_git(b, "VulkanSpatial", "https://github.com/xt9y/vulkan-systems.git", "2c4fb95fcdd5544ab8a4f28ae119e7fbbe95fdb9");
+        c_git(b, "VulkanSpatial", "https://github.com/xt9y/vulkan-systems.git", "23d060271ddae8988879aa8d831c82b985b1d5b2");
     c_dep_subdir(spatial, "spatial");
     c_dep_cbuild(spatial, "VulkanSpatial", C_TARGET_STATIC_LIBRARY);
     c_dep_include(spatial, ".");
 
     C_Dependency* jobs =
-        c_git(b, "VulkanJobs", "https://github.com/xt9y/vulkan-systems.git", "2c4fb95fcdd5544ab8a4f28ae119e7fbbe95fdb9");
+        c_git(b, "VulkanJobs", "https://github.com/xt9y/vulkan-systems.git", "23d060271ddae8988879aa8d831c82b985b1d5b2");
     c_dep_subdir(jobs, "jobs");
     c_dep_cbuild(jobs, "VulkanJobs", C_TARGET_STATIC_LIBRARY);
     c_dep_include(jobs, ".");
 
     // Optional, renderer-independent editor: no scene or server dependencies.
     C_Dependency* editor =
-        c_git(b, "VulkanEditor", "https://github.com/xt9y/vulkan-systems.git", "2c4fb95fcdd5544ab8a4f28ae119e7fbbe95fdb9");
+        c_git(b, "VulkanEditor", "https://github.com/xt9y/vulkan-systems.git", "23d060271ddae8988879aa8d831c82b985b1d5b2");
     c_dep_subdir(editor, "editor");
     c_dep_cbuild(editor, "VulkanEditor", C_TARGET_STATIC_LIBRARY);
     c_dep_include(editor, ".");
