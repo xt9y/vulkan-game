@@ -5180,6 +5180,25 @@ namespace clt::scene_renderer
         data.local_sets.reset();
     }
 
+    // Descriptor bindings are just five buffers; the same layout serves
+    // streamed scene meshes and client-local weapon geometry.
+    void bind_storage(vk::DescriptorSet set,const std::array<vk::Buffer,5>& buffers)
+    {
+        std::array<vk::DescriptorBufferInfo,5> infos{};
+        std::array<vk::WriteDescriptorSet,5> writes{};
+        for (std::uint32_t i=0;i<buffers.size();++i)
+        {
+            infos[i].buffer=buffers[i];
+            infos[i].range=VK_WHOLE_SIZE;
+            writes[i].dstSet=set;
+            writes[i].dstBinding=i==4?9:i;
+            writes[i].descriptorCount=1;
+            writes[i].descriptorType=vk::DescriptorType::eStorageBuffer;
+            writes[i].pBufferInfo=&infos[i];
+        }
+        vk::device::get()->handle.updateDescriptorSets(writes,{});
+    }
+
     void create_local_frames()
     {
         auto& data = get();
@@ -5244,20 +5263,11 @@ namespace clt::scene_renderer
                     memory
                 );
                 frame.set=data.local_sets->set(descriptor_index++);
-                std::array<vk::DescriptorBufferInfo, 5> infos{};
-                std::array<vk::WriteDescriptorSet, 5> writes{};
-                for (std::uint32_t i = 0; i < 5; ++i)
-                {
-                    infos[i].buffer =
-                        i == 4 ? frame.skin_palette.handle : frame.local_instances.handle;
-                    infos[i].range = VK_WHOLE_SIZE;
-                    writes[i].dstSet = frame.set;
-                    writes[i].dstBinding = i == 4 ? 9 : i;
-                    writes[i].descriptorCount = 1;
-                    writes[i].descriptorType = vk::DescriptorType::eStorageBuffer;
-                    writes[i].pBufferInfo = &infos[i];
-                }
-                device.updateDescriptorSets(writes, {});
+                bind_storage(frame.set,{
+                    frame.local_instances.handle,frame.local_instances.handle,
+                    frame.local_instances.handle,frame.local_instances.handle,
+                    frame.skin_palette.handle
+                });
                 texture::bind(frame.set, mesh.surface);
             }
         }
@@ -5334,49 +5344,17 @@ namespace clt::scene_renderer
 
     void bind_instances(gpu_mesh& mesh)
     {
-        if (!mesh.instance_buffer.handle || !mesh.bounds_buffer.handle)
-        {
-            return;
-        }
-
-        for (auto& frame : mesh.frames)
+        if (!mesh.instance_buffer.handle || !mesh.bounds_buffer.handle) return;
+        for (auto& frame:mesh.frames)
         {
             if (!frame.set || !frame.visible.handle || !frame.indirect.handle)
-            {
                 continue;
-            }
-            const std::array<vk::Buffer, 4> buffers{
-                mesh.instance_buffer.handle,
-                mesh.bounds_buffer.handle,
-                frame.visible.handle,
-                frame.indirect.handle
-            };
-            std::array<vk::DescriptorBufferInfo, 4> infos{};
-            std::array<vk::WriteDescriptorSet, 4> writes{};
-
-            for (std::uint32_t i = 0; i < buffers.size(); ++i)
-            {
-                infos[i].buffer = buffers[i];
-                infos[i].offset = 0;
-                infos[i].range = VK_WHOLE_SIZE;
-                writes[i].dstSet = frame.set;
-                writes[i].dstBinding = i;
-                writes[i].descriptorCount = 1;
-                writes[i].descriptorType = vk::DescriptorType::eStorageBuffer;
-                writes[i].pBufferInfo = &infos[i];
-            }
-            vk::device::get()->handle.updateDescriptorSets(writes, {});
-            vk::DescriptorBufferInfo palette_info{};
-            palette_info.buffer = frame.skin_palette.handle;
-            palette_info.range = VK_WHOLE_SIZE;
-            vk::WriteDescriptorSet palette_write{};
-            palette_write.dstSet = frame.set;
-            palette_write.dstBinding = 9;
-            palette_write.descriptorCount = 1;
-            palette_write.descriptorType = vk::DescriptorType::eStorageBuffer;
-            palette_write.pBufferInfo = &palette_info;
-            vk::device::get()->handle.updateDescriptorSets({palette_write}, {});
-            texture::bind(frame.set, mesh.surface);
+            bind_storage(frame.set,{
+                mesh.instance_buffer.handle,mesh.bounds_buffer.handle,
+                frame.visible.handle,frame.indirect.handle,
+                frame.skin_palette.handle
+            });
+            texture::bind(frame.set,mesh.surface);
         }
     }
 
