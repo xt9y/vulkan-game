@@ -135,3 +135,23 @@ Rendering and reusable systems:
   BVH TLAS/BLAS ray queries remain an optional VulkanBVH capability and are
   not dispatched by the normal rasterization path; no BVH work is performed
   without a consumer requiring ray/visibility queries.
+
+## PCloud lighting system
+
+All original GPU point-cloud lighting passes now live inside the
+`third-party/vulkan-systems/pcloud/` submodule and use namespace `pc::`.
+This includes the original point-cloud sampling, BVH shadows, GI grid,
+direct-lighting shader, tile light lists, tonemapping, and presentation
+raster pass. `clt/render/postprocess.cpp` is only a renderer/game adapter
+that flattens the server's animated mesh instances into world-space
+triangles and provides the existing G-buffer views, camera and editor
+overlay. It does **not** own point-cloud shaders or illumination algorithms.
+
+A compatible engine can reuse `#include <pcloud/pcloud.hpp>`, supply a
+`pc::world` (lights, collision boxes, world-space triangles) and a
+four-attachment `pc::gbuffer`, and schedule `pc::cloud`, `pc::gi`,
+`pc::lighting`, `pc::tonemap`, and `pc::present`. The shaders compile
+directly from the pcloud submodule to `build/shaders/pcloud_*.spv`.
+The GPU resource synchronization and render graph remain host-managed.
+The shader material packing and Vulkan backend must match; reuse is not
+automatically portable to non-Vulkan APIs.

@@ -252,10 +252,10 @@ int main(int argc, char** argv)
         settings.graphics.present = game::options::presentation::fifo;
         settings.graphics.gbuffer = game::options::gbuffer_precision::rgba8;
         settings.graphics.culling_shader = "build/shaders/cull.comp.spv";
-        settings.graphics.lighting_shader = "build/shaders/light.comp.spv";
-        settings.graphics.tonemap_shader = "build/shaders/tone.comp.spv";
-        settings.graphics.fullscreen_shader = "build/shaders/fullscreen.vert.spv";
-        settings.graphics.presentation_shader = "build/shaders/present.frag.spv";
+        settings.graphics.lighting_shader = "build/shaders/pcloud_light.comp.spv";
+        settings.graphics.tonemap_shader = "build/shaders/pcloud_tone.comp.spv";
+        settings.graphics.fullscreen_shader = "build/shaders/pcloud_fullscreen.vert.spv";
+        settings.graphics.presentation_shader = "build/shaders/pcloud_present.frag.spv";
         settings.graphics.exposure = 1.0f;
 
         game::options::init(argc, argv, game::options::mode::client_only,

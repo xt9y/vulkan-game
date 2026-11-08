@@ -57,6 +57,7 @@ static void local_vulkan_includes(C_Target* target)
     c_include(target,"third-party/vulkan-systems/spatial");
     c_include(target,"third-party/vulkan-systems/jobs");
     c_include(target,"third-party/vulkan-systems/editor");
+    c_include(target,"third-party/vulkan-systems/pcloud");
 }
 
 static C_Target* local_vulkan_wrapper(C_Build* b)
@@ -96,8 +97,12 @@ static void compile_shaders(void)
 {
     static const char* sources[] = {
         "shd/mesh.vert", "shd/mesh.frag", "shd/cull.comp",
-        "shd/cloud.comp", "shd/gi.comp", "shd/light.comp", "shd/tone.comp",
-        "shd/fullscreen.vert", "shd/present.frag"
+        "third-party/vulkan-systems/pcloud/pcloud/shaders/cloud.comp",
+        "third-party/vulkan-systems/pcloud/pcloud/shaders/gi.comp",
+        "third-party/vulkan-systems/pcloud/pcloud/shaders/light.comp",
+        "third-party/vulkan-systems/pcloud/pcloud/shaders/tone.comp",
+        "third-party/vulkan-systems/pcloud/pcloud/shaders/fullscreen.vert",
+        "third-party/vulkan-systems/pcloud/pcloud/shaders/present.frag"
     };
 #ifdef _WIN32
     _mkdir("build");
@@ -112,7 +117,9 @@ static void compile_shaders(void)
         char binary[256];
         char command[640];
         const char* name = strrchr(sources[i], '/');
-        snprintf(binary, sizeof(binary), "build/shaders/%s.spv",
+        const int is_pcloud=strstr(sources[i],"/pcloud/pcloud/shaders/")!=NULL;
+        snprintf(binary, sizeof(binary), "build/shaders/%s%s.spv",
+                 is_pcloud?"pcloud_":"",
                  name ? name + 1 : sources[i]);
         struct stat input_info;
         struct stat output_info;
@@ -202,6 +209,12 @@ void build(C_Build* b)
     c_link_system(jobs,"pthread");
 #endif
     C_Target* editor=local_vulkan_system(b,"VulkanEditor","editor",wrapper);
+    C_Target* pcloud=local_vulkan_system(b,"VulkanPCloud","pcloud",wrapper);
+    c_link_target(pcloud,gpu);
+    c_link_target(pcloud,render);
+    c_link_target(pcloud,bvh);
+    c_link_target(pcloud,spatial);
+    c_link_target(pcloud,jobs);
     c_use(network,crypto); // mbedTLS is required when compiling network/*.cpp.
 
     C_Dependency* fastgltf =
@@ -301,6 +314,7 @@ void build(C_Build* b)
     c_flag(client, "-std=c++20");
     // Dependents first, providers after: Render -> GPU -> Wrapper.
     c_link_target(client, editor);
+    c_link_target(client, pcloud);
     c_link_target(client, render);
     c_link_target(client, bvh);
     c_link_target(client, gpu);
