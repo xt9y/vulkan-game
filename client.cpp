@@ -7407,7 +7407,7 @@ namespace clt::weapon
                 std::vector<::scene::instance> added(
                     source->instances.begin() + first, source->instances.end()
                 );
-                d.collision.append(source->meshes, added);
+                ::weapon::append(d.collision, source->meshes, added);
             }
             else
             {
