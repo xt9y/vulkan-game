@@ -6081,144 +6081,85 @@ void shutdown() {
 } // namespace clt::texture
 
 // [clt/view/camera.cpp]
-
-
-
-
-
+// Shared camera data, one mutex for view/input snapshots.
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <mutex>
-
-namespace clt::camera
-{
+namespace clt::camera {
     using namespace vk::util::math;
-    namespace
-    {
-        std::mutex camera_mutex;
-        float recoil = 0, aim_fraction = 0, ads_blend = 0;
-        float ads_sensitivity_multiplier=1.f;
-        std::chrono::steady_clock::time_point recoil_time{};
-
-        float current_recoil()
-        {
-            return recoil *
-                   std::exp(
-                       -12.f *
-                       std::chrono::duration<float>(std::chrono::steady_clock::now() - recoil_time)
-                           .count()
-                   );
+    namespace {
+        using clock=std::chrono::steady_clock;
+        state data{};
+        std::mutex guard;
+        float recoil=0,zoom=0,ads=0,sensitivity_multiplier=1;
+        clock::time_point recoil_time{};
+        float decayed_recoil() {
+            return recoil*std::exp(-12.f*
+                std::chrono::duration<float>(clock::now()-recoil_time).count());
         }
-
-        vec3 eye_position()
-        {
-            const auto parameters = connection::movement_parameters();
-            return prediction::position() + vec3{0, parameters ? parameters->height : 0.0f, 0};
-        }
-    } // namespace
-
-    state* get()
-    {
-        static state data;
-        return &data;
     }
-
-    void init()
-    {
-        std::lock_guard<std::mutex> lock(camera_mutex);
-        *get() = {};
-        recoil = aim_fraction = ads_blend = 0;
-        ads_sensitivity_multiplier=1.f;
-        recoil_time = std::chrono::steady_clock::now();
-        get()->fov = 1.04719755f;
-        get()->sensitivity = 0.0025f;
+    state* get() {return &data;}
+    void init() {
+        std::lock_guard lock(guard);
+        data={};
+        data.fov=1.04719755f;
+        data.sensitivity=.0025f;
+        recoil=zoom=ads=0;
+        sensitivity_multiplier=1;
+        recoil_time=clock::now();
     }
-
-    void set_look_sensitivity(float base,float ads_multiplier)
-    {
-        std::lock_guard<std::mutex> lock(camera_mutex);
-        get()->sensitivity=std::clamp(base,.00001f,.1f);
-        ads_sensitivity_multiplier=std::clamp(ads_multiplier,.05f,1.f);
+    void set_look_sensitivity(float base,float multiplier) {
+        std::lock_guard lock(guard);
+        data.sensitivity=std::clamp(base,.00001f,.1f);
+        sensitivity_multiplier=std::clamp(multiplier,.05f,1.f);
     }
-
-    void set_ads_fraction(float fraction)
-    {
-        std::lock_guard<std::mutex> lock(camera_mutex);
-        ads_blend=std::clamp(fraction,0.f,1.f);
+    void set_ads_fraction(float fraction) {
+        std::lock_guard lock(guard);
+        ads=std::clamp(fraction,0.f,1.f);
     }
-
-    void look(float dx, float dy)
-    {
-        std::lock_guard<std::mutex> lock(camera_mutex);
-        auto& camera = *get();
-        const float sensitivity=camera.sensitivity*
-            (1.f-ads_blend*(1.f-ads_sensitivity_multiplier));
-
-        camera.yaw = std::remainder(
-            camera.yaw + dx * sensitivity,
-            6.283185307f
-        );
-
-        camera.pitch = std::clamp(
-            camera.pitch - dy * sensitivity,
-            -1.55f,
-            1.55f
-        );
+    void look(float dx,float dy) {
+        std::lock_guard lock(guard);
+        const float speed=data.sensitivity*(1.f-ads*(1.f-sensitivity_multiplier));
+        data.yaw=std::remainder(data.yaw+dx*speed,6.283185307f);
+        data.pitch=std::clamp(data.pitch-dy*speed,-1.55f,1.55f);
     }
-
-    state snapshot()
-    {
-        std::lock_guard<std::mutex> lock(camera_mutex);
-        auto result = *get();
-        result.pitch = std::clamp(result.pitch + current_recoil(), -1.55f, 1.55f);
-        result.fov *= 1.f - aim_fraction;
-        return result;
+    state snapshot() {
+        std::lock_guard lock(guard);
+        auto pose=data;
+        pose.pitch=std::clamp(pose.pitch+decayed_recoil(),-1.55f,1.55f);
+        pose.fov*=1.f-zoom;
+        return pose;
     }
-
-    void kick(float radians)
-    {
-        std::lock_guard<std::mutex> lock(camera_mutex);
-        recoil = std::min(current_recoil() + radians, .08f);
-        recoil_time = std::chrono::steady_clock::now();
+    void kick(float amount) {
+        std::lock_guard lock(guard);
+        recoil=std::min(decayed_recoil()+amount,.08f);
+        recoil_time=clock::now();
     }
-
-    void aim(float fraction)
-    {
-        std::lock_guard<std::mutex> lock(camera_mutex);
-        aim_fraction = std::clamp(fraction, 0.f, .95f);
+    void aim(float fraction) {
+        std::lock_guard lock(guard);
+        zoom=std::clamp(fraction,0.f,.95f);
     }
-
-    frame capture()
-    {
-        const auto camera = snapshot();
-        const vec3 eye = eye_position();
-        const vec3 direction{
-            std::sin(camera.yaw) * std::cos(camera.pitch),
-            std::sin(camera.pitch),
-            -std::cos(camera.yaw) * std::cos(camera.pitch)
-        };
-        return {camera, look_at(eye, eye + direction), eye};
+    frame capture() {
+        const auto pose=snapshot();
+        const auto params=connection::movement_parameters();
+        const vec3 eye=prediction::position()+vec3{
+            0.f,params?params->height:0.f,0.f};
+        const vec3 forward{
+            std::sin(pose.yaw)*std::cos(pose.pitch),
+            std::sin(pose.pitch),
+            -std::cos(pose.yaw)*std::cos(pose.pitch)};
+        return {pose,look_at(eye,eye+forward),eye};
     }
-
-    mat4 view()
-    {
-        return capture().view;
+    mat4 view() {return capture().view;}
+    mat4 projection(float aspect) {
+        return perspective(snapshot().fov,aspect,.1f,1000.f);
     }
-
-    mat4 projection(float aspect)
-    {
-        return perspective(snapshot().fov, aspect, 0.1f, 1000.0f);
-    }
-
-    mat4 view_projection(float aspect)
-    {
-        const auto frame = capture();
-        return perspective(frame.pose.fov, aspect, 0.1f, 1000.0f) * frame.view;
+    mat4 view_projection(float aspect) {
+        const auto frame=capture();
+        return perspective(frame.pose.fov,aspect,.1f,1000.f)*frame.view;
     }
 } // namespace clt::camera
-
-
 
 // [clt/weapon/weapon.cpp]
 
