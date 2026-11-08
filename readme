@@ -7,11 +7,25 @@ vulkan-game
   assets/                   game art
 
 Build:
+  git clone --recurse-submodules https://github.com/xt9y/vulkan-game.git
+  cd vulkan-game
   c build vulkan-server
   c build vulkan-client
-The build uses VulkanWrapper plus direct standalone VulkanGPU, VulkanRender,
-VulkanBVH, VulkanSpatial, VulkanJobs and VulkanNetwork modules from
-vulkan-systems; it no longer uses the removed root build.c. VulkanNetwork uses Mbed TLS
+For an existing checkout, after git pull:
+  git submodule sync --recursive
+  git submodule update --init --recursive
+
+The three Vulkan source repositories live at fixed revisions under:
+  third-party/vulkan-wrapper/    wrapper and Vulkan API generator
+  third-party/vulkan-systems/    GPU, Render, BVH, Spatial, Jobs, Network, Editor
+  third-party/vulkan-headers/    Khronos Vulkan SDK headers / vk.xml
+
+build.c compiles the wrapper and the required standalone systems modules
+directly as local static libraries. It does NOT fetch these via c_git,
+create duplicate Vulkan checkouts or rely on a vulkan-systems root build.c.
+It generates the wrapper API in build/generated/ using Python 3.
+The remaining independent GLFW, Mbed TLS, fastgltf, Ozz and stb dependencies
+retain their existing cbuild management. VulkanNetwork uses Mbed TLS
 3.6.7 with DTLS 1.2 and forward-secret ECDHE-AES-GCM cipher suites.
 The single supported transport uses a persistent server identity and
 per-destination trust-on-first-use (TOFU) public-key pinning.
