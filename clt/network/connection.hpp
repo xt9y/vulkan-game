@@ -2,10 +2,12 @@
 
 #include "srv/shared/net/animation.hpp"
 #include "srv/shared/net/movement.hpp"
+#include "srv/shared/net/editor_light.hpp"
 #include <network/secure.hpp>
 #include "srv/shared/net/weapon.hpp"
 #include "srv/shared/scene/scene.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -42,6 +44,9 @@ namespace clt::connection
         std::shared_ptr<const ::scene::state> scene;
         std::vector<::scene::state> pending_scene;
         std::chrono::steady_clock::time_point last_publish{};
+        // Server-authoritative light changes wait until scene data is ready.
+        std::array<std::uint32_t,64> light_versions{};
+        std::array<std::optional<net::editor_light::resource>,64> light_pending{};
 
         std::mutex error_mutex;
         std::exception_ptr worker_error;
@@ -51,6 +56,10 @@ namespace clt::connection
         std::deque<::player::input> outgoing;
         std::optional<net::movement::snapshot> authority;
         std::optional<::player::parameters_t> server_parameters;
+
+        std::mutex editor_mutex;
+        std::deque<net::editor_light::resource> editor_outgoing;
+        std::uint32_t editor_sequence=0;
 
         std::mutex weapon_mutex;
         std::deque<net::weapon::command> weapon_outgoing;
@@ -67,6 +76,7 @@ namespace clt::connection
     std::shared_ptr<const ::scene::state> snapshot();
     std::optional<net::animation::resource> animation(std::uint32_t instance_id);
     std::vector<net::animation::attachment_event> take_attachment_events();
+    bool send_editor_light(net::editor_light::resource command);
     bool send_weapon(net::weapon::command command);
     std::vector<net::weapon::snapshot> take_weapon_updates();
     std::vector<net::weapon::shot> take_weapon_shots();
