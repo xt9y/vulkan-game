@@ -105,6 +105,14 @@ namespace srv::application
         get()->on_weapon_command = std::move(handler);
     }
 
+    void on_editor_permission(
+        std::function<bool(const net::endpoint::resource&)> handler)
+    {
+        if(get()->initialized)
+            throw std::runtime_error("Configure editor permission before init");
+        get()->editor_permission=std::move(handler);
+    }
+
     void init()
     {
         if (get()->initialized)
@@ -493,6 +501,7 @@ namespace srv::application
         get()->weapon_world = {};
         get()->weapons = {};
         get()->on_weapon_command = {};
+        get()->editor_permission = {};
         get()->scene = {};
         get()->editor_light_versions.clear();
         get()->editor_light_revision=1;
@@ -516,8 +525,11 @@ namespace srv::application
             const net::endpoint::resource& peer,
             const net::editor_light::resource& command)
         {
-            // Same authenticated DTLS endpoint/token as movement and weapons.
-            // Editor mutations are accepted only for active connected peers.
+            // Authenticated DTLS is not sufficient to grant editing rights.
+            // The host game must explicitly authorize this peer.
+            if(!get()->editor_permission || !get()->editor_permission(peer))
+                return;
+            // Same DTLS endpoint/token as movement and weapons.
             for(auto& client:session::get()->clients)
             {
                 if(!client.active || client.token!=command.token ||
