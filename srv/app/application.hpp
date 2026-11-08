@@ -4,6 +4,7 @@
 #include "srv/shared/net/animation.hpp"
 #include "srv/shared/net/message.hpp"
 #include <network/secure.hpp>
+#include <network/endpoint.hpp>
 #include <network/session.hpp>
 #include "srv/shared/net/weapon.hpp"
 #include "srv/shared/player/movement.hpp"
@@ -62,6 +63,7 @@ namespace srv::application
         ::weapon::world weapon_world;
         ::weapon::registry weapons;
         weapon_command_handler on_weapon_command;
+        std::function<bool(const net::endpoint::resource&)> editor_permission;
         spatial::index collision_index;
         struct batch {
             std::vector<std::uint8_t> bytes;
@@ -80,6 +82,8 @@ namespace srv::application
     // Register game rules and receive authenticated, owned, equipped weapon commands.
     void add_weapon(::weapon::definition definition);
     void on_weapon_command(weapon_command_handler handler);
+    // No client can change the level unless this policy explicitly permits it.
+    void on_editor_permission(std::function<bool(const net::endpoint::resource&)> handler);
     void init();
     // Publish append-only mesh/instance batches; called on the server thread.
     // Background jobs return a completion that invokes append_scene().
