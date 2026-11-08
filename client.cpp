@@ -33,23 +33,13 @@ namespace clt::input
 
 namespace clt::application
 {
-    struct callbacks
-    {
-        // Main-thread game controls, after mouse look and movement prediction.
-        void (*on_input)(const input::frame&) = nullptr;
-        // Game owns spawning/property writes; editor only emits requests.
-        void (*on_editor_action)(const ::editor::action&) = nullptr;
-    };
-
     struct state
     {
         game::options::state options;
-        callbacks hooks;
         bool initialized = false;
     };
 
     state* get();
-    void set_callbacks(callbacks value);
     void init();
     int run();
     void shutdown() noexcept;
@@ -717,7 +707,6 @@ int main(int argc, char** argv)
         // Host-defined editor catalog; LIGHT properties are auto-generated
         // for every light from the single schema above.
         editor::instance().set_catalog({{"light","Light","Lighting"}});
-        clt::application::set_callbacks({on_input,on_editor_action});
         net::socket::init();
         std::signal(SIGINT, stop);
         std::signal(SIGTERM, stop);
@@ -1129,15 +1118,6 @@ namespace clt::application
         return &data;
     }
 
-    void set_callbacks(callbacks value)
-    {
-        if (get()->initialized)
-        {
-            throw std::logic_error("Register game callbacks before client initialization");
-        }
-        get()->hooks = value;
-    }
-
     void init()
     {
         if (get()->initialized)
@@ -1302,11 +1282,9 @@ namespace clt::application
                     camera::look(frame.mouse_x,frame.mouse_y);
                 prediction::controls(captured?0u:frame.buttons,
                                      camera::snapshot().yaw);
-                if(get()->hooks.on_input)
-                    get()->hooks.on_input(frame);
+                on_input(frame);
                 for(const auto& action:editor::instance().take_actions())
-                    if(get()->hooks.on_editor_action)
-                        get()->hooks.on_editor_action(action);
+                    on_editor_action(action);
 
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
