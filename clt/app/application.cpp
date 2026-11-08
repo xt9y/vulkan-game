@@ -175,6 +175,8 @@ namespace clt::application
                 events.down=pressed(GLFW_KEY_DOWN,5);
                 events.left=pressed(GLFW_KEY_LEFT,6);
                 events.right=pressed(GLFW_KEY_RIGHT,7);
+                events.shift=input::key_down(GLFW_KEY_LEFT_SHIFT) ||
+                             input::key_down(GLFW_KEY_RIGHT_SHIFT);
                 static bool mouse_held=false;
                 const bool mouse_down=input::mouse_down(GLFW_MOUSE_BUTTON_LEFT);
                 events.click=mouse_down && !mouse_held;
