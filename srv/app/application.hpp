@@ -44,6 +44,9 @@ namespace srv::application
         net::secure::resource socket;
         std::unique_ptr<net::session> scene_transport;
         scene::state scene;
+        // Live authoritative point-light versions for editor replication.
+        std::vector<std::uint32_t> editor_light_versions;
+        std::uint32_t editor_light_revision=1;
         std::vector<model_request> models;
         bool scene_configured = false;
         std::shared_ptr<scene::state> importing;
