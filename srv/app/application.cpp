@@ -548,17 +548,38 @@ namespace srv::application
                     std::uint32_t index=command.index;
                     if(command.type==net::editor_light::kind::create)
                     {
-                        if(get()->scene.lights.size()>=64)
-                            return;
-                        index=static_cast<std::uint32_t>(
-                            get()->scene.lights.size());
-                        get()->scene.lights.push_back(command.light);
-                        get()->editor_light_versions.push_back(
-                            ++get()->editor_light_revision);
+                        // Reuse disabled slots: stable indices for every live
+                        // light and no permanent 64-light cap consumption
+                        // from editing/deleting the level.
+                        const auto vacant=std::find_if(
+                            get()->scene.lights.begin(),
+                            get()->scene.lights.end(),
+                            [](const ::scene::point_light& light)
+                            {return !light.enabled;});
+                        if(vacant!=get()->scene.lights.end())
+                        {
+                            index=static_cast<std::uint32_t>(
+                                vacant-get()->scene.lights.begin());
+                            *vacant=command.light;
+                            vacant->enabled=true;
+                            get()->editor_light_versions[index]=
+                                ++get()->editor_light_revision;
+                        }
+                        else
+                        {
+                            if(get()->scene.lights.size()>=64)return;
+                            index=static_cast<std::uint32_t>(
+                                get()->scene.lights.size());
+                            get()->scene.lights.push_back(command.light);
+                            get()->scene.lights.back().enabled=true;
+                            get()->editor_light_versions.push_back(
+                                ++get()->editor_light_revision);
+                        }
                     }
                     else if(command.type==net::editor_light::kind::edit)
                     {
                         if(index>=get()->scene.lights.size() ||
+                           !get()->scene.lights[index].enabled ||
                            command.revision>7)return;
                         // Apply only the edited field to avoid reverting other
                         // properties with a stale client-side light copy.
@@ -574,6 +595,18 @@ namespace srv::application
                         case 6:light.radius=command.light.radius;break;
                         case 7:light.strength=command.light.strength;break;
                         }
+                        get()->editor_light_versions[index]=
+                            ++get()->editor_light_revision;
+                    }
+                    else if(command.type==net::editor_light::kind::remove)
+                    {
+                        if(index>=get()->scene.lights.size() ||
+                           !get()->scene.lights[index].enabled)return;
+                        // A tombstone avoids renumbering other lights that
+                        // clients may currently be selecting/editing.
+                        auto& light=get()->scene.lights[index];
+                        light.enabled=false;
+                        light.strength=0.0f; // No direct/indirect contribution.
                         get()->editor_light_versions[index]=
                             ++get()->editor_light_revision;
                     }
@@ -598,7 +631,8 @@ namespace srv::application
                     }
                     std::clog<<"srv: editor light "<<index
                              <<(command.type==net::editor_light::kind::create?
-                                " placed":" updated")<<"\n";
+                                " placed":command.type==net::editor_light::kind::remove?
+                                " deleted":" updated")<<"\n";
                 }
                 if(client.editor_light_index>=get()->scene.lights.size())
                     return;
@@ -668,7 +702,8 @@ namespace srv::application
                 if(const auto editor_command=net::editor_light::decode(buffer.data(),*size))
                 {
                     if(editor_command->type==net::editor_light::kind::create ||
-                       editor_command->type==net::editor_light::kind::edit)
+                       editor_command->type==net::editor_light::kind::edit ||
+                       editor_command->type==net::editor_light::kind::remove)
                         handle_editor_light(peer,*editor_command);
                     continue;
                 }
