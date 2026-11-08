@@ -9401,265 +9401,146 @@ namespace net::weapon
 
 
 // [srv/shared/player/movement.cpp]
-
-
+// Fixed-tick data update: one flat player state, contiguous colliders and spatial index.
 #include <optional>
 #include <stdexcept>
-
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <vector>
 #include <numeric>
+namespace player {
+namespace {
+    using namespace vk::util::math;
+    std::optional<parameters_t> configured;
 
-namespace player
-{
-    namespace
-    {
-        using namespace vk::util::math;
-        std::optional<parameters_t> configured;
-
-        bool overlaps_xz(vec3 p, const box& b)
-        {
-            const float radius = parameters().radius;
-            return p.x + radius > b.min.x && p.x - radius < b.max.x &&
-                   p.z + radius > b.min.z && p.z - radius < b.max.z;
+    bool overlaps_xz(vec3 p,const box& b) {
+        const float r=parameters().radius;
+        return p.x+r>b.min.x && p.x-r<b.max.x &&
+               p.z+r>b.min.z && p.z-r<b.max.z;
+    }
+    bool overlaps_y(float y,const box& b) {
+        return y<b.max.y && y+parameters().height>b.min.y;
+    }
+}
+void configure(parameters_t p) {
+    if(!std::isfinite(p.spawn.x)||!std::isfinite(p.spawn.y)||
+       !std::isfinite(p.spawn.z)||!std::isfinite(p.walk_speed)||
+       !std::isfinite(p.sprint_speed)||!std::isfinite(p.gravity)||
+       !std::isfinite(p.radius)||!std::isfinite(p.height)||
+       p.walk_speed<=0||p.sprint_speed<=0||p.gravity<=0||
+       p.radius<=0||p.height<=0)
+        throw std::invalid_argument("Player parameters must be specified by the server");
+    configured=p;
+}
+const parameters_t& parameters() {
+    if(!configured)throw std::logic_error("Player parameters not yet received from server");
+    return *configured;
+}
+collision_world build_colliders(const ::scene::state& scene) {
+    return build_colliders(scene.meshes,scene.instances);
+}
+collision_world build_colliders(const std::vector<::scene::mesh>& meshes,
+                                const std::vector<::scene::instance>& instances) {
+    using namespace vk::util::math;
+    collision_world boxes;
+    boxes.reserve(instances.size());
+    for(const auto& instance:instances) {
+        const auto mesh=std::find_if(meshes.begin(),meshes.end(),
+            [&](const ::scene::mesh& m){return m.id==instance.mesh_id;});
+        if(mesh==meshes.end()||mesh->vertices.empty())continue;
+        const float limit=std::numeric_limits<float>::max();
+        box b{{limit,limit,limit},{-limit,-limit,-limit}};
+        const auto& pose=instance.pose;
+        for(const auto& v:mesh->vertices) {
+            const vec3 scaled{
+                v.position.x*pose.scale.x,v.position.y*pose.scale.y,
+                v.position.z*pose.scale.z};
+            const vec3 p=pose.position+rotate(pose.rotation,scaled);
+            b.min={std::min(b.min.x,p.x),std::min(b.min.y,p.y),std::min(b.min.z,p.z)};
+            b.max={std::max(b.max.x,p.x),std::max(b.max.y,p.y),std::max(b.max.z,p.z)};
         }
+        boxes.push_back(b);
+    }
+    return boxes;
+}
+spatial::index build_index(const collision_world& boxes) {
+    std::vector<spatial::bounds> bounds;
+    bounds.reserve(boxes.size());
+    for(const auto& box:boxes)bounds.push_back({box.min,box.max});
+    spatial::index index;
+    index.rebuild(std::move(bounds));
+    return index;
+}
+void step(state& p,const input& keys,const collision_world& world,
+          const spatial::index* broadphase) {
+    using namespace vk::util::math;
+    const auto& settings=parameters();
+    const float radius=settings.radius,height=settings.height;
+    const float dt=1.f/float(net::limits::tick_hz);
+    const vec3 front{std::sin(keys.yaw),0,-std::cos(keys.yaw)};
+    const vec3 side{std::cos(keys.yaw),0,std::sin(keys.yaw)};
+    vec3 movement{};
+    if(keys.buttons&forward)movement=movement+front;
+    if(keys.buttons&backward)movement=movement-front;
+    if(keys.buttons&right)movement=movement+side;
+    if(keys.buttons&left)movement=movement-side;
+    if(length_squared(movement)>1.f)movement=normalize(movement);
+    const float speed=keys.buttons&sprint?settings.sprint_speed:settings.walk_speed;
+    p.velocity.x=movement.x*speed;
+    p.velocity.z=movement.z*speed;
+    const vec3 previous=p.position;
 
-        bool overlaps_y(float y, const box& b)
-        {
-            const float body_height = parameters().height;
-            return y < b.max.y && y + body_height > b.min.y;
-        }
-    } // namespace
-
-    void configure(parameters_t values)
-    {
-        if (!std::isfinite(values.spawn.x) || !std::isfinite(values.spawn.y) ||
-            !std::isfinite(values.spawn.z) || !std::isfinite(values.walk_speed) ||
-            !std::isfinite(values.sprint_speed) || !std::isfinite(values.gravity) ||
-            !std::isfinite(values.radius) || !std::isfinite(values.height) ||
-            values.walk_speed <= 0 || values.sprint_speed <= 0 ||
-            values.gravity <= 0 || values.radius <= 0 || values.height <= 0)
-            throw std::invalid_argument("Player parameters must be specified by the server");
-        configured = values;
+    // Reuse candidate storage across fixed ticks; no per-frame heap churn.
+    thread_local std::vector<std::uint32_t> candidates;
+    candidates.clear();
+    if(broadphase) {
+        const float horizontal=radius+std::max(settings.walk_speed,settings.sprint_speed)*dt+.01f;
+        const float vertical=std::abs(p.velocity.y)*dt+settings.gravity*dt*dt+.05f;
+        broadphase->query({{
+            p.position.x-horizontal,p.position.y-vertical,p.position.z-horizontal},{
+            p.position.x+horizontal,p.position.y+height+vertical,p.position.z+horizontal}},
+            [&](std::uint32_t id){candidates.push_back(id);});
+    } else {
+        candidates.resize(world.size());
+        std::iota(candidates.begin(),candidates.end(),0u);
     }
 
-    const parameters_t& parameters()
-    {
-        if (!configured)
-            throw std::logic_error("Player parameters not yet received from server");
-        return *configured;
-    }
-
-    collision_world build_colliders(const ::scene::state& scene)
-    {
-        return build_colliders(scene.meshes, scene.instances);
-    }
-
-    collision_world build_colliders(
-        const std::vector<::scene::mesh>& meshes,
-        const std::vector<::scene::instance>& instances
-    )
-    {
-        using namespace vk::util::math;
-
-        collision_world result;
-        result.reserve(instances.size());
-
-        for (const auto& instance : instances)
-        {
-            const auto mesh = std::find_if(
-                meshes.begin(),
-                meshes.end(),
-                [&](const ::scene::mesh& value)
-                {
-                    return value.id == instance.mesh_id;
-                }
-            );
-
-            if (mesh == meshes.end() || mesh->vertices.empty())
-            {
-                continue;
-            }
-
-            const float limit = std::numeric_limits<float>::max();
-            box b{{limit, limit, limit}, {-limit, -limit, -limit}};
-
-            for (const auto& vertex : mesh->vertices)
-            {
-                const auto& pose = instance.pose;
-
-                const vec3 scaled{
-                    vertex.position.x * pose.scale.x,
-                    vertex.position.y * pose.scale.y,
-                    vertex.position.z * pose.scale.z
-                };
-
-                const vec3 p = pose.position + rotate(pose.rotation, scaled);
-
-                b.min.x = std::min(b.min.x, p.x);
-                b.min.y = std::min(b.min.y, p.y);
-                b.min.z = std::min(b.min.z, p.z);
-
-                b.max.x = std::max(b.max.x, p.x);
-                b.max.y = std::max(b.max.y, p.y);
-                b.max.z = std::max(b.max.z, p.z);
-            }
-
-            result.push_back(b);
-        }
-
-        return result;
-    }
-
-    spatial::index build_index(const collision_world &world)
-    {
-        std::vector<spatial::bounds> boxes;
-        boxes.reserve(world.size());
-
-        for (const auto& b : world) 
-        {
-            boxes.push_back({b.min, b.max});
-        }
-
-        spatial::index result;
-        result.rebuild(std::move(boxes));
-        return result;
-    }
-
-    void step(state& p, const input& input, const collision_world& world, const spatial::index* broadphase) 
-    {
-        using namespace vk::util::math;
-        const auto& settings = parameters();
-        const float radius = settings.radius;
-        const float body_height = settings.height;
-        const float dt = 1.0f / float(net::limits::tick_hz);
-
-        const vec3 front{
-            std::sin(input.yaw), 0, -std::cos(input.yaw)
-        };
-
-        const vec3 side{
-            std::cos(input.yaw), 0, std::sin(input.yaw)
-        };
-
-        vec3 direction{};
-
-        if (input.buttons & forward) direction = direction + front;
-        if (input.buttons & backward) direction = direction - front;
-        if (input.buttons & right) direction = direction + side;
-        if (input.buttons & left) direction = direction - side;
-
-        if (length_squared(direction) > 1.0f)
-        {
-            direction = normalize(direction);
-        }
-
-        const float speed = input.buttons & sprint ? settings.sprint_speed : settings.walk_speed;
-
-        p.velocity.x = direction.x * speed;
-        p.velocity.z = direction.z * speed;
-
-        const vec3 previous = p.position;
-
-        std::vector<std::uint32_t> candidates;
-        if (broadphase)
-        {
-            const float horizontal = radius + std::max(settings.walk_speed, settings.sprint_speed) * dt + 0.01f;
-            const float vertical = std::abs(p.velocity.y) * dt + settings.gravity * dt * dt + 0.05f;
-            
-            const spatial::bounds region{
-                {
-                    p.position.x - horizontal,
-                    p.position.y - vertical,
-                    p.position.z - horizontal
-                },
-                {
-                    p.position.x + horizontal,
-                    p.position.y + body_height + vertical,
-                    p.position.z + horizontal
-                }
-            };
-
-            broadphase->query(region, [&](std::uint32_t id){
-                candidates.push_back(id);
-            });
-        }
-        else
-        {
-            candidates.resize(world.size());
-            std::iota(candidates.begin(), candidates.end(), 0u);
-        }
-
-        p.position.x += p.velocity.x * dt;
-
-        for (const auto id : candidates)
-        {
-            const auto& b = world[id];
-            if (!overlaps_y(p.position.y, b) || !overlaps_xz(p.position, b))
-            {
-                continue;
-            }
-            if (p.velocity.x > 0 && previous.x + radius <= b.min.x)
-            {
-                p.position.x = b.min.x - radius;
-            }
-            else if (p.velocity.x < 0 && previous.x - radius >= b.max.x)
-            {
-                p.position.x = b.max.x + radius;
-            }
-        }
-
-        const float previous_z = p.position.z;
-        p.position.z += p.velocity.z * dt;
-
-        for (const auto id : candidates)
-        {
-            const auto& b = world[id];
-            if (!overlaps_y(p.position.y, b) || !overlaps_xz(p.position, b))
-            {
-                continue;
-            }
-
-            if (p.velocity.z > 0 && previous_z + radius <= b.min.z)
-            {
-                p.position.z = b.min.z - radius;
-            }
-            else if (p.velocity.z < 0 && previous_z - radius >= b.max.z)
-            {
-                p.position.z = b.max.z + radius;
-            }
-        }
-
-        p.velocity.y -= settings.gravity * dt;
-        p.position.y += p.velocity.y * dt;
-        p.grounded = false;
-
-        for (const auto id : candidates)
-        {
-            const auto& b = world[id];
-            if (!overlaps_xz(p.position, b))
-            {
-                continue;
-            }
-
-            if (p.velocity.y <= 0 && previous.y >= b.max.y - 0.0001f && p.position.y < b.max.y)
-            {
-                p.position.y = b.max.y;
-                p.velocity.y = 0;
-                p.grounded = true;
-            }
-            else if (p.velocity.y > 0 && previous.y + body_height <= b.min.y && p.position.y + body_height > b.min.y)
-            {
-                p.position.y = b.min.y - body_height;
-                p.velocity.y = 0;
-            }
+    // Resolve X and Z with the same axis-separated rule.
+    for(int axis=0;axis<2;++axis) {
+        float& position=axis?p.position.z:p.position.x;
+        const float velocity=axis?p.velocity.z:p.velocity.x;
+        const float old=position;
+        position+=velocity*dt;
+        for(const auto id:candidates) {
+            const auto& b=world[id];
+            if(!overlaps_y(p.position.y,b)||!overlaps_xz(p.position,b))continue;
+            const float lo=axis?b.min.z:b.min.x;
+            const float hi=axis?b.max.z:b.max.x;
+            if(velocity>0&&old+radius<=lo)position=lo-radius;
+            else if(velocity<0&&old-radius>=hi)position=hi+radius;
         }
     }
+
+    p.velocity.y-=settings.gravity*dt;
+    p.position.y+=p.velocity.y*dt;
+    p.grounded=false;
+    for(const auto id:candidates) {
+        const auto& b=world[id];
+        if(!overlaps_xz(p.position,b))continue;
+        if(p.velocity.y<=0 && previous.y>=b.max.y-.0001f &&
+           p.position.y<b.max.y) {
+            p.position.y=b.max.y;
+            p.velocity.y=0;
+            p.grounded=true;
+        } else if(p.velocity.y>0 && previous.y+height<=b.min.y &&
+                  p.position.y+height>b.min.y) {
+            p.position.y=b.min.y-height;
+            p.velocity.y=0;
+        }
+    }
+}
 } // namespace player
-
-
 
 // [srv/game/options.cpp]
 
