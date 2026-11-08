@@ -2989,6 +2989,29 @@ namespace srv::application
 
     namespace
     {
+        // Ordered inputs and weapon commands share one bounded sequence queue.
+        template<class T>
+        bool queue_input(std::deque<T>& queue,const T& item,
+                         std::uint32_t processed,std::size_t capacity)
+        {
+            if(!net::message::newer(item.sequence,processed)||
+               item.sequence-processed>256)return false;
+            if(std::any_of(queue.begin(),queue.end(),[&](const auto& value){
+                return value.sequence==item.sequence;
+            }))return true;
+            auto expected=processed+1;
+            if(!expected)++expected;
+            if(queue.size()>=capacity) {
+                if(item.sequence!=expected)return false;
+                queue.pop_back();
+            }
+            queue.insert(std::find_if(queue.begin(),queue.end(),
+                [&](const auto& value) {
+                    return net::message::newer(value.sequence,item.sequence);
+                }),item);
+            return true;
+        }
+
         jobs::pool& generation_jobs()
         {
             static jobs::pool worker;
@@ -3670,36 +3693,8 @@ namespace srv::application
                             continue;
                         }
                         
-                        const auto& incoming = command->input;
-                        if (!net::message::newer(incoming.sequence, client.processed_input) ||
-                            incoming.sequence - client.processed_input > 256)
-                        {
-                            break;
-                        }
-
-                        const auto duplicate = std::find_if(client.inputs.begin(), client.inputs.end(), [&](const player::input& value){
-                            return value.sequence == incoming.sequence;
-                        });
-
-                        if (duplicate == client.inputs.end())
-                        {
-                            // Always admit the earliest missing input. Otherwise a full
-                            // out-of-order queue could permanently block reconciliation.
-                            if (client.inputs.size() >= 128)
-                            {
-                                if (incoming.sequence != client.processed_input + 1)
-                                {
-                                    break;
-                                }
-                                client.inputs.pop_back();
-                            }
-
-                            const auto position = std::find_if(client.inputs.begin(), client.inputs.end(), [&](const player::input& value){
-                                return net::message::newer(value.sequence, incoming.sequence);
-                            });
-
-                            client.inputs.insert(position, incoming);
-                        }
+                        if(!queue_input(client.inputs,command->input,
+                                        client.processed_input,128))break;
 
                         client.last_seen = clock::now();
                         break;
@@ -3763,24 +3758,8 @@ namespace srv::application
                     }
                     return;
                 }
-                if (command.sequence-client.weapon_sequence>256) return;
                 auto& queue=client.weapon_commands;
-                if (std::none_of(queue.begin(),queue.end(),[&](const auto& cmd){
-                    return cmd.sequence==command.sequence;
-                }))
-                {
-                    auto expected=client.weapon_sequence+1;
-                    if (!expected) ++expected;
-                    if (queue.size()>=64)
-                    {
-                        if (command.sequence!=expected) return;
-                        queue.pop_back();
-                    }
-                    queue.insert(std::find_if(queue.begin(),queue.end(),
-                        [&](const auto& cmd){
-                            return net::message::newer(cmd.sequence,command.sequence);
-                        }),command);
-                }
+                if(!queue_input(queue,command,client.weapon_sequence,64))return;
                 const double seconds=std::chrono::duration<double>(
                     now.time_since_epoch()).count();
                 while (!queue.empty())
