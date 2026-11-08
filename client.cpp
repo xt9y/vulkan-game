@@ -41,14 +41,16 @@ namespace
     {
         using kind=editor::property_kind;
         return {
-            {"pos_x","Pos X",kind::real,light.position.x,-500,500,0.1},
-            {"pos_y","Pos Y",kind::real,light.position.y,-500,500,0.1},
-            {"pos_z","Pos Z",kind::real,light.position.z,-500,500,0.1},
-            {"color_r","Color X",kind::real,light.color.x,0,1,0.05},
-            {"color_g","Color Y",kind::real,light.color.y,0,1,0.05},
-            {"color_b","Color Z",kind::real,light.color.z,0,1,0.05},
-            {"radius","Radius",kind::real,light.radius,0.05,64,0.1},
-            {"strength","Strength",kind::real,light.strength,0,20,0.1}
+            {"pos_x","Pos X",kind::real,light.position.x,-500,500,1},
+            {"pos_y","Pos Y",kind::real,light.position.y,-500,500,1},
+            {"pos_z","Pos Z",kind::real,light.position.z,-500,500,1},
+            // Colors are displayed as percentages so arrow increments are
+            // exactly 1 or 10 without jumping across normalized [0,1].
+            {"color_r","Color X",kind::integer,light.color.x*100,0,100,1},
+            {"color_g","Color Y",kind::integer,light.color.y*100,0,100,1},
+            {"color_b","Color Z",kind::integer,light.color.z*100,0,100,1},
+            {"radius","Radius",kind::real,light.radius,0.05,64,1},
+            {"strength","Strength",kind::real,light.strength,0,20,1}
         };
     }
 
@@ -72,7 +74,8 @@ namespace
             command.light.color={1.0f,0.85f,0.7f};
             command.light.strength=1.0f;
         }
-        else if(action.kind==editor::action_kind::edit)
+        else if(action.kind==editor::action_kind::edit ||
+                action.kind==editor::action_kind::remove)
         {
             if(action.object<=editor_light_ids ||
                action.object>editor_light_ids+64u)return;
@@ -80,9 +83,18 @@ namespace
                 std::size_t(action.object-editor_light_ids-1u);
             const auto world=clt::connection::snapshot();
             if(!world || index>=world->lights.size())return;
-            command.type=net::editor_light::kind::edit;
+            if(!world->lights[index].enabled)return;
+            command.type=action.kind==editor::action_kind::remove ?
+                net::editor_light::kind::remove:
+                net::editor_light::kind::edit;
             command.index=std::uint32_t(index);
             command.light=world->lights[index];
+            if(command.type==net::editor_light::kind::remove)
+            {
+                if(!clt::connection::send_editor_light(command))
+                    std::clog<<"clt: could not queue light deletion\n";
+                return;
+            }
             // revision in client edit commands identifies the property:
             // the server changes that field only, then replicates the
             // entire authoritative point_light back to all clients.
@@ -94,11 +106,11 @@ namespace
             else if(key=="pos_z")
                 command.revision=2,command.light.position.z=float(action.value);
             else if(key=="color_r")
-                command.revision=3,command.light.color.x=float(action.value);
+                command.revision=3,command.light.color.x=float(action.value/100.0);
             else if(key=="color_g")
-                command.revision=4,command.light.color.y=float(action.value);
+                command.revision=4,command.light.color.y=float(action.value/100.0);
             else if(key=="color_b")
-                command.revision=5,command.light.color.z=float(action.value);
+                command.revision=5,command.light.color.z=float(action.value/100.0);
             else if(key=="radius")
                 command.revision=6,command.light.radius=float(action.value);
             else if(key=="strength")
@@ -136,6 +148,7 @@ namespace
         for(std::size_t i=0;i<world->lights.size();++i)
         {
             const auto& light=world->lights[i];
+            if(!light.enabled)continue;
             const vec4 clip=vp*vec4{light.position,1.0f};
             // Vulkan NDC Z is [0,1]. Projection already flips Y to
             // framebuffer-down coordinates. Never draw behind the camera.
@@ -164,6 +177,7 @@ namespace
         for(std::size_t i=0;i<world->lights.size();++i)
         {
             const auto& light=world->lights[i];
+            if(!light.enabled)continue;
             ui.set_properties(editor_light_ids+std::uint64_t(i)+1u,
                               light_properties(light));
         }
