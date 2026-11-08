@@ -189,6 +189,9 @@ void build(C_Build* b)
     c_dep_cmake(crypto);
     c_dep_cmake_option(crypto, "-DENABLE_TESTING=OFF");
     c_dep_cmake_option(crypto, "-DENABLE_PROGRAMS=OFF");
+    // VulkanNetwork is compiled locally and needs Mbed TLS's include/
+    // directory while compiling identity.cpp and secure.cpp.
+    c_dep_include(crypto, "include");
     c_dep_link(crypto, "mbedtls");
     c_dep_link(crypto, "mbedx509");
     c_dep_link(crypto, "mbedcrypto");
