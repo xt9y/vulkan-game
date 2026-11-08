@@ -31,6 +31,9 @@ namespace srv::session
         std::uint32_t active_weapon = 0;
         std::uint32_t weapon_sequence = 0;
         std::deque<net::weapon::command> weapon_commands;
+        // Independent idempotent sequence for the DTLS editor channel.
+        std::uint32_t editor_light_sequence=0;
+        std::uint32_t editor_light_index=UINT32_MAX;
 
         struct pending_shot
         {
