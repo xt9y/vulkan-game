@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <memory>
 #include <vector>
+#include <limits>
 #include <exception>
 #include <iostream>
 #include <stdexcept>
@@ -32,6 +33,84 @@ namespace
     // object-ID range for the editor's projected light labels, rather than
     // reusing mesh instance IDs. The renderer does not need a light mesh.
     constexpr std::uint64_t editor_light_ids=1ull<<32;
+
+    // Define the light's editable fields ONCE, not at every placement site.
+    // Every existing and newly created server light uses this schema.
+    std::vector<editor::property> light_properties(
+        const ::scene::point_light& light)
+    {
+        using kind=editor::property_kind;
+        return {
+            {"pos_x","Pos X",kind::real,light.position.x,-500,500,0.1},
+            {"pos_y","Pos Y",kind::real,light.position.y,-500,500,0.1},
+            {"pos_z","Pos Z",kind::real,light.position.z,-500,500,0.1},
+            {"color_r","Color X",kind::real,light.color.x,0,1,0.05},
+            {"color_g","Color Y",kind::real,light.color.y,0,1,0.05},
+            {"color_b","Color Z",kind::real,light.color.z,0,1,0.05},
+            {"radius","Radius",kind::real,light.radius,0.05,64,0.1},
+            {"strength","Strength",kind::real,light.strength,0,20,0.1}
+        };
+    }
+
+    void on_editor_action(const editor::action& action)
+    {
+        net::editor_light::resource command{};
+        if(action.kind==editor::action_kind::insert)
+        {
+            if(action.type!="light")return;
+            const auto frame=clt::camera::capture();
+            const float yaw=frame.pose.yaw,pitch=frame.pose.pitch;
+            const vk::util::math::vec3 forward{
+                std::sin(yaw)*std::cos(pitch),
+                std::sin(pitch),
+                -std::cos(yaw)*std::cos(pitch)
+            };
+            command.type=net::editor_light::kind::create;
+            command.index=UINT32_MAX;
+            command.light.position=frame.eye+forward*2.5f;
+            command.light.radius=4.0f;
+            command.light.color={1.0f,0.85f,0.7f};
+            command.light.strength=1.0f;
+        }
+        else if(action.kind==editor::action_kind::edit)
+        {
+            if(action.object<=editor_light_ids ||
+               action.object>editor_light_ids+64u)return;
+            const std::size_t index=
+                std::size_t(action.object-editor_light_ids-1u);
+            const auto world=clt::connection::snapshot();
+            if(!world || index>=world->lights.size())return;
+            command.type=net::editor_light::kind::edit;
+            command.index=std::uint32_t(index);
+            command.light=world->lights[index];
+            // revision in client edit commands identifies the property:
+            // the server changes that field only, then replicates the
+            // entire authoritative point_light back to all clients.
+            const auto& key=action.property_id;
+            if(key=="pos_x")
+                command.revision=0,command.light.position.x=float(action.value);
+            else if(key=="pos_y")
+                command.revision=1,command.light.position.y=float(action.value);
+            else if(key=="pos_z")
+                command.revision=2,command.light.position.z=float(action.value);
+            else if(key=="color_r")
+                command.revision=3,command.light.color.x=float(action.value);
+            else if(key=="color_g")
+                command.revision=4,command.light.color.y=float(action.value);
+            else if(key=="color_b")
+                command.revision=5,command.light.color.z=float(action.value);
+            else if(key=="radius")
+                command.revision=6,command.light.radius=float(action.value);
+            else if(key=="strength")
+                command.revision=7,command.light.strength=float(action.value);
+            else return;
+        }
+        else return;
+
+        if(!clt::connection::send_editor_light(command))
+            std::clog<<"clt: could not queue editor light command\n";
+    }
+
 
     void publish_editor_lights()
     {
@@ -85,24 +164,8 @@ namespace
         for(std::size_t i=0;i<world->lights.size();++i)
         {
             const auto& light=world->lights[i];
-            ui.set_properties(editor_light_ids+std::uint64_t(i)+1u,{
-                {"pos_x","Pos X",editor::property_kind::real,
-                    light.position.x,-10000.0,10000.0,0.1},
-                {"pos_y","Pos Y",editor::property_kind::real,
-                    light.position.y,-10000.0,10000.0,0.1},
-                {"pos_z","Pos Z",editor::property_kind::real,
-                    light.position.z,-10000.0,10000.0,0.1},
-                {"color_r","Color X",editor::property_kind::real,
-                    light.color.x,0.0,1.0,0.1},
-                {"color_g","Color Y",editor::property_kind::real,
-                    light.color.y,0.0,1.0,0.1},
-                {"color_b","Color Z",editor::property_kind::real,
-                    light.color.z,0.0,1.0,0.1},
-                {"radius","Radius",editor::property_kind::real,
-                    light.radius,0.0,1000.0,0.1},
-                {"strength","Strength",editor::property_kind::real,
-                    light.strength,0.0,1000.0,0.1}
-            });
+            ui.set_properties(editor_light_ids+std::uint64_t(i)+1u,
+                              light_properties(light));
         }
     }
 
@@ -190,7 +253,10 @@ int main(int argc, char** argv)
         }
 
         load_weapons();
-        clt::application::set_callbacks({on_input});
+        // Host-defined editor catalog; LIGHT properties are auto-generated
+        // for every light from the single schema above.
+        editor::instance().set_catalog({{"light","Light","Lighting"}});
+        clt::application::set_callbacks({on_input,on_editor_action});
         net::socket::init();
         std::signal(SIGINT, stop);
         std::signal(SIGTERM, stop);
