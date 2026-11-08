@@ -1,0 +1,12 @@
+{
+  "clips": [
+    {
+      "name": "CharacterGlock_Source",
+      "source_first_frame": 2.0,
+      "source_last_frame": 251.0,
+      "fps": 60,
+      "duration_seconds": 4.15
+    }
+  ],
+  "note": "Upstream CharacterGlock.fbx contains Glock meshes and full human skeleton but no character body mesh. Its native action is preserved; UnisexGuy_Glock clips use a different incompatible CC_Base skeleton, so are retained as sources only."
+}

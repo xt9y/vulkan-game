@@ -1,26 +1,26 @@
-# vulkan-game: two-file rewrite (foundation)
+vulkan-game: two source files
 
-Only `server.cpp` and `client.cpp` are compiled as application sources.
-No `srv/`, `clt/`, `weapons.cpp` or `weapons.hpp` directories/files remain
-in this branch. The old shaders (`shd/`) are retained for a future renderer.
+Only client.cpp and server.cpp are compiled as game application sources.
+The source content is an inlined amalgamation of the original full-feature
+implementation at main e21c3a280e: rendering, editor, asset import,
+animation, networking, movement, weapon logic, and server authority.
+Shaders and original game assets remain separate data files.
 
-The server and client currently implement authenticated DTLS transport,
-reliable scene/movement messages, simple cube scene replication, basic
-movement prediction and correction, and ammo/reloading. The client is
-headless: **this branch does not preserve the old renderer, model import,
-weapon animations or editor. It is not a release-ready replacement.**
+The renderer uses VulkanWrapper and VulkanSystems modules. Other external
+dependencies are still required for original behavior: GLFW (window/input),
+fastgltf (GLB import), Ozz (rigs/animation), stb (image decode), and
+Mbed TLS (DTLS). Those are preserved by build.c; removing them requires
+replacement implementations and is not part of this amalgamation.
 
-Source repositories are Git submodules: `vulkan-wrapper`, `vulkan-systems`,
-and `vulkan-headers`. The Vulkan headers and Mbed TLS remain indirect build
-dependencies. There is no GLFW, fastgltf, Ozz, or stb in the app build.
+Build:
+  git submodule update --init --recursive
+  c build vulkan-server
+  c build vulkan-client
 
-```
-git submodule update --init --recursive
-c build vulkan-server
-c build vulkan-client
-c build run vulkan-server
-c build run vulkan-client -- 127.0.0.1 27015
-```
+Run:
+  c build run vulkan-server
+  c build run vulkan-client
 
-On the client, type `w`, `a`, `s`, `d`, `stop`, `f`, `r`, or `exit` and Enter.
-The original server/client source layout is preserved on the main branch.
+IMPORTANT: The full native build and runtime visual/feature parity have not
+yet been verified in a Vulkan/MoltenVK environment. Do not treat source-level
+amalgamation alone as a validated engine rewrite.
