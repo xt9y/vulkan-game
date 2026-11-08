@@ -2551,6 +2551,120 @@ namespace game::application
 
 #undef STB_IMAGE_IMPLEMENTATION
 
+// [srv/shared/net/editor_light.hpp]
+
+
+
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <string_view>
+
+namespace net::editor_light {
+    enum class kind : std::uint8_t {
+        create=1,edit=2,state=3,ack=4,remove=5
+    };
+    struct resource {
+        kind type=kind::state;
+        std::uint32_t token=0,sequence=0,index=0,revision=0;
+        ::scene::point_light light{};
+    };
+    using packet=std::array<std::uint8_t,56>;
+
+    // One indexed field layout for packet edits on both sides of the connection.
+    inline constexpr std::array<std::string_view,8> property_keys{
+        "pos_x","pos_y","pos_z","color_r","color_g","color_b","radius","strength"
+    };
+    template<class Light>
+    auto property_fields(Light& light) {
+        return std::array{&light.position.x,&light.position.y,&light.position.z,
+            &light.color.x,&light.color.y,&light.color.z,&light.radius,&light.strength};
+    }
+
+    inline bool valid(const ::scene::point_light& l) {
+        const auto in=[](float value,float maximum) {
+            return std::isfinite(value)&&value>=0&&value<=maximum;
+        };
+        const auto coord=[](float value) {
+            return std::isfinite(value)&&std::abs(value)<=500.f;
+        };
+        return coord(l.position.x)&&coord(l.position.y)&&coord(l.position.z)&&
+            in(l.color.x,1)&&in(l.color.y,1)&&in(l.color.z,1)&&
+            in(l.radius,64)&&l.radius>=.05f&&in(l.strength,20);
+    }
+    inline packet encode(const resource& v) {
+        packet p{'V','L','I','T',1,std::uint8_t(v.type),
+            std::uint8_t(v.light.enabled?1:0),0};
+        const auto& l=v.light;
+        net::movement::detail::fields(p.data()+8,v.token,v.sequence,v.index,
+            v.revision,l.position.x,l.position.y,l.position.z,l.radius,
+            l.color.x,l.color.y,l.color.z,l.strength);
+        return p;
+    }
+    inline std::optional<resource> decode(const std::uint8_t* p,std::size_t n) {
+        if(!p||n!=packet{}.size()||p[0]!='V'||p[1]!='L'||
+           p[2]!='I'||p[3]!='T'||p[4]!=1||p[5]<1||p[5]>5||
+           p[6]>1||p[7]!=0)return std::nullopt;
+        resource v{};
+        v.type=kind(p[5]);
+        auto& l=v.light;
+        net::movement::detail::fields(p+8,v.token,v.sequence,v.index,
+            v.revision,l.position.x,l.position.y,l.position.z,l.radius,
+            l.color.x,l.color.y,l.color.z,l.strength);
+        l.enabled=p[6]!=0;
+        if(!v.token||!v.sequence||!valid(l)||
+           (v.type==kind::create?v.index!=UINT32_MAX:v.index>=64))
+            return std::nullopt;
+        return v;
+    }
+}
+
+
+// [srv/shared/net/secure_config.hpp]
+#include <network/secure.hpp>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <stdexcept>
+#include <string>
+
+namespace game::secure_config {
+inline std::string env(const char* key) {
+    const char* value=std::getenv(key);
+    return value && *value ? value : "";
+}
+inline std::string storage_directory() {
+    namespace fs=std::filesystem;
+    // Keep the private server identity and the client's trust pins outside Git.
+    const auto xdg=env("XDG_CONFIG_HOME");
+    if(!xdg.empty())return (fs::path(xdg)/"vulkan-game"/"network").string();
+    const auto local=env("LOCALAPPDATA");
+    if(!local.empty())return (fs::path(local)/"vulkan-game"/"network").string();
+    const auto appdata=env("APPDATA");
+    if(!appdata.empty())return (fs::path(appdata)/"vulkan-game"/"network").string();
+    const auto home=env("HOME");
+    if(!home.empty())return (fs::path(home)/".config"/"vulkan-game"/"network").string();
+    throw std::runtime_error("Cannot locate per-user DTLS storage; set XDG_CONFIG_HOME or HOME");
+}
+inline net::secure::settings load(net::secure::role side,
+                                  const std::string& server_host={},
+                                  std::uint16_t server_port=0) {
+    net::secure::settings s;
+    s.storage_directory=storage_directory();
+    if(side==net::secure::role::client) {
+        if(server_host.empty() || !server_port)
+            throw std::invalid_argument("Client needs --host and --port");
+        s.max_peers=1;
+        s.trust_identity=server_host+":"+std::to_string(server_port);
+    }
+    return s;
+}
+}
+
+
+
 #ifndef VULKAN_GAME_SHARED_ONLY
 
 // [server.cpp]
@@ -2858,114 +2972,12 @@ namespace srv::session
 
 
 
-// [srv/shared/net/editor_light.hpp]
-
-
-
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <optional>
-
-namespace net::editor_light {
-    enum class kind : std::uint8_t {
-        create=1,edit=2,state=3,ack=4,remove=5
-    };
-    struct resource {
-        kind type=kind::state;
-        std::uint32_t token=0,sequence=0,index=0,revision=0;
-        ::scene::point_light light{};
-    };
-    using packet=std::array<std::uint8_t,56>;
-
-    inline bool valid(const ::scene::point_light& l) {
-        const auto in=[](float value,float maximum) {
-            return std::isfinite(value)&&value>=0&&value<=maximum;
-        };
-        const auto coord=[](float value) {
-            return std::isfinite(value)&&std::abs(value)<=500.f;
-        };
-        return coord(l.position.x)&&coord(l.position.y)&&coord(l.position.z)&&
-            in(l.color.x,1)&&in(l.color.y,1)&&in(l.color.z,1)&&
-            in(l.radius,64)&&l.radius>=.05f&&in(l.strength,20);
-    }
-    inline packet encode(const resource& v) {
-        packet p{'V','L','I','T',1,std::uint8_t(v.type),
-            std::uint8_t(v.light.enabled?1:0),0};
-        const auto& l=v.light;
-        net::movement::detail::fields(p.data()+8,v.token,v.sequence,v.index,
-            v.revision,l.position.x,l.position.y,l.position.z,l.radius,
-            l.color.x,l.color.y,l.color.z,l.strength);
-        return p;
-    }
-    inline std::optional<resource> decode(const std::uint8_t* p,std::size_t n) {
-        if(!p||n!=packet{}.size()||p[0]!='V'||p[1]!='L'||
-           p[2]!='I'||p[3]!='T'||p[4]!=1||p[5]<1||p[5]>5||
-           p[6]>1||p[7]!=0)return std::nullopt;
-        resource v{};
-        v.type=kind(p[5]);
-        auto& l=v.light;
-        net::movement::detail::fields(p+8,v.token,v.sequence,v.index,
-            v.revision,l.position.x,l.position.y,l.position.z,l.radius,
-            l.color.x,l.color.y,l.color.z,l.strength);
-        l.enabled=p[6]!=0;
-        if(!v.token||!v.sequence||!valid(l)||
-           (v.type==kind::create?v.index!=UINT32_MAX:v.index>=64))
-            return std::nullopt;
-        return v;
-    }
-}
-
-
 #include <network/endpoint.hpp>
 
 
 
 
 #include <network/secure.hpp>
-
-// [srv/shared/net/secure_config.hpp]
-#include <network/secure.hpp>
-#include <cstdint>
-#include <cstdlib>
-#include <filesystem>
-#include <stdexcept>
-#include <string>
-
-namespace game::secure_config {
-inline std::string env(const char* key) {
-    const char* value=std::getenv(key);
-    return value && *value ? value : "";
-}
-inline std::string storage_directory() {
-    namespace fs=std::filesystem;
-    // Keep the private server identity and the client's trust pins outside Git.
-    const auto xdg=env("XDG_CONFIG_HOME");
-    if(!xdg.empty())return (fs::path(xdg)/"vulkan-game"/"network").string();
-    const auto local=env("LOCALAPPDATA");
-    if(!local.empty())return (fs::path(local)/"vulkan-game"/"network").string();
-    const auto appdata=env("APPDATA");
-    if(!appdata.empty())return (fs::path(appdata)/"vulkan-game"/"network").string();
-    const auto home=env("HOME");
-    if(!home.empty())return (fs::path(home)/".config"/"vulkan-game"/"network").string();
-    throw std::runtime_error("Cannot locate per-user DTLS storage; set XDG_CONFIG_HOME or HOME");
-}
-inline net::secure::settings load(net::secure::role side,
-                                  const std::string& server_host={},
-                                  std::uint16_t server_port=0) {
-    net::secure::settings s;
-    s.storage_directory=storage_directory();
-    if(side==net::secure::role::client) {
-        if(server_host.empty() || !server_port)
-            throw std::invalid_argument("Client needs --host and --port");
-        s.max_peers=1;
-        s.trust_identity=server_host+":"+std::to_string(server_port);
-    }
-    return s;
-}
-}
-
 
 #include <network/session.hpp>
 
@@ -3554,17 +3566,8 @@ namespace srv::application
                         // Apply only the edited field to avoid reverting other
                         // properties with a stale client-side light copy.
                         auto& light=get()->scene.lights[index];
-                        switch(command.revision)
-                        {
-                        case 0:light.position.x=command.light.position.x;break;
-                        case 1:light.position.y=command.light.position.y;break;
-                        case 2:light.position.z=command.light.position.z;break;
-                        case 3:light.color.x=command.light.color.x;break;
-                        case 4:light.color.y=command.light.color.y;break;
-                        case 5:light.color.z=command.light.color.z;break;
-                        case 6:light.radius=command.light.radius;break;
-                        case 7:light.strength=command.light.strength;break;
-                        }
+                        *net::editor_light::property_fields(light)[command.revision]=
+                            *net::editor_light::property_fields(command.light)[command.revision];
                         get()->editor_light_versions[index]=
                             ++get()->editor_light_revision;
                     }

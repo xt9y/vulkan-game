@@ -212,98 +212,6 @@ namespace clt::postprocess
 
 
 
-// [srv/shared/net/editor_light.hpp]
-
-
-
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <optional>
-
-namespace net::editor_light
-{
-    enum class kind : std::uint8_t { create=1,edit=2,state=3,ack=4,remove=5 };
-    struct resource
-    {
-        kind type=kind::state;
-        std::uint32_t token=0;
-        std::uint32_t sequence=0; // Command sequence, or state revision.
-        std::uint32_t index=0;    // Server-authoritative light index.
-        std::uint32_t revision=0; // State revision, including acknowledgements.
-        ::scene::point_light light{};
-    };
-    using packet=std::array<std::uint8_t,56>;
-
-    inline bool valid(const ::scene::point_light& l)
-    {
-        const auto finite=[](float v,float limit)
-        {
-            return std::isfinite(v)&&std::abs(v)<=limit;
-        };
-        return finite(l.position.x,500.0f) &&
-               finite(l.position.y,500.0f) &&
-               finite(l.position.z,500.0f) &&
-               finite(l.color.x,1.0f) && l.color.x>=0 &&
-               finite(l.color.y,1.0f) && l.color.y>=0 &&
-               finite(l.color.z,1.0f) && l.color.z>=0 &&
-               finite(l.radius,64.0f) && l.radius>=0.05f &&
-               finite(l.strength,20.0f) && l.strength>=0;
-    }
-
-    inline packet encode(const resource& item)
-    {
-        using namespace net::movement::detail;
-        packet result{'V','L','I','T',1,
-            static_cast<std::uint8_t>(item.type),
-            static_cast<std::uint8_t>(item.light.enabled?1:0),0};
-        auto* p=result.data();
-        put(p+8,item.token);
-        put(p+12,item.sequence);
-        put(p+16,item.index);
-        put(p+20,item.revision);
-        put_float(p+24,item.light.position.x);
-        put_float(p+28,item.light.position.y);
-        put_float(p+32,item.light.position.z);
-        put_float(p+36,item.light.radius);
-        put_float(p+40,item.light.color.x);
-        put_float(p+44,item.light.color.y);
-        put_float(p+48,item.light.color.z);
-        put_float(p+52,item.light.strength);
-        return result;
-    }
-
-    inline std::optional<resource> decode(const std::uint8_t* p,
-                                          std::size_t size)
-    {
-        if(!p || size!=packet{}.size() ||
-           p[0]!='V'||p[1]!='L'||p[2]!='I'||p[3]!='T'||
-           p[4]!=1||p[5]<1||p[5]>5||p[6]>1||p[7]!=0)
-            return std::nullopt;
-        using namespace net::movement::detail;
-        resource item{};
-        item.type=kind(p[5]);
-        item.token=get(p+8);
-        item.sequence=get(p+12);
-        item.index=get(p+16);
-        item.revision=get(p+20);
-        item.light.position={get_float(p+24),get_float(p+28),get_float(p+32)};
-        item.light.radius=get_float(p+36);
-        item.light.color={get_float(p+40),get_float(p+44),get_float(p+48)};
-        item.light.strength=get_float(p+52);
-        item.light.enabled=p[6]!=0;
-        if(!item.token || !item.sequence || !valid(item.light))
-            return std::nullopt;
-        if(item.type==kind::create && item.index!=UINT32_MAX)
-            return std::nullopt;
-        if(item.type!=kind::create && item.index>=64)
-            return std::nullopt;
-        return item;
-    }
-}
-
-
 #include <network/secure.hpp>
 
 
@@ -513,24 +421,13 @@ namespace
             // revision in client edit commands identifies the property:
             // the server changes that field only, then replicates the
             // entire authoritative point_light back to all clients.
-            const auto& key=action.property_id;
-            if(key=="pos_x")
-                command.revision=0,command.light.position.x=float(action.value);
-            else if(key=="pos_y")
-                command.revision=1,command.light.position.y=float(action.value);
-            else if(key=="pos_z")
-                command.revision=2,command.light.position.z=float(action.value);
-            else if(key=="color_r")
-                command.revision=3,command.light.color.x=float(action.value/100.0);
-            else if(key=="color_g")
-                command.revision=4,command.light.color.y=float(action.value/100.0);
-            else if(key=="color_b")
-                command.revision=5,command.light.color.z=float(action.value/100.0);
-            else if(key=="radius")
-                command.revision=6,command.light.radius=float(action.value);
-            else if(key=="strength")
-                command.revision=7,command.light.strength=float(action.value);
-            else return;
+            const auto key=std::find(net::editor_light::property_keys.begin(),
+                net::editor_light::property_keys.end(),action.property_id);
+            if(key==net::editor_light::property_keys.end())return;
+            command.revision=std::uint32_t(key-net::editor_light::property_keys.begin());
+            *net::editor_light::property_fields(command.light)[command.revision]=
+                command.revision>=3 && command.revision<=5
+                ?float(action.value/100.0):float(action.value);
         }
         else return;
 
@@ -1371,48 +1268,6 @@ namespace clt::input
 
 
 #include <network/secure.hpp>
-
-// [srv/shared/net/secure_config.hpp]
-#include <network/secure.hpp>
-#include <cstdint>
-#include <cstdlib>
-#include <filesystem>
-#include <stdexcept>
-#include <string>
-
-namespace game::secure_config {
-inline std::string env(const char* key) {
-    const char* value=std::getenv(key);
-    return value && *value ? value : "";
-}
-inline std::string storage_directory() {
-    namespace fs=std::filesystem;
-    // Keep the private server identity and the client's trust pins outside Git.
-    const auto xdg=env("XDG_CONFIG_HOME");
-    if(!xdg.empty())return (fs::path(xdg)/"vulkan-game"/"network").string();
-    const auto local=env("LOCALAPPDATA");
-    if(!local.empty())return (fs::path(local)/"vulkan-game"/"network").string();
-    const auto appdata=env("APPDATA");
-    if(!appdata.empty())return (fs::path(appdata)/"vulkan-game"/"network").string();
-    const auto home=env("HOME");
-    if(!home.empty())return (fs::path(home)/".config"/"vulkan-game"/"network").string();
-    throw std::runtime_error("Cannot locate per-user DTLS storage; set XDG_CONFIG_HOME or HOME");
-}
-inline net::secure::settings load(net::secure::role side,
-                                  const std::string& server_host={},
-                                  std::uint16_t server_port=0) {
-    net::secure::settings s;
-    s.storage_directory=storage_directory();
-    if(side==net::secure::role::client) {
-        if(server_host.empty() || !server_port)
-            throw std::invalid_argument("Client needs --host and --port");
-        s.max_peers=1;
-        s.trust_identity=server_host+":"+std::to_string(server_port);
-    }
-    return s;
-}
-}
-
 
 #include <network/session.hpp>
 
@@ -3959,6 +3814,20 @@ namespace clt::scene_renderer
         vk::device::get()->handle.updateDescriptorSets(writes,{});
     }
 
+    gpu_mesh upload_mesh(const ::scene::mesh& mesh,gpu::upload::batch& transfers)
+    {
+        gpu_mesh result;
+        result.id=mesh.id;
+        result.skin_id=mesh.skin_id;
+        result.joint_count=animation::joints(mesh.skin_id);
+        result.surface=mesh.surface;
+        result.index_count=std::uint32_t(mesh.indices.size());
+        result.geometry.upload(transfers,mesh.vertices.data(),
+            mesh.vertices.size()*sizeof(::scene::vertex),mesh.indices.data(),
+            mesh.indices.size()*sizeof(std::uint32_t),result.index_count);
+        return result;
+    }
+
     void create_local_frames()
     {
         auto& data = get();
@@ -3970,22 +3839,8 @@ namespace clt::scene_renderer
         if (data.local_meshes.empty())
         {
             gpu::upload::batch transfers;
-            for (const auto& mesh : source.meshes)
-            {
-                gpu_mesh output;
-                output.id = mesh.id;
-                output.skin_id = mesh.skin_id;
-                output.joint_count = animation::joints(mesh.skin_id);
-                output.surface = mesh.surface;
-                output.index_count = mesh.indices.size();
-                output.geometry.upload(transfers,
-                    mesh.vertices.data(),
-                    mesh.vertices.size() * sizeof(::scene::vertex),
-                    mesh.indices.data(),
-                    mesh.indices.size() * sizeof(std::uint32_t),
-                    output.index_count);
-                data.local_meshes.push_back(std::move(output));
-            }
+            for(const auto& mesh:source.meshes)
+                data.local_meshes.push_back(upload_mesh(mesh,transfers));
             transfers.finish();
         }
         const auto count=std::uint32_t(
@@ -4175,31 +4030,38 @@ namespace clt::scene_renderer
         bind_instances(mesh);
     }
 
-    void rebuild_instance_frames()
+    void prepare_instance_frames(std::vector<gpu_mesh>& meshes,
+                                 std::unique_ptr<gpu::descriptors>& sets,
+                                 bool retained)
     {
-        auto& data = get();
-        if(data.meshes.empty()) return;
+        if(meshes.empty()) return;
 
-        const auto count = std::max<std::size_t>(1, data.meshes.size()) *
+        const auto count = std::max<std::size_t>(1, meshes.size()) *
             std::max<std::size_t>(1, vk::swapchain::get()->images.size());
         const auto schema = instance_bindings();
-        data.instance_sets = std::make_unique<gpu::descriptors>();
-        data.instance_sets->create(
+        sets = std::make_unique<gpu::descriptors>();
+        sets->create(
             std::vector<vk::DescriptorSetLayoutBinding>(schema.begin(), schema.end()),
             static_cast<std::uint32_t>(count));
 
         std::uint32_t index = 0;
         gpu::upload::batch transfers;
-        for(auto& mesh : data.meshes)
+        for(auto& mesh : meshes)
         {
             if(mesh.transforms.empty()) continue;
             // Existing instance and geometry buffers remain GPU-resident.
-            refresh_instances(mesh, mesh.transforms.size(),&transfers);
+            refresh_instances(mesh,retained?mesh.transforms.size():0,&transfers);
             for(auto& frame : mesh.frames)
-                frame.set = data.instance_sets->set(index++);
+                frame.set = sets->set(index++);
             bind_instances(mesh);
         }
         transfers.finish();
+    }
+
+    void rebuild_instance_frames()
+    {
+        auto& data=get();
+        prepare_instance_frames(data.meshes,data.instance_sets,true);
     }
 
     bool needs_sync()
@@ -4268,16 +4130,7 @@ namespace clt::scene_renderer
             gpu::upload::batch upload;
             for(const auto& mesh:source->meshes)
             {
-                gpu_mesh gpu{};
-                gpu.id=mesh.id;
-                gpu.surface=mesh.surface;
-                gpu.skin_id=mesh.skin_id;
-                gpu.joint_count=animation::joints(mesh.skin_id);
-                gpu.index_count=std::uint32_t(mesh.indices.size());
-                gpu.geometry.upload(upload,mesh.vertices.data(),
-                    mesh.vertices.size()*sizeof(::scene::vertex),
-                    mesh.indices.data(),mesh.indices.size()*sizeof(std::uint32_t),
-                    gpu.index_count);
+                gpu_mesh gpu=upload_mesh(mesh,upload);
                 if(!mesh.vertices.empty())
                 {
                     vec3 low=mesh.vertices.front().position,high=low;
@@ -4304,23 +4157,7 @@ namespace clt::scene_renderer
                 if(found!=lookup.end()&&fresh[found->second].index_count)
                     append_instance(fresh[found->second],instance);
             }
-            const auto count=std::max<std::size_t>(1,fresh.size())*
-                std::max<std::size_t>(1,vk::swapchain::get()->images.size());
-            const auto schema=instance_bindings();
-            sets=std::make_unique<gpu::descriptors>();
-            sets->create(std::vector<vk::DescriptorSetLayoutBinding>(
-                schema.begin(),schema.end()),std::uint32_t(count));
-            gpu::upload::batch instances;
-            std::uint32_t descriptor_index=0;
-            for(auto& mesh:fresh)
-            {
-                if(mesh.transforms.empty())continue;
-                refresh_instances(mesh,0,&instances);
-                for(auto& frame:mesh.frames)
-                    frame.set=sets->set(descriptor_index++);
-                bind_instances(mesh);
-            }
-            instances.finish();
+            prepare_instance_frames(fresh,sets,false);
         }
         else
         {
