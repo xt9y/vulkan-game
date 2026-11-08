@@ -4118,100 +4118,59 @@ namespace clt::scene_renderer
         }
     }
 
-    void refresh_instances(gpu_mesh& mesh, std::size_t first = 0,
-                           gpu::upload::batch* shared_upload = nullptr)
+    void refresh_instances(gpu_mesh& mesh,std::size_t first=0,
+                           gpu::upload::batch* shared_upload=nullptr)
     {
-        if (mesh.transforms.empty())
+        if(mesh.transforms.empty())return;
+        gpu::upload::batch local;
+        auto& transfers=shared_upload?*shared_upload:local;
+        const auto upload=[&](gpu::owned_buffer& buffer,
+                              const void* source,std::size_t stride,std::size_t count)
         {
-            return;
-        }
+            const auto bytes=count*stride;
+            if(!buffer.handle||buffer.size<bytes)
+                buffer=transfers.add(source,bytes,
+                    vk::BufferUsageFlagBits::eStorageBuffer,
+                    std::max<vk::DeviceSize>(bytes,buffer.size*2));
+            else if(first<count)
+                transfers.write(buffer,
+                    reinterpret_cast<const std::uint8_t*>(source)+first*stride,
+                    (count-first)*stride,first*stride);
+        };
+        upload(mesh.instance_buffer,mesh.transforms.data(),
+               sizeof(instance_data),mesh.transforms.size());
+        upload(mesh.bounds_buffer,mesh.bounds.data(),
+               sizeof(mesh.bounds.front()),mesh.bounds.size());
 
-        gpu::upload::batch local_upload;
-        auto& transfers=shared_upload?*shared_upload:local_upload;
-        const auto transform_bytes = mesh.transforms.size() * sizeof(instance_data);
-        if (!mesh.instance_buffer.handle || mesh.instance_buffer.size < transform_bytes)
+        mesh.frames.resize(vk::swapchain::get()->images.size());
+        const auto palette_size=std::max<std::size_t>(
+            sizeof(animation::matrix),
+            mesh.instances.size()*std::max(1u,mesh.joint_count)*
+                sizeof(animation::matrix));
+        const auto visible_bytes=mesh.bounds.size()*sizeof(std::uint32_t);
+        for(auto& frame:mesh.frames)
         {
-            auto replacement = transfers.add(
-                mesh.transforms.data(), transform_bytes,
-                vk::BufferUsageFlagBits::eStorageBuffer,
-                std::max<vk::DeviceSize>(transform_bytes, mesh.instance_buffer.size * 2)
-            );
-            if (mesh.instance_buffer.handle) mesh.instance_buffer.reset();
-            mesh.instance_buffer = replacement;
-        }
-        else if (first < mesh.transforms.size())
-        {
-            transfers.write(
-                mesh.instance_buffer, mesh.transforms.data() + first,
-                (mesh.transforms.size() - first) * sizeof(instance_data),
-                first * sizeof(instance_data)
-            );
-        }
-
-        const auto visible_bytes = mesh.bounds.size() * sizeof(std::uint32_t);
-        const auto count = vk::swapchain::get()->images.size();
-        mesh.frames.resize(count);
-        for (auto& frame : mesh.frames)
-        {
-            if (!frame.visible.handle || frame.visible.size < visible_bytes)
-            {
-                auto replacement = gpu::create_buffer(
-                    std::max<vk::DeviceSize>(visible_bytes, frame.visible.size * 2),
-                    vk::BufferUsageFlagBits::eVertexBuffer |
-                    vk::BufferUsageFlagBits::eStorageBuffer |
+            if(!frame.visible.handle||frame.visible.size<visible_bytes)
+                frame.visible=gpu::create_buffer(
+                    std::max<vk::DeviceSize>(visible_bytes,frame.visible.size*2),
+                    vk::BufferUsageFlagBits::eVertexBuffer|
+                    vk::BufferUsageFlagBits::eStorageBuffer|
                     vk::BufferUsageFlagBits::eTransferSrc,
-                    vk::MemoryPropertyFlagBits::eDeviceLocal
-                );
-                if (frame.visible.handle) frame.visible.reset();
-                frame.visible = std::move(replacement);
-            }
-
-            if (!frame.indirect.handle)
-            {
-                frame.indirect = gpu::create_buffer(
+                    vk::MemoryPropertyFlagBits::eDeviceLocal);
+            if(!frame.indirect.handle)
+                frame.indirect=gpu::create_buffer(
                     sizeof(vk::DrawIndexedIndirectCommand),
-                    vk::BufferUsageFlagBits::eStorageBuffer |
-                    vk::BufferUsageFlagBits::eIndirectBuffer |
-                    vk::BufferUsageFlagBits::eTransferDst |
+                    vk::BufferUsageFlagBits::eStorageBuffer|
+                    vk::BufferUsageFlagBits::eIndirectBuffer|
+                    vk::BufferUsageFlagBits::eTransferDst|
                     vk::BufferUsageFlagBits::eTransferSrc,
-                    vk::MemoryPropertyFlagBits::eDeviceLocal
-                );
-            }
-        }
-
-        const auto palette_size = std::max<std::size_t>(
-            sizeof(animation::matrix), mesh.instances.size() *
-                std::max<std::uint32_t>(1, mesh.joint_count) * sizeof(animation::matrix));
-        for (auto& frame : mesh.frames)
-        {
-            if (!frame.skin_palette.handle || frame.skin_palette.size < palette_size)
-            {
-                if (frame.skin_palette.handle) frame.skin_palette.reset();
-                frame.skin_palette = gpu::create_buffer(
-                    palette_size, vk::BufferUsageFlagBits::eStorageBuffer,
-                    vk::MemoryPropertyFlagBits::eHostVisible |
+                    vk::MemoryPropertyFlagBits::eDeviceLocal);
+            if(!frame.skin_palette.handle||frame.skin_palette.size<palette_size)
+                frame.skin_palette=gpu::create_buffer(
+                    palette_size,vk::BufferUsageFlagBits::eStorageBuffer,
+                    vk::MemoryPropertyFlagBits::eHostVisible|
                     vk::MemoryPropertyFlagBits::eHostCoherent);
-            }
         }
-        const auto size = mesh.bounds.size() * sizeof(mesh.bounds.front());
-        if (!mesh.bounds_buffer.handle || mesh.bounds_buffer.size < size)
-        {
-            auto replacement = transfers.add(
-                mesh.bounds.data(), size, vk::BufferUsageFlagBits::eStorageBuffer,
-                std::max<vk::DeviceSize>(size, mesh.bounds_buffer.size * 2)
-            );
-            if (mesh.bounds_buffer.handle) mesh.bounds_buffer.reset();
-            mesh.bounds_buffer = replacement;
-        }
-        else if (first < mesh.bounds.size())
-        {
-            transfers.write(
-                mesh.bounds_buffer, mesh.bounds.data() + first,
-                (mesh.bounds.size() - first) * sizeof(mesh.bounds.front()),
-                first * sizeof(mesh.bounds.front())
-            );
-        }
-
         if(!shared_upload)transfers.finish();
         bind_instances(mesh);
     }
