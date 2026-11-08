@@ -51,57 +51,50 @@ static void compile_shaders(void)
     }
 }
 
-// Fetch just the original 90 glyph PNGs once. Configure the sparse working
-// tree BEFORE fetching the source commit to avoid downloading large game
-// models/textures from the private HellEngine backup repository.
-// No font decoding occurs in build.c or on the render thread.
-static void prepare_editor_font(void)
+// Faithful asset import from the exact Hell2024 snapshot inside Hell2025:
+// 7362a3a86cc254ecffdf498c9febae10eefa120b.
+// Only the original bitmap font and UI menu images are checked out. The
+// editor hardloads these once at startup; no network or decoding in frames.
+static void prepare_editor_assets(void)
 {
-    struct stat info;
-    if(stat("build/editor-font-repository/Rogue/Rogue/res/textures/font/char_90.png",
-            &info)==0)
-        return;
-
-    const char* skip=getenv("VULKAN_EDITOR_FONT_SKIP_DOWNLOAD");
-    if(skip && strcmp(skip,"1")==0)return;
-
-    if(stat("build/editor-font-repository/.git",&info)!=0)
+    const char* root="build/editor-hell2024";
+    struct stat font,menu;
+    const char* font_path=
+        "build/editor-hell2024/Hell2024/Hell2024/res/textures/font/char_90.png";
+    const char* menu_path=
+        "build/editor-hell2024/Hell2024/Hell2024/res/textures/ui/MenuBG.png";
+    if(stat(font_path,&font)==0 && stat(menu_path,&menu)==0)return;
+    if(stat("build/editor-hell2024/.git",&font)!=0)
     {
-        if(system("git init -q build/editor-font-repository && "
-                  "git -C build/editor-font-repository remote add origin "
-                  "https://github.com/xt9y/hellengine-bak.git && "
-                  "git -C build/editor-font-repository sparse-checkout init --cone && "
-                  "git -C build/editor-font-repository sparse-checkout set "
-                  "Rogue/Rogue/res/textures/font")!=0)
+        if(system("git init -q build/editor-hell2024 && "
+                  "git -C build/editor-hell2024 remote add origin "
+                  "https://github.com/livinamuk/Hell2025.git && "
+                  "git -C build/editor-hell2024 sparse-checkout init --cone")!=0)
         {
-            fprintf(stderr,
-                    "editor: unable to initialize sparse original-font checkout\n");
+            fprintf(stderr,"editor: could not initialize original UI assets\n");
             return;
         }
     }
-
-    // Also specify the blob filter on each FETCH: older configurations can
-    // otherwise transfer the complete private backup (hundreds of MB).
-    if(system("git -C build/editor-font-repository fetch -q --depth 1 "
+    if(system("git -C build/editor-hell2024 sparse-checkout set "
+              "Hell2024/Hell2024/res/textures/font "
+              "Hell2024/Hell2024/res/textures/ui && "
+              "git -C build/editor-hell2024 fetch -q --depth 1 "
               "--filter=blob:none origin "
-              "2ab96641cc98912ffcdcae67c77a10de5e0fdc7d && "
-              "git -C build/editor-font-repository checkout -q --detach FETCH_HEAD")!=0)
+              "7362a3a86cc254ecffdf498c9febae10eefa120b && "
+              "git -C build/editor-hell2024 checkout -q --detach FETCH_HEAD")!=0)
     {
         fprintf(stderr,
-                "editor: font checkout failed; client requires access to "
-                "xt9y/hellengine-bak (no fallback font)\n");
+                "editor: could not fetch exact Hell2024 UI snapshot\n");
         return;
     }
-    if(stat("build/editor-font-repository/Rogue/Rogue/res/textures/font/char_90.png",
-            &info)!=0)
-        fprintf(stderr,
-                "editor: incomplete original font checkout; client startup will fail\n");
+    if(stat(font_path,&font)!=0 || stat(menu_path,&menu)!=0)
+        fprintf(stderr,"editor: original UI assets incomplete\n");
 }
 
 void build(C_Build* b)
 {
     compile_shaders();
-    prepare_editor_font();
+    prepare_editor_assets();
     C_Dependency* engine =
         c_git(b, "VulkanEngine", "https://github.com/xt9y/vulkan-engine.git", "4b792b574727115d7478f414e11e9540e848404e");
     c_dep_cbuild(engine, "VulkanEngine", C_TARGET_STATIC_LIBRARY);
