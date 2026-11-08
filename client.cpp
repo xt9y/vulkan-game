@@ -4250,86 +4250,118 @@ namespace clt::scene_renderer
 
     void synchronize()
     {
-        auto& data = get();
-        const auto source = connection::snapshot();
+        auto& data=get();
+        const auto source=connection::snapshot();
+        if(source==data.snapshot)return;
 
-        if (source == data.snapshot)
+        bool appended=data.snapshot&&source&&
+            source->textures.size()>=data.snapshot->textures.size()&&
+            source->meshes.size()==data.snapshot->meshes.size()&&
+            source->instances.size()>=data.snapshot->instances.size();
+        if(appended)
         {
-            return;
+            for(std::size_t i=0;i<source->meshes.size();++i)
+                if(!::scene::same_mesh(source->meshes[i],data.snapshot->meshes[i]))
+                    appended=false;
+            if(appended)
+                appended=std::equal(data.snapshot->instances.begin(),
+                    data.snapshot->instances.end(),source->instances.begin(),
+                    ::scene::same_instance);
         }
-
-        // Scene batches are append-only; reuse immutable GPU meshes and grow
-        // only the buffers containing newly generated instances.
-        bool appended = data.snapshot && source &&
-            source->textures.size() >= data.snapshot->textures.size() &&
-            source->meshes.size() == data.snapshot->meshes.size() &&
-            source->instances.size() >= data.snapshot->instances.size();
-
-        if (appended)
-        {
-            for (std::size_t i = 0; i < source->meshes.size(); ++i)
-            {
-                const auto& a = source->meshes[i];
-                const auto& b = data.snapshot->meshes[i];
-                if (!::scene::same_mesh(a, b))
-                {
-                    appended = false;
-                    break;
-                }
-            }
-        }
-
-        if (appended)
-        {
-            appended = std::equal(
-                data.snapshot->instances.begin(), data.snapshot->instances.end(),
-                source->instances.begin(), ::scene::same_instance
-            );
-        }
-
-        if (appended)
+        if(appended)
         {
             animation::synchronize(*source);
-            if (source->textures.size() != data.snapshot->textures.size())
+            if(source->textures.size()!=data.snapshot->textures.size())
                 texture::synchronize(*source);
-            std::vector<std::size_t> previous_counts;
-            previous_counts.reserve(data.meshes.size());
-            for (const auto& mesh : data.meshes)
+            std::vector<std::size_t> previous;
+            std::unordered_map<std::uint32_t,std::size_t> lookup;
+            previous.reserve(data.meshes.size());
+            lookup.reserve(data.meshes.size());
+            for(std::size_t i=0;i<data.meshes.size();++i)
             {
-                previous_counts.push_back(mesh.transforms.size());
+                previous.push_back(data.meshes[i].transforms.size());
+                lookup.emplace(data.meshes[i].id,i);
             }
-
-            std::unordered_map<std::uint32_t,std::size_t> mesh_indices;
-            mesh_indices.reserve(data.meshes.size());
-            for(std::size_t j=0;j<data.meshes.size();++j)
-                mesh_indices.emplace(data.meshes[j].id,j);
             for(std::size_t i=data.snapshot->instances.size();
                 i<source->instances.size();++i)
             {
-                const auto found=mesh_indices.find(source->instances[i].mesh_id);
-                if(found!=mesh_indices.end())
-                    append_instance(data.meshes[found->second],source->instances[i]);
+                const auto& instance=source->instances[i];
+                const auto found=lookup.find(instance.mesh_id);
+                if(found!=lookup.end())
+                    append_instance(data.meshes[found->second],instance);
             }
-            gpu::upload::batch scene_upload;
-            for (std::size_t i = 0; i < data.meshes.size(); ++i)
-            {
-                if (data.meshes[i].transforms.size() != previous_counts[i])
-                {
-                    refresh_instances(data.meshes[i], previous_counts[i],&scene_upload);
-                }
-            }
-            scene_upload.finish();
-            data.snapshot = source;
+            gpu::upload::batch upload;
+            for(std::size_t i=0;i<data.meshes.size();++i)
+                if(data.meshes[i].transforms.size()!=previous[i])
+                    refresh_instances(data.meshes[i],previous[i],&upload);
+            upload.finish();
+            data.snapshot=source;
             return;
         }
 
-        std::vector<gpu_mesh> meshes;
-        std::unique_ptr<gpu::descriptors> new_sets;
-
-        if (source)
+        std::vector<gpu_mesh> fresh;
+        std::unique_ptr<gpu::descriptors> sets;
+        if(source)
         {
             animation::synchronize(*source);
             texture::synchronize(*source);
+            fresh.reserve(source->meshes.size());
+            gpu::upload::batch upload;
+            for(const auto& mesh:source->meshes)
+            {
+                gpu_mesh gpu{};
+                gpu.id=mesh.id;
+                gpu.surface=mesh.surface;
+                gpu.skin_id=mesh.skin_id;
+                gpu.joint_count=animation::joints(mesh.skin_id);
+                gpu.index_count=std::uint32_t(mesh.indices.size());
+                gpu.geometry.upload(upload,mesh.vertices.data(),
+                    mesh.vertices.size()*sizeof(::scene::vertex),
+                    mesh.indices.data(),mesh.indices.size()*sizeof(std::uint32_t),
+                    gpu.index_count);
+                if(!mesh.vertices.empty())
+                {
+                    vec3 low=mesh.vertices.front().position,high=low;
+                    for(const auto& vertex:mesh.vertices)
+                    {
+                        const auto p=vertex.position;
+                        low={std::min(low.x,p.x),std::min(low.y,p.y),std::min(low.z,p.z)};
+                        high={std::max(high.x,p.x),std::max(high.y,p.y),std::max(high.z,p.z)};
+                    }
+                    gpu.center=(low+high)*.5f;
+                    gpu.radius=length((high-low)*.5f);
+                }
+                fresh.push_back(std::move(gpu));
+            }
+            upload.finish();
+
+            std::unordered_map<std::uint32_t,std::size_t> lookup;
+            lookup.reserve(fresh.size());
+            for(std::size_t i=0;i<fresh.size();++i)
+                lookup.emplace(fresh[i].id,i);
+            for(const auto& instance:source->instances)
+            {
+                const auto found=lookup.find(instance.mesh_id);
+                if(found!=lookup.end()&&fresh[found->second].index_count)
+                    append_instance(fresh[found->second],instance);
+            }
+            const auto count=std::max<std::size_t>(1,fresh.size())*
+                std::max<std::size_t>(1,vk::swapchain::get()->images.size());
+            const auto schema=instance_bindings();
+            sets=std::make_unique<gpu::descriptors>();
+            sets->create(std::vector<vk::DescriptorSetLayoutBinding>(
+                schema.begin(),schema.end()),std::uint32_t(count));
+            gpu::upload::batch instances;
+            std::uint32_t descriptor_index=0;
+            for(auto& mesh:fresh)
+            {
+                if(mesh.transforms.empty())continue;
+                refresh_instances(mesh,0,&instances);
+                for(auto& frame:mesh.frames)
+                    frame.set=sets->set(descriptor_index++);
+                bind_instances(mesh);
+            }
+            instances.finish();
         }
         else
         {
@@ -4338,131 +4370,13 @@ namespace clt::scene_renderer
             texture::synchronize(::scene::state{});
         }
 
-        if (source)
-        {
-            meshes.reserve(source->meshes.size());
-
-            gpu::upload::batch transfers;
-            try
-            {
-                for (const auto& mesh : source->meshes)
-                {
-                    gpu_mesh result;
-                    result.id = mesh.id;
-                    result.surface = mesh.surface;
-                    result.skin_id = mesh.skin_id;
-                    result.joint_count = animation::joints(mesh.skin_id);
-                    result.index_count =
-                        static_cast<std::uint32_t>(mesh.indices.size());
-
-                    try
-                    {
-                        const auto vertex_bytes =
-                            mesh.vertices.size() * sizeof(::scene::vertex);
-
-                        const auto index_bytes =
-                            mesh.indices.size() * sizeof(std::uint32_t);
-
-                        result.geometry.upload(transfers,
-                            mesh.vertices.data(),vertex_bytes,
-                            mesh.indices.data(),index_bytes,result.index_count);
-
-                        if (!mesh.vertices.empty())
-                        {
-                            vec3 low = mesh.vertices.front().position;
-                            vec3 high = low;
-                            for (const auto& vertex : mesh.vertices)
-                            {
-                                const auto p = vertex.position;
-                                low = {std::min(low.x, p.x), std::min(low.y, p.y), std::min(low.z, p.z)};
-                                high = {std::max(high.x, p.x), std::max(high.y, p.y), std::max(high.z, p.z)};
-                            }
-                            result.center = (low + high) * 0.5f;
-                            result.radius = length((high - low) * 0.5f);
-                        }
-
-                        meshes.push_back(std::move(result));
-                    }
-                    catch (...)
-                    {
-                        // The geometry owner releases both buffers on unwinding.
-                        destroy_meshes(meshes);
-                        throw;
-                    }
-                }
-                transfers.finish();
-            }
-            catch (...)
-            {
-                destroy_meshes(meshes);
-                throw;
-            }
-        }
-
-        try
-        {
-            if (source)
-            {
-                std::unordered_map<std::uint32_t,std::size_t> mesh_indices;
-                mesh_indices.reserve(meshes.size());
-                for(std::size_t j=0;j<meshes.size();++j)
-                    mesh_indices.emplace(meshes[j].id,j);
-                for(const auto& instance:source->instances)
-                {
-                    const auto found=mesh_indices.find(instance.mesh_id);
-                    if(found==mesh_indices.end())continue;
-                    auto& mesh=meshes[found->second];
-                    if(mesh.index_count)append_instance(mesh,instance);
-                }
-
-                // Allocate each scene descriptor through the reusable GPU
-                // descriptor owner, using a layout compatible with the renderer.
-                const auto count=std::max<std::size_t>(1,meshes.size()) *
-                    std::max<std::size_t>(1,vk::swapchain::get()->images.size());
-                const auto schema=instance_bindings();
-                new_sets=std::make_unique<gpu::descriptors>();
-                new_sets->create(std::vector<vk::DescriptorSetLayoutBinding>(schema.begin(),schema.end()),
-                    static_cast<std::uint32_t>(count));
-                std::uint32_t descriptor_index=0;
-                gpu::upload::batch instances_upload;
-
-                for (auto& mesh : meshes)
-                {
-                    if (mesh.transforms.empty())
-                    {
-                        continue;
-                    }
-
-                    refresh_instances(mesh,0,&instances_upload);
-
-                    for (auto& frame : mesh.frames)
-                    {
-                        frame.set=new_sets->set(descriptor_index++);
-                    }
-                    bind_instances(mesh);
-                }
-                instances_upload.finish();
-            }
-        }
-        catch (...)
-        {
-            destroy_meshes(meshes);
-            new_sets.reset();
-            throw;
-        }
-
-        
         destroy_meshes(data.meshes);
-        data.instance_sets=std::move(new_sets);
-        data.meshes = std::move(meshes);
-        data.snapshot = source;
-        for (auto& mesh : data.local_meshes)
-        {
-            for (auto& frame : mesh.frames)
-            {
-                texture::bind(frame.set, mesh.surface);
-            }
-        }
+        data.instance_sets=std::move(sets);
+        data.meshes=std::move(fresh);
+        data.snapshot=source;
+        for(auto& mesh:data.local_meshes)
+            for(auto& frame:mesh.frames)
+                texture::bind(frame.set,mesh.surface);
     }
 
     void draw(vk::CommandBuffer command, std::uint32_t image,
