@@ -319,22 +319,6 @@ namespace weapon
         }
     }
 
-    // Definitions are stored contiguously; no registry object or virtual interface.
-    using registry=std::vector<definition>;
-
-    inline void add(registry& entries,definition value) {
-        validate(value);
-        if(std::any_of(entries.begin(),entries.end(),
-            [&](const definition& e){return e.id==value.id;}))
-            throw std::invalid_argument("Duplicate weapon ID");
-        entries.push_back(std::move(value));
-    }
-    inline const definition* find(const registry& entries,std::uint32_t id) {
-        const auto it=std::find_if(entries.begin(),entries.end(),
-            [id](const definition& e){return e.id==id;});
-        return it==entries.end()?nullptr:&*it;
-    }
-
     struct state
     {
         std::uint32_t magazine = 0;
@@ -2623,7 +2607,8 @@ namespace srv::application
         std::uint32_t next_event = 0;
         player::collision_world colliders;
         ::weapon::world weapon_world;
-        ::weapon::registry weapons;
+        ::weapon::definition weapon{};
+        bool weapon_registered=false;
         spatial::index collision_index;
         struct batch {
             std::vector<std::uint8_t> bytes;
@@ -2835,8 +2820,7 @@ namespace srv::session
         {
             std::uint32_t id = 0;
             ::weapon::state state;
-            std::optional<net::weapon::snapshot> published;
-        };
+         };
 
         owned_weapon weapon;
         std::uint32_t weapon_sequence = 0;
@@ -3096,7 +3080,11 @@ namespace srv::application
         {
             throw std::runtime_error("Register weapons before init");
         }
-        ::weapon::add(get()->weapons,std::move(definition));
+        if(get()->weapon_registered)
+            throw std::logic_error("Only one weapon belongs to this game");
+        ::weapon::validate(definition);
+        get()->weapon=std::move(definition);
+        get()->weapon_registered=true;
     }
 
     void init()
@@ -3485,7 +3473,8 @@ namespace srv::application
         get()->scene_batches.clear();
         get()->colliders.clear();
         get()->weapon_world = {};
-        get()->weapons = {};
+        get()->weapon={};
+        get()->weapon_registered=false;
         get()->scene = {};
         get()->editor_light_versions.clear();
         get()->editor_light_revision=1;
@@ -3836,7 +3825,9 @@ namespace srv::application
                     client.weapon_sequence=cmd.sequence;
                     client.weapon.state.last_result=::weapon::result::none;
                     if (cmd.weapon_id!=client.weapon.id) continue;
-                    const auto* definition=::weapon::find(get()->weapons,cmd.weapon_id);
+                    const auto* definition=
+                        get()->weapon_registered && get()->weapon.id==cmd.weapon_id
+                            ? &get()->weapon : nullptr;
                     if (!definition) continue;
                     if (cmd.kind==::weapon::action::equip)
                     {
@@ -3877,14 +3868,15 @@ namespace srv::application
             {
                 if (!client.active) continue;
                 auto& owned=client.weapon;
-                if (const auto* definition=::weapon::find(get()->weapons,owned.id))
+                if (const auto* definition=
+                    get()->weapon_registered && get()->weapon.id==owned.id
+                        ? &get()->weapon : nullptr)
                 {
                     ::weapon::advance(owned.state,now,*definition);
                     const auto state=weapon_snapshot(client,owned,now);
                     const auto bytes=net::weapon::encode_snapshot(state);
                     net::secure::send(get()->socket,client.endpoint,
                                      bytes.data(),bytes.size());
-                    owned.published=state;
                 }
                 for (auto& pending : client.shots)
                 {
@@ -3934,13 +3926,11 @@ namespace srv::application
                     client->token = message.token;
                     client->active = true;
                     client->avatar.position = player::parameters().spawn;
-                    if (!get()->weapons.empty())
-                    {
-                        const auto& def=get()->weapons.front();
+                    if(get()->weapon_registered)
                         client->weapon={
-                            def.id,::weapon::make_state(def),std::nullopt
+                            get()->weapon.id,
+                            ::weapon::make_state(get()->weapon)
                         };
-                    }
                 }
 
                 client->last_seen = clock::now();
