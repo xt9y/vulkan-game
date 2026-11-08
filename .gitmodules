@@ -1,0 +1,9 @@
+[submodule "third-party/vulkan-wrapper"]
+	path = third-party/vulkan-wrapper
+	url = https://github.com/xt9y/vulkan-wrapper.git
+[submodule "third-party/vulkan-systems"]
+	path = third-party/vulkan-systems
+	url = https://github.com/xt9y/vulkan-systems.git
+[submodule "third-party/vulkan-headers"]
+	path = third-party/vulkan-headers
+	url = https://github.com/KhronosGroup/Vulkan-Headers.git
