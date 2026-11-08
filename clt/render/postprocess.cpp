@@ -21,6 +21,9 @@ namespace clt::postprocess
     namespace
     {
         std::shared_ptr<const ::scene::state> registered;
+        // Keep the early-out conservative: pc:: computes indirect light
+        // up to 2.6 world units beyond a point light's direct radius.
+        constexpr float bounce_reach=2.6f;
         pc::camera_frame convert_camera(const camera::frame& frame)
         {
             return {frame.eye,frame.pose.yaw,frame.pose.pitch,frame.pose.fov};
@@ -181,28 +184,8 @@ namespace clt::postprocess
                     const vec3 c=positions.at(mesh->indices[i+2]);
                     if(length_squared(cross(b-a,c-a))<1e-12f)continue;
 
-                    // Geometry outside every point light cannot cast its shadows.
-                    const vec3 lo{std::min({a.x,b.x,c.x}),
-                                  std::min({a.y,b.y,c.y}),
-                                  std::min({a.z,b.z,c.z})};
-                    const vec3 hi{std::max({a.x,b.x,c.x}),
-                                  std::max({a.y,b.y,c.y}),
-                                  std::max({a.z,b.z,c.z})};
-                    bool relevant=false;
-                    for(const auto& light:source->lights)
-                    {
-                        const vec3 near{
-                            std::clamp(light.position.x,lo.x,hi.x),
-                            std::clamp(light.position.y,lo.y,hi.y),
-                            std::clamp(light.position.z,lo.z,hi.z)
-                        };
-                        if(length_squared(near-light.position)<=light.radius*light.radius)
-                        {
-                            relevant=true;
-                            break;
-                        }
-                    }
-                    if(!relevant)continue;
+                    // pc:: owns light-specific caster filtering.
+                    // This adapter ONLY provides transformed triangles.
                     prepared->triangles.push_back({a,b,c});
                 }
             }
