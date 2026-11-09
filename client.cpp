@@ -781,6 +781,20 @@ namespace clt::connection {
         data.light_versions.fill(0);
         data.light_pending.fill(std::nullopt);
     }
+    void reset_queues(state& data,bool reset_parameters) {
+        {
+            std::lock_guard lock(data.player_mutex);
+            data.outgoing.clear();
+            data.authority.reset();
+            if(reset_parameters)data.server_parameters.reset();
+        }
+        {
+            std::lock_guard lock(data.editor_mutex);
+            data.editor_outgoing.clear();
+            data.editor_sequence=0;
+        }
+        reset_scene(data);
+    }
     std::shared_ptr<const scene::state> snapshot() {
         auto& data=*get();
         std::lock_guard lock(data.scene_mutex);
@@ -905,18 +919,7 @@ command.index=command.type==net::editor_light::kind::create ? UINT32_MAX:command
     void init() {
         if (get()->initialized || get()->worker.joinable()) 
             throw std::runtime_error("clt::connection already initialized");
-        {
-            std::lock_guard<std::mutex> lock(get()->player_mutex);
-            get()->outgoing.clear();
-            get()->authority.reset();
-            get()->server_parameters.reset();
-        }
-        {
-            std::lock_guard<std::mutex> lock(get()->editor_mutex);
-            get()->editor_outgoing.clear();
-            get()->editor_sequence=0;
-        }
-        reset_scene(*get());
+        reset_queues(*get(),true);
         {
             std::lock_guard<std::mutex> lock(get()->error_mutex);
             get()->worker_error = {};
@@ -932,17 +935,7 @@ command.index=command.type==net::editor_light::kind::create ? UINT32_MAX:command
         get()->stop.store(true, std::memory_order_relaxed);
         if (get()->worker.joinable()) 
             get()->worker.join();
-        {
-            std::lock_guard<std::mutex> lock(get()->player_mutex);
-            get()->outgoing.clear();
-            get()->authority.reset();
-        }
-        {
-            std::lock_guard<std::mutex> lock(get()->editor_mutex);
-            get()->editor_outgoing.clear();
-            get()->editor_sequence=0;
-        }
-        reset_scene(*get());
+        reset_queues(*get(),false);
         net::secure::destroy(get()->socket);
         {
             std::lock_guard<std::mutex> lock(get()->error_mutex);
