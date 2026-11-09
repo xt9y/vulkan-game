@@ -13,6 +13,9 @@
 #include <optics/optics.hpp>
 #include <pmap/pmap.hpp>
 #include <optional>
+#include <unordered_set>
+#include <climits>
+#include <stb_image.h>
 #include <vk/vk.hpp>
 
 namespace clt::postprocess
@@ -277,13 +280,15 @@ std::shared_ptr<pc::world> prepare_world(const ::scene::state *source)
 // Convert the authoritative scene into GPU photon-tracing surfaces.
 // The transport-only mapper uses the full software BVH but does not allocate
 // a per-face irradiance atlas or run a fullscreen ray tracer.
-std::optional<pm::scene> photon_scene(const ::scene::state& world)
+std::optional<pm::scene> photon_scene(const ::scene::state& world,
+                                       std::vector<optics::face_uv>& faces)
 {
     using namespace vk::util::math;
     const auto light=std::find_if(world.lights.begin(),world.lights.end(),
         [](const auto& l){return l.enabled && l.strength>0.f;});
     if(light==world.lights.end())return std::nullopt;
     pm::scene result{};
+    faces.clear();
     result.omnidirectional_emitter=true;
     for(const auto& inst:world.instances) {
         const auto it=std::find_if(world.meshes.begin(),world.meshes.end(),
@@ -323,6 +328,12 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world)
                 surface.roughness=inst.optical_mattness;
             }
             result.surfaces.push_back(surface);
+            optics::face_uv mapping{};
+            mapping.a={mesh.vertices[ia].u,mesh.vertices[ia].v};
+            mapping.b={mesh.vertices[ib].u,mesh.vertices[ib].v};
+            mapping.c={mesh.vertices[ic].u,mesh.vertices[ic].v};
+            mapping.texture_id=mesh.surface.base_color_texture;
+            faces.push_back(mapping);
         }
     }
     pm::surface emitter{};
@@ -334,7 +345,46 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world)
     emitter.albedo={0.f,0.f,0.f};
     result.emitter=std::uint32_t(result.surfaces.size());
     result.surfaces.push_back(emitter);
+    faces.emplace_back(); // The point-light emitter has no texture.
     return result;
+}
+
+std::vector<optics::texture_rgba> optical_textures(
+    const ::scene::state& world,const std::vector<optics::face_uv>& faces)
+{
+    std::unordered_set<std::uint32_t> used;
+    for(const auto& f:faces)
+        if(f.texture_id)used.insert(f.texture_id);
+    std::vector<optics::texture_rgba> atlas;
+    atlas.reserve(used.size());
+    for(const auto& image:world.textures) {
+        if(!used.erase(image.id))continue;
+        const std::size_t bytes=std::size_t(image.width)*image.height*4u;
+        if(!image.width || !image.height || bytes>256u*1024u*1024u)
+            throw std::runtime_error("optics: invalid source texture dimensions");
+        optics::texture_rgba entry{};
+        entry.id=image.id;entry.width=image.width;entry.height=image.height;
+        if(!image.pixels.empty()) {
+            if(image.pixels.size()!=bytes)
+                throw std::runtime_error("optics: invalid source texture bytes");
+            entry.pixels=image.pixels;
+        } else {
+            if(image.encoded.size()>INT_MAX || image.encoded.empty())
+                throw std::runtime_error("optics: missing encoded texture");
+            int w=0,h=0,channels=0;
+            std::unique_ptr<stbi_uc,decltype(&stbi_image_free)> decoded(
+                stbi_load_from_memory(image.encoded.data(),
+                                      int(image.encoded.size()),
+                                      &w,&h,&channels,4),stbi_image_free);
+            if(!decoded || w!=int(image.width) || h!=int(image.height))
+                throw std::runtime_error("optics: failed decoding reflected texture");
+            entry.pixels.assign(decoded.get(),decoded.get()+bytes);
+        }
+        atlas.push_back(std::move(entry));
+    }
+    if(!used.empty())
+        throw std::runtime_error("optics: BVH references missing streamed textures");
+    return atlas;
 }
 } // namespace
 void create()
@@ -389,7 +439,8 @@ void synchronize_scene()
     photon_transport.reset();
     if(source && std::any_of(source->instances.begin(),source->instances.end(),
         [](const auto& inst){return inst.pattern==2u || inst.pattern==3u;})) {
-        auto scene=photon_scene(*source);
+        std::vector<optics::face_uv> face_uvs;
+        auto scene=photon_scene(*source,face_uvs);
         if(scene) {
             pm::configuration config{};
             config.transport_only=true;
@@ -401,10 +452,14 @@ void synchronize_scene()
             mapper->create(*scene,{1,1},config);
             const auto g=mapper->geometry_buffers();
             if(material_compositor)
+            {
                 material_compositor->set_scene({
                     g.faces,g.nodes,g.triangles,g.scene_info,
                     g.photons,g.offsets
                 },lights);
+                material_compositor->set_textures(
+                    face_uvs,optical_textures(*source,face_uvs));
+            }
             photon_transport=std::move(mapper);
             std::clog << "optics: initialized photon transport with "
                       << scene->surfaces.size() << " surfaces and "
