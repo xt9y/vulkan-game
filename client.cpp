@@ -2680,14 +2680,9 @@ namespace {
     vk::Sampler sampler{};
     const ::scene::state* pinned = nullptr;
     std::unordered_set<std::uint32_t> live;
-    std::uint32_t checksum(const std::vector<std::uint8_t>& bytes) {
-        std::uint32_t hash=2166136261u;
-        for(auto b:bytes)hash=(hash^b)*16777619u;
-        return hash;
-    }
     void upload(const ::scene::texture& texture,gpu::upload::batch& batch) {
         const auto& bytes=texture.encoded.empty()?texture.pixels:texture.encoded;
-        const auto hash=checksum(bytes);
+        const auto hash=net::scene_stream::checksum(bytes);
         if(cache.contains(texture.id,hash))return;
         std::unique_ptr<stbi_uc,decltype(&stbi_image_free)> decoded(nullptr,stbi_image_free);
         const stbi_uc* pixels=texture.pixels.data();
