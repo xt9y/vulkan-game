@@ -19,7 +19,6 @@ namespace clt::input {
 #include <editor/editor.hpp>
 namespace clt::application {
     struct state {
-        game::options::state options;
         bool initialized = false;
     };
     state* get();
@@ -308,10 +307,6 @@ int main(int argc, char** argv) {
         settings.graphics.title = "vulkan-game";
         settings.graphics.vertex_shader = "build/shaders/mesh.vert.spv";
         settings.graphics.fragment_shader = "build/shaders/mesh.frag.spv";
-        settings.graphics.surface = game::options::surface_format::bgra8_srgb;
-        settings.graphics.depth = game::options::depth_precision::d32;
-        settings.graphics.present = game::options::presentation::fifo;
-        settings.graphics.gbuffer = game::options::gbuffer_precision::rgba8;
         settings.graphics.culling_shader = "build/shaders/cull.comp.spv";
         settings.graphics.lighting_shader = "build/shaders/pcloud_light.comp.spv";
         settings.graphics.tonemap_shader = "build/shaders/pcloud_tone.comp.spv";
@@ -589,9 +584,8 @@ namespace clt::application {
     void init() {
         if (get()->initialized) 
             throw std::runtime_error("clt::application already initialized");
-        get()->options = *game::options::get();
-        connection::get()->host = get()->options.host;
-        connection::get()->port = get()->options.port;
+        connection::get()->host = game::options::get()->host;
+        connection::get()->port = game::options::get()->port;
         connection::init();
         get()->initialized = true;
     }
@@ -603,12 +597,12 @@ namespace clt::application {
         auto running = [&] {
             if (game::application::get()->stop.load(std::memory_order_relaxed)) 
                 return false;
-            if (get()->options.duration == 0) 
+            if (game::options::get()->duration == 0) 
                 return true;
             const auto elapsed = std::chrono::duration<double>(clock::now() - started);
-            return elapsed.count() < get()->options.duration;
+            return elapsed.count() < game::options::get()->duration;
         };
-        if (get()->options.headless) {
+        if (game::options::get()->headless) {
             while (running()) {
                 connection::check_error();
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -623,8 +617,8 @@ namespace clt::application {
         input::init();
         camera::init();
         prediction::init();
-        pc::set_exposure(get()->options.graphics.exposure);
-renderer::init(get()->options.graphics.vertex_shader.c_str(), get()->options.graphics.fragment_shader.c_str());
+        pc::set_exposure(game::options::get()->graphics.exposure);
+renderer::init(game::options::get()->graphics.vertex_shader.c_str(), game::options::get()->graphics.fragment_shader.c_str());
         std::atomic<bool> render_stop{false};
         std::exception_ptr render_error;
         std::thread render_thread([&] {
@@ -1843,9 +1837,7 @@ get()->timestamps_supported= vk::physical_device::get()->handle
         const auto caps = vk::surface::capabilities();
         if (!(caps.supportedUsageFlags & vk::ImageUsageFlagBits::eColorAttachment)) 
             throw std::runtime_error("Surface does not support color attachments");
-        const auto choice = game::options::get()->graphics.surface;
-const auto requested_format = choice == game::options::surface_format::bgra8_srgb
-                ? vk::Format::eB8G8R8A8Srgb : vk::Format::eR8G8B8A8Srgb;
+        constexpr auto requested_format=vk::Format::eB8G8R8A8Srgb;
         const auto formats = vk::surface::formats();
 auto selected = std::find_if(formats.begin(), formats.end(), [&](const vk::SurfaceFormatKHR& value) {
 return value.format == requested_format && value.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;
@@ -1870,15 +1862,7 @@ return (value.format == vk::Format::eB8G8R8A8Srgb || value.format == vk::Format:
         info.imageSharingMode = vk::SharingMode::eExclusive;
         info.preTransform = caps.currentTransform;
         info.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
-        const auto preferred = game::options::get()->graphics.present;
-        info.presentMode = preferred == game::options::presentation::fifo
-            ? vk::PresentModeKHR::eFifo
-            : preferred == game::options::presentation::mailbox
-                ? vk::PresentModeKHR::eMailbox
-                : vk::PresentModeKHR::eImmediate;
-        const auto modes = vk::surface::present_modes();
-        if (std::find(modes.begin(), modes.end(), info.presentMode) == modes.end())
-            throw std::runtime_error("Configured presentation mode unsupported");
+        info.presentMode=vk::PresentModeKHR::eFifo;
         info.clipped = true;
         vk::swapchain::init(info);
         scene_renderer::create_frame_resources();
@@ -2198,16 +2182,12 @@ blend.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBi
                 {vk::ShaderStageFlagBits::eFragment, data.shaders[1]}
             });
         }
-        std::array<vk::Format, 3> color_formats() {
-            const auto precision = game::options::get()->graphics.gbuffer;
-            const auto format = precision == game::options::gbuffer_precision::rgba16f
-                ? vk::Format::eR16G16B16A16Sfloat : vk::Format::eR8G8B8A8Unorm;
-            return {format, format, format};
+        std::array<vk::Format,3> color_formats() {
+            constexpr auto format=vk::Format::eR8G8B8A8Unorm;
+            return {format,format,format};
         }
         vk::Format depth_format() {
-            const auto precision = game::options::get()->graphics.depth;
-            const auto format = precision == game::options::depth_precision::d32
-                ? vk::Format::eD32Sfloat : vk::Format::eD16Unorm;
+            constexpr auto format=vk::Format::eD32Sfloat;
             const auto properties = vk::physical_device::get()->handle
                 .getFormatProperties(format);
 const auto required = vk::FormatFeatureFlagBits::eDepthStencilAttachment | vk::FormatFeatureFlagBits::eSampledImage;

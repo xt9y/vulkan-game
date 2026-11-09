@@ -1536,17 +1536,9 @@ if(p.velocity.y<=0 && previous.y>=b.max.y-.0001f && p.position.y<b.max.y) {
 } // namespace player
 namespace game::options {
     enum class mode { server_only, client_only };
-    enum class gbuffer_precision { unspecified, rgba8, rgba16f };
-    enum class surface_format { unspecified, bgra8_srgb, rgba8_srgb };
-    enum class depth_precision { unspecified, d32, d16 };
-    enum class presentation { unspecified, fifo, mailbox, immediate };
     struct client_graphics {
         int width, height;
         std::string title, vertex_shader, fragment_shader;
-        gbuffer_precision gbuffer;
-        surface_format surface;
-        depth_precision depth;
-        presentation present;
         std::string culling_shader, lighting_shader, tonemap_shader;
         std::string fullscreen_shader, presentation_shader;
         float exposure;
@@ -1611,8 +1603,9 @@ if(!initial.port|| (initial.mode==mode::server_only && initial.bind_host.empty()
             throw std::invalid_argument("A server bind address and UDP port are required");
         if(initial.mode==mode::client_only) {
             const auto& g=initial.graphics;
-if(initial.host.empty()||g.width<=0||g.height<=0||g.title.empty()|| g.vertex_shader.empty()||g.fragment_shader.empty()|| g.gbuffer==gbuffer_precision::unspecified|| g.surface==surface_format::unspecified||
-g.depth==depth_precision::unspecified|| g.present==presentation::unspecified|| g.culling_shader.empty()||g.lighting_shader.empty()|| g.tonemap_shader.empty()||g.fullscreen_shader.empty()||
+if(initial.host.empty()||g.width<=0||g.height<=0||g.title.empty()||
+    g.vertex_shader.empty()||g.fragment_shader.empty()||
+    g.culling_shader.empty()||g.lighting_shader.empty()||g.tonemap_shader.empty()||g.fullscreen_shader.empty()||
                g.presentation_shader.empty()||g.exposure<0)
                 throw std::invalid_argument("Client graphics configuration is incomplete");
         }
@@ -1734,7 +1727,6 @@ namespace srv::application {
         std::uint32_t animation;
     };
     struct state {
-        game::options::state options;
         net::secure::resource socket;
         std::unique_ptr<net::session> scene_transport;
         scene::state scene;
@@ -1991,8 +1983,7 @@ void load_model(std::filesystem::path path, ::scene::transform pose, std::uint32
             throw std::runtime_error("srv::application already initialized");
         if (!get()->scene_configured)
             throw std::runtime_error("The game must provide a scene with set_scene()");
-        get()->options = *game::options::get();
-get()->socket = net::secure::create( net::secure::role::server, game::secure_config::load(net::secure::role::server), get()->options.port,get()->options.bind_host);
+get()->socket = net::secure::create( net::secure::role::server, game::secure_config::load(net::secure::role::server), game::options::get()->port,game::options::get()->bind_host);
         net::session::settings transport_settings;
         transport_settings.channel.max_message=net::scene_stream::max_scene_bytes+20;
         transport_settings.channel.max_queued=2*(net::scene_stream::max_scene_bytes+20);
@@ -2115,7 +2106,7 @@ data.colliders.insert( data.colliders.end(), added_colliders.begin(), added_coll
         const auto interval = std::chrono::nanoseconds(1'000'000'000 / net::limits::tick_hz);
         while (!game::application::get()->stop.load(std::memory_order_relaxed)) {
             const auto now = clock::now();
-if (get()->options.duration > 0 && std::chrono::duration<double>(now - started).count() >= get()->options.duration) 
+if (game::options::get()->duration > 0 && std::chrono::duration<double>(now - started).count() >= game::options::get()->duration) 
                 break;
             ++get()->tick;
             session::expire(now);
