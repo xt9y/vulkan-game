@@ -19,12 +19,6 @@ namespace net::movement {
         ::player::state player;
     };
 
-    inline input_packet encode(std::uint32_t,const ::player::input&);
-    inline std::optional<command> decode_input(const std::uint8_t*,std::size_t);
-    inline parameters_packet encode_parameters(std::uint32_t,const ::player::parameters_t&);
-    inline std::optional<player_parameters> decode_parameters(const std::uint8_t*,std::size_t);
-    inline state_packet encode(const snapshot&);
-    inline std::optional<snapshot> decode_snapshot(const std::uint8_t*,std::size_t);
 inline input_packet encode(std::uint32_t token,const ::player::input& in) {
         input_packet p{'V','M','O','V',1,1,0,0};
         detail::write_fields(p.data()+8,token,in.sequence,in.buttons,in.yaw);

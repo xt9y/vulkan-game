@@ -17,9 +17,6 @@ hello = 1, welcome, ping, state, goodbye, scene_request
     };
     inline constexpr std::size_t packet_size = 20;
     using packet = std::array<std::uint8_t, packet_size>;
-    packet encode(const resource& message);
-    std::optional<resource> decode(const std::uint8_t* data, std::size_t size);
-    bool newer(std::uint32_t sequence, std::uint32_t previous);
 packet encode(const resource& message) {
         packet p{'V','G','A','M',1,std::uint8_t(message.type),0,0};
 net::movement::detail::write_fields(p.data()+8, message.sequence,message.token,message.value);

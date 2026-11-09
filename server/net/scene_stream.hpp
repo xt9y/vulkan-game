@@ -20,11 +20,6 @@ struct batch_payload {
     bool final=false;
     std::vector<std::uint8_t> scene;
 };
-std::vector<std::uint8_t> serialize(const ::scene::state& scene);
-bool deserialize(const std::vector<std::uint8_t>& bytes,::scene::state& scene);
-std::uint32_t checksum(const std::vector<std::uint8_t>& bytes);
-std::vector<std::uint8_t> encode_batch(const std::vector<std::uint8_t>& bytes, std::uint32_t token,std::uint32_t batch,bool final);
-bool decode_batch(const std::vector<std::uint8_t>& bytes,batch_payload& result);
 namespace {
     using bytes=std::vector<std::uint8_t>;
     using vec3=vk::util::math::vec3;

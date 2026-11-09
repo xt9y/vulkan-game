@@ -27,9 +27,6 @@ namespace net::editor_light {
 return std::array{&light.position.x,&light.position.y,&light.position.z, &light.color.x,&light.color.y,&light.color.z,&light.radius,&light.strength};
     }
 
-    inline bool valid(const ::scene::point_light&);
-    inline packet encode(const resource&);
-    inline std::optional<resource> decode(const std::uint8_t*,std::size_t);
 inline bool valid(const ::scene::point_light& l) {
         const auto in=[](float value,float maximum) {
             return std::isfinite(value)&&value>=0&&value<=maximum;

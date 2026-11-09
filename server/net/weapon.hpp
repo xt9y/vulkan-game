@@ -33,12 +33,6 @@ using action = ::weapon::action;
     using command_packet = std::array<std::uint8_t, 32>;
     using snapshot_packet = std::array<std::uint8_t, 56>;
     using shot_packet = std::array<std::uint8_t, 92>;
-    command_packet encode_command(const command& value);
-    std::optional<command> decode_command(const std::uint8_t* bytes, std::size_t size);
-    snapshot_packet encode_snapshot(const snapshot& value);
-    std::optional<snapshot> decode_snapshot(const std::uint8_t* bytes, std::size_t size);
-    shot_packet encode_shot(const shot& value);
-    std::optional<shot> decode_shot(const std::uint8_t* bytes, std::size_t size);
 namespace {
     using namespace net::movement::detail;
     bool header(const std::uint8_t* p,std::size_t n,std::size_t expected,std::uint8_t type) {

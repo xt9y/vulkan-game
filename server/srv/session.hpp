@@ -39,10 +39,6 @@ struct resource {
     struct state {
         std::vector<resource> clients;
     };
-    state* get();
-    void init();
-    void expire(std::chrono::steady_clock::time_point now);
-    void shutdown();
 state* get() {
         static state data;
         return &data;
