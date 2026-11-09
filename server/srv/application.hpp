@@ -1,4 +1,5 @@
 #pragma once
+#include <iterator>
 #include "session.hpp"
 #include "../net/movement.hpp"
 #include "../net/editor_light.hpp"
@@ -215,24 +216,22 @@ combined.skins.insert(combined.skins.end(), std::make_move_iterator(imported.ski
         if (data.scene_batches.size() >= 65535) 
             throw std::runtime_error("Too many scene batches");
         auto bytes = net::scene_stream::serialize(patch);
-        for (auto& skin : patch.skins)
-            data.scene.skins.push_back(std::move(skin));
-        for (auto& texture : patch.textures) 
-            data.scene.textures.push_back(std::move(texture));
-        for (auto& mesh : patch.meshes) 
-            data.scene.meshes.push_back(std::move(mesh));
-        ::weapon::append(data.weapon_world,data.scene.meshes, patch.instances);
-        auto added_colliders = player::build_colliders(data.scene.meshes, patch.instances);
-        for (auto& instance : patch.instances) 
-            data.scene.instances.push_back(std::move(instance));
-        for (auto& box : patch.collision_boxes) 
-            data.scene.collision_boxes.push_back(std::move(box));
-        for(auto& light:patch.lights) {
-            data.scene.lights.push_back(std::move(light));
-            data.editor_light_versions.push_back(data.editor_light_revision);
-        }
-data.colliders.insert( data.colliders.end(), added_colliders.begin(), added_colliders.end() );
+        const auto append=[](auto& dst,auto& src) {
+            dst.insert(dst.end(),std::make_move_iterator(src.begin()),
+                std::make_move_iterator(src.end()));
+        };
+        append(data.scene.skins,patch.skins);
+        append(data.scene.textures,patch.textures);
+        append(data.scene.meshes,patch.meshes);
+        ::weapon::append(data.weapon_world,data.scene.meshes,patch.instances);
+        auto added_colliders=player::build_colliders(data.scene.meshes,patch.instances);
+        append(data.scene.instances,patch.instances);
+        append(data.scene.collision_boxes,patch.collision_boxes);
+        data.editor_light_versions.insert(data.editor_light_versions.end(),
+            patch.lights.size(),data.editor_light_revision);
+        append(data.scene.lights,patch.lights);
         data.collision_index.append(player::collision_bounds(added_colliders));
+        append(data.colliders,added_colliders);
         data.scene_batches.push_back({std::move(bytes),final});
     }
     int run() {
