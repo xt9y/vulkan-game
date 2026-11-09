@@ -2,146 +2,23 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-namespace net::message {
-    enum class type : std::uint8_t {
-hello = 1, welcome, ping, state, goodbye, scene_request
-    };
-    struct resource {
-        message::type type;
-        std::uint32_t sequence = 0;
-        std::uint32_t token = 0;
-        std::uint32_t value = 0;
-    };
-    inline constexpr std::size_t packet_size = 20;
-    using packet = std::array<std::uint8_t, packet_size>;
-    packet encode(const resource& message);
-    std::optional<resource> decode(const std::uint8_t* data, std::size_t size);
-    bool newer(std::uint32_t sequence, std::uint32_t previous);
-} // namespace net::message
+#include "message.hpp"
 #include "util/math/vector.hpp"
 #include <vector>
 #include <span>
-namespace scene {
-    struct texture {
-        std::uint32_t id = 0;
-        std::uint32_t width = 0;
-        std::uint32_t height = 0;
-        std::vector<std::uint8_t> pixels;
-        std::vector<std::uint8_t> encoded; // Original PNG/JPEG bytes for compact network transfer.
-    };
-    struct material {
-        std::array<float, 4> base_color{1, 1, 1, 1};
-        std::array<float, 3> emissive{0, 0, 0};
-        float metallic = 0;
-        float roughness = 1;
-        float occlusion = 1;
-        float alpha_cutoff = 0.5f;
-        std::uint32_t base_color_texture = 0;
-        std::uint32_t metallic_roughness_texture = 0;
-        std::uint32_t normal_texture = 0;
-        std::uint32_t occlusion_texture = 0;
-        std::uint32_t emissive_texture = 0;
-        std::uint32_t alpha_mode = 0; // opaque, mask, blend
-        bool double_sided = false;
-        std::uint32_t procedural_pattern = 0;
-    };
-} // namespace scene
-namespace scene {
-    struct vertex {
-        vk::util::math::vec3 position;
-        vk::util::math::vec3 normal;
-        float u = 0;
-        float v = 0;
-        std::array<std::uint32_t, 4> joints{};
-        std::array<float, 4> weights{};
-    };
-    struct mesh {
-        std::uint32_t id = 0;
-        std::uint32_t skin_id = 0;
-        std::vector<vertex> vertices;
-        std::vector<std::uint32_t> indices;
-        material surface;
-    };
-}; // namespace scene
+#include "scene.hpp"
+
 #include <string>
 #include <limits>
 #include "util/math/quaternion.hpp"
-namespace scene {
-    struct transform {
-        vk::util::math::vec3 position;
-        vk::util::math::vec3 scale{1, 1, 1};
-        vk::util::math::quat rotation;
-    };
-    struct clip {
-        std::string name;
-        std::vector<std::uint8_t> bytes;
-    };
-    struct skin {
-        std::uint32_t id = 0;
-        std::vector<std::uint8_t> skeleton;
-        std::vector<clip> clips;
-        std::vector<std::array<float, 16>> inverse_bind;
-    };
-    struct instance {
-        std::uint32_t id = 0;
-        std::uint32_t mesh_id = 0;
-        std::uint32_t animation = 0;
-        std::uint32_t animation_tick = 0;
-        std::uint32_t overlay_animation = UINT32_MAX;
-        std::uint32_t overlay_root = UINT32_MAX;
-        float overlay_weight = 0.0f;
-        transform pose;
-    };
-    struct collision_box {
-        vk::util::math::vec3 minimum{};
-        vk::util::math::vec3 maximum{};
-    };
-    struct point_light {
-        vk::util::math::vec3 position{};
-        float radius=1.0f;
-        vk::util::math::vec3 color{1.0f,1.0f,1.0f};
-        float strength=1.0f;
-        bool enabled=true;
-    };
-    struct state {
-        std::vector<mesh> meshes;
-        std::vector<texture> textures;
-        std::vector<skin> skins;
-        std::vector<instance> instances;
-        std::vector<collision_box> collision_boxes;
-        std::vector<point_light> lights;
-    };
-}; // namespace scene
+
 #include <spatial/index.hpp>
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <utility>
+#include "weapon.hpp"
 namespace weapon {
-    using vk::util::math::vec3;
-    enum class action : std::uint32_t {
-fire = 1, reload = 2, equip = 3
-    };
-    enum class reload_phase : std::uint32_t {
-none, tactical, empty
-    };
-    enum class result : std::uint32_t {
-none, fired, cooldown, empty, reloading, reload_started, reload_unnecessary, equipped
-    };
-    struct timing {
-        float reload_duration = 0;
-        float empty_reload_duration = 0;
-        float refill_time = 0;
-        float empty_refill_time = 0;
-    };
-    struct definition {
-        std::uint32_t id = 0;
-        std::uint32_t magazine_capacity = 0;
-        std::uint32_t initial_reserve = 0;
-        double fire_interval = 0;
-        float range = 0;
-        timing reload;
-    };
     inline void validate(const definition& value) {
         const auto& t = value.reload;
 if (!value.id || !value.magazine_capacity || !std::isfinite(value.fire_interval) || value.fire_interval <= 0 || !std::isfinite(value.range) || value.range <= 0 ||
@@ -150,18 +27,6 @@ t.reload_duration <= 0 || t.empty_reload_duration <= 0 || t.refill_time < 0 || t
             throw std::invalid_argument("Invalid weapon definition");
         }
     }
-    struct state {
-        std::uint32_t magazine = 0;
-        std::uint32_t reserve = 0;
-        std::uint32_t sequence = 0;
-        reload_phase reload = reload_phase::none;
-        result last_result = result::none;
-        double next_fire = 0;
-        double reload_started = 0;
-        double reload_finishes = 0;
-        double refill_at = 0;
-        bool refilled = false;
-    };
     inline state make_state(const definition& settings) {
         state value;
         value.magazine = settings.magazine_capacity;
@@ -214,19 +79,6 @@ value.reload_finishes = now + (empty ? reload.empty_reload_duration : reload.rel
     inline vec3 direction(float yaw, float pitch) {
         return {std::sin(yaw) * std::cos(pitch), std::sin(pitch), -std::cos(yaw) * std::cos(pitch)};
     }
-    struct triangle {
-        vec3 a, b, c;
-        std::uint32_t instance = 0, index = 0;
-    };
-    struct hit {
-        bool impacted = false;
-        vec3 position{}, normal{};
-        std::uint32_t instance = 0, triangle = 0;
-    };
-    struct world {
-        std::vector<triangle> triangles;
-        spatial::index index;
-    };
 inline void append(world& data,const std::vector<scene::mesh>& meshes, std::span<const scene::instance> instances) {
         using namespace vk::util::math;
         std::vector<spatial::bounds> boxes;
@@ -279,48 +131,10 @@ std::max({t.a.x,t.b.x,t.c.x}), std::max({t.a.y,t.b.y,t.c.y}), std::max({t.a.z,t.
         });
         return nearest;
     }
-} // namespace weapon
+}
 #include <filesystem>
 #include <vk/vk.hpp>
-namespace weapon {
-    enum class motion {
-idle,walk,draw,reload,reload_empty, ads_idle,ads_in,ads_out,ads_walk, fire1,fire2,fire3,ads_fire1,ads_fire2,ads_fire3,count
-    };
-    struct clip {
-        std::string name;
-        float speed=1.f;
-        bool loop=false;
-    };
-    struct bindings {
-        int trigger_button=0,aim_button=1;
-        int reload_key='R',inspect_key='M';
-        bool automatic=false;
-        float sensitivity=.0025f;
-        float ads_sensitivity_multiplier=.60f;
-    };
-    struct gun {
-        definition rules;
-        bindings input{};
-        std::filesystem::path model,casing_model;
-        std::array<clip,std::size_t(motion::count)> animations{};
-        std::string camera_joint,muzzle_joint,ejection_joint,slide_joint;
-        vk::util::math::vec3 muzzle_offset{0.f,0.f,-.4f};
-        vk::util::math::vec3 ejection_offset{.08f,-.04f,-.12f};
-        vk::util::math::mat4 correction=vk::util::math::mat4::identity();
-        float fov=1.2f,ads_fov=1.2f,near_plane=.01f,far_plane=20.f;
-        float ads_zoom=0.f,ads_speed=14.f;
-        float slide_offset=0.f;
-        float recoil=0.f,hip_kick=0.f,ads_kick=0.f;
-        float recoil_decay=15.f;
-        vk::util::math::vec3 casing_impulse{1.f,1.f,0.f};
-        float casing_lifetime=9.f,casing_spin=14.f;
-        std::uint32_t max_casings=48;
-        float flash_duration=.035f;
-        vk::util::math::vec3 flash_scale{.035f,.045f,.035f};
-        float impact_radius=.009f,impact_offset=.0008f,impact_lifetime=120.f;
-        std::uint32_t max_impacts=192;
-    };
-}
+
 namespace game_weapons {
     ::weapon::gun make();
 }
@@ -424,23 +238,8 @@ glock.rules.reload=weapon::load_timing( "assets/glock/metadata.json", "Glock_Rel
     }
 }
 #include <fastgltf/types.hpp>
-namespace srv::assets {
-std::vector<::scene::texture> images(const fastgltf::Asset& asset, std::uint32_t first_texture);
-} // namespace srv::assets
-namespace net::scene_stream {
-inline constexpr std::size_t max_scene_bytes=75*1024*1024;
-struct batch_payload {
-    std::uint32_t token=0;
-    std::uint32_t batch=0;
-    bool final=false;
-    std::vector<std::uint8_t> scene;
-};
-std::vector<std::uint8_t> serialize(const ::scene::state& scene);
-bool deserialize(const std::vector<std::uint8_t>& bytes,::scene::state& scene);
-std::uint32_t checksum(const std::vector<std::uint8_t>& bytes);
-std::vector<std::uint8_t> encode_batch(const std::vector<std::uint8_t>& bytes, std::uint32_t token,std::uint32_t batch,bool final);
-bool decode_batch(const std::vector<std::uint8_t>& bytes,batch_payload& result);
-}
+#include "assets.hpp"
+#include "scene_stream.hpp"
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_STDIO
 #include <stb_image.h>
@@ -487,22 +286,11 @@ texture.encoded.assign(reinterpret_cast<const std::uint8_t*>(source.data()), rei
         return result;
     }
 } // namespace srv::assets
-namespace srv::assets {
-::scene::state load(const std::filesystem::path& path, std::uint32_t first_mesh, std::uint32_t first_instance, std::uint32_t first_texture, std::uint32_t first_skin);
-} // namespace srv::assets
+
 #include <ozz/animation/runtime/animation.h>
 #include <ozz/animation/runtime/skeleton.h>
 #include <ozz/base/memory/unique_ptr.h>
-namespace srv::assets {
-    struct rig {
-        ozz::unique_ptr<ozz::animation::Skeleton> skeleton;
-        std::vector<ozz::unique_ptr<ozz::animation::Animation>> clips;
-        std::vector<std::string> names;
-        std::vector<std::uint32_t> skin_joints; // glTF skin order -> Ozz order
-    };
-    rig import_rig(const fastgltf::Asset& asset, std::size_t skin_index);
-::scene::skin serialize_rig( const fastgltf::Asset& asset, std::size_t skin_index, std::uint32_t id, const rig& imported );
-} // namespace srv::assets
+
 #include <fastgltf/core.hpp>
 namespace srv::assets {
     namespace {
@@ -864,21 +652,7 @@ const auto matrix = fastgltf::getAccessorElement<fastgltf::math::fmat4x4>( asset
         return result;
     }
 } // namespace srv::assets
-namespace net::animation {
-    struct resource {
-        std::uint32_t token = 0;
-        std::uint32_t server_tick = 0;
-        std::uint32_t instance_id = 0;
-        std::uint32_t clip = 0;
-        std::uint32_t start_tick = 0;
-        std::uint32_t overlay = UINT32_MAX;
-        std::uint32_t mask_root = UINT32_MAX;
-        float blend = 0;
-    };
-    using packet = std::array<std::uint8_t, 40>;
-    packet encode(const resource& state);
-    std::optional<resource> decode(const std::uint8_t* data, std::size_t bytes);
-} // namespace net::animation
+#include "animation.hpp"
 #include <cstring>
 namespace net::movement::detail {
         inline void put(std::uint8_t* p,std::uint32_t n) {
@@ -1201,81 +975,10 @@ result={token,batch,bytes[5]!=0, std::vector<std::uint8_t>(bytes.begin()+20,byte
     return true;
 }
 } // namespace net::scene_stream
-namespace net::weapon {
-    using action = ::weapon::action;
-    using result = ::weapon::result;
-    using reload_phase = ::weapon::reload_phase;
-    struct command {
-        std::uint32_t token = 0, sequence = 0;
-        action kind = action::fire;
-        float yaw = 0, pitch = 0;
-        std::uint32_t weapon_id = 0;
-    };
-    struct snapshot {
-        std::uint32_t token = 0, sequence = 0, tick = 0;
-        std::uint32_t magazine = 0, reserve = 0;
-        reload_phase reload = reload_phase::none;
-        result outcome = result::none;
-        float reload_elapsed = 0, reload_duration = 0, refill_time = 0;
-        std::uint32_t weapon_id = 0;
-        std::uint32_t active_weapon_id = 0;
-    };
-    struct shot {
-        snapshot state;
-        ::weapon::hit impact;
-    };
-    using command_packet = std::array<std::uint8_t, 32>;
-    using snapshot_packet = std::array<std::uint8_t, 56>;
-    using shot_packet = std::array<std::uint8_t, 92>;
-    command_packet encode_command(const command& value);
-    std::optional<command> decode_command(const std::uint8_t* bytes, std::size_t size);
-    snapshot_packet encode_snapshot(const snapshot& value);
-    std::optional<snapshot> decode_snapshot(const std::uint8_t* bytes, std::size_t size);
-    shot_packet encode_shot(const shot& value);
-    std::optional<shot> decode_shot(const std::uint8_t* bytes, std::size_t size);
-} // namespace net::weapon
-namespace player {
-    enum button : std::uint32_t {
-forward = 1u << 0, backward = 1u << 1, left = 1u << 2, right = 1u << 3, sprint = 1u << 4
-    };
-    inline constexpr std::uint32_t valid_buttons = 31;
-    struct input {
-        std::uint32_t sequence = 0;
-        std::uint32_t buttons = 0;
-        float yaw = 0;
-    };
-    struct parameters_t {
-        vk::util::math::vec3 spawn;
-        float walk_speed, sprint_speed, gravity, radius, height;
-    };
-    void configure(parameters_t values);
-    const parameters_t& parameters();
-    struct state {
-        vk::util::math::vec3 position{};
-        vk::util::math::vec3 velocity{};
-        bool grounded = false;
-    };
-    struct box {
-        vk::util::math::vec3 min;
-        vk::util::math::vec3 max;
-    };
-    using collision_world = std::vector<box>;
-    spatial::index build_index(const collision_world& world);
-    collision_world build_colliders(const ::scene::state& scene);
-collision_world build_colliders( const std::vector<::scene::mesh>& meshes, std::span<const ::scene::instance> instances );
-    void step(state& player, const input& input, const collision_world& world, const spatial::index* broadphase = nullptr);
-} // namespace player
-namespace net::movement {
-    using input_packet=std::array<std::uint8_t,24>;
-    using state_packet=std::array<std::uint8_t,48>;
-    using parameters_packet=std::array<std::uint8_t,44>;
-    struct player_parameters {std::uint32_t token;::player::parameters_t values;};
-    struct command {std::uint32_t token=0;::player::input input;};
-    struct snapshot {
-        std::uint32_t token=0,sequence=0,tick=0;
-        ::player::state player;
-    };
-    inline input_packet encode(std::uint32_t token,const ::player::input& in) {
+#include "net_weapon.hpp"
+#include "player.hpp"
+#include "movement.hpp"
+namespace net::movement {    inline input_packet encode(std::uint32_t token,const ::player::input& in) {
         input_packet p{'V','M','O','V',1,1,0,0};
         detail::write_fields(p.data()+8,token,in.sequence,in.buttons,in.yaw);
         return p;
@@ -1322,7 +1025,7 @@ if(!s.token||flag>1|| !finite(x.position.x)||!finite(x.position.y)||!finite(x.po
             return std::nullopt;
         return s;
     }
-} // namespace net::movement
+}
 namespace net::weapon {
 namespace {
     using namespace net::movement::detail;
@@ -1394,24 +1097,7 @@ if(h.impacted&&(state->outcome!=result::fired||!h.instance|| std::abs(vk::util::
     return v;
 }
 } // namespace net::weapon
-namespace net::limits {
-    inline constexpr std::uint32_t tick_hz = 60;
-    inline constexpr std::uint32_t max_clients = 64;
-    inline constexpr std::uint32_t timeout_seconds = 5;
-    inline constexpr std::uint32_t receive_packets = 256;
-    inline constexpr std::uint32_t receive_ms = 2;
-    inline constexpr std::uint32_t inputs_per_tick = 4;
-    inline constexpr std::uint32_t animation_period = 6;
-    inline constexpr std::uint32_t animations_per_tick = 64;
-    inline constexpr std::uint32_t generation_slack_ms = 2;
-    inline constexpr std::uint32_t generation_commit_ticks = 8;
-    inline constexpr std::uint32_t connection_timeout_ms = 3000;
-    inline constexpr std::uint32_t retry_ms = 250;
-    inline constexpr std::uint32_t retry_max_ms = 1000;
-    inline constexpr std::uint32_t heartbeat_ms = 50;
-    inline constexpr std::uint32_t scene_request_ms = 100;
-    inline constexpr std::uint32_t movement_ms = 16;
-}
+#include "limits.hpp"
 #include <numeric>
 namespace player {
 namespace {
@@ -1636,24 +1322,8 @@ namespace game::application {
 } // namespace game::application
 #undef STB_IMAGE_IMPLEMENTATION
 #include <string_view>
-namespace net::editor_light {
-    enum class kind : std::uint8_t {
-        create=1,edit=2,state=3,ack=4,remove=5
-    };
-    struct resource {
-        kind type=kind::state;
-        std::uint32_t token=0,sequence=0,index=0,revision=0;
-        ::scene::point_light light{};
-    };
-    using packet=std::array<std::uint8_t,56>;
-    inline constexpr std::array<std::string_view,8> property_keys{
-        "pos_x","pos_y","pos_z","color_r","color_g","color_b","radius","strength"
-    };
-    template<class Light>
-    auto property_fields(Light& light) {
-return std::array{&light.position.x,&light.position.y,&light.position.z, &light.color.x,&light.color.y,&light.color.z,&light.radius,&light.strength};
-    }
-    inline bool valid(const ::scene::point_light& l) {
+#include "editor_light.hpp"
+namespace net::editor_light {    inline bool valid(const ::scene::point_light& l) {
         const auto in=[](float value,float maximum) {
             return std::isfinite(value)&&value>=0&&value<=maximum;
         };
@@ -1716,46 +1386,7 @@ inline net::secure::settings load(net::secure::role side, const std::string& ser
 #include <network/session.hpp>
 #include <functional>
 #include <memory>
-namespace srv::application {
-    struct model_request {
-        std::filesystem::path path;
-        ::scene::transform pose;
-        std::uint32_t animation;
-    };
-    struct state {
-        net::secure::resource socket;
-        std::unique_ptr<net::session> scene_transport;
-        scene::state scene;
-        std::vector<std::uint32_t> editor_light_versions;
-        std::uint32_t editor_light_revision=1;
-        std::vector<model_request> models;
-        bool scene_configured = false;
-        std::shared_ptr<scene::state> importing;
-        enum import_slot { texture_slot, skin_slot, mesh_slot, instance_slot };
-        std::array<std::size_t,4> import_cursor{};
-        std::size_t animation_cursor = 0;
-        player::collision_world colliders;
-        ::weapon::world weapon_world;
-        ::weapon::definition weapon{};
-        spatial::index collision_index;
-        struct batch {
-            std::vector<std::uint8_t> bytes;
-            bool final=false;
-        };
-        std::vector<batch> scene_batches;
-        std::uint32_t tick = 0;
-        bool initialized = false;
-    };
-    state* get();
-    void set_scene(::scene::state scene);
-void load_model(std::filesystem::path path, ::scene::transform pose, std::uint32_t animation);
-    void add_weapon(::weapon::definition definition);
-    void init();
-    void begin_stream();
-    void append_scene(::scene::state patch, bool final = false);
-    int run();
-    void shutdown() noexcept;
-} // namespace srv::application
+#include "application.hpp"
 #include <network/socket.hpp>
 #include <csignal>
 #include <exception>
@@ -1864,41 +1495,7 @@ game::options::init(argc, argv, game::options::mode::server_only, std::move(sett
 #include <jobs/pool.hpp>
 #include <chrono>
 #include <deque>
-namespace srv::session {
-    struct resource {
-        net::endpoint::resource endpoint;
-        std::uint32_t token = 0;
-        std::uint32_t last_sequence = 0;
-        bool has_sequence = false;
-        bool active = false;
-        std::chrono::steady_clock::time_point last_seen;
-        ::player::state avatar;
-        ::weapon::state weapon;
-        std::uint32_t weapon_sequence = 0;
-        std::deque<net::weapon::command> weapon_commands;
-        std::uint32_t editor_light_sequence=0;
-        std::uint32_t editor_light_index=UINT32_MAX;
-        struct pending_shot {
-            net::weapon::shot value;
-            std::uint32_t repeats = 3;
-        };
-        std::deque<pending_shot> shots;
-        std::optional<net::weapon::shot> last_shot;
-        std::deque<::player::input> inputs;
-        std::uint32_t processed_input = 0;
-        std::uint32_t scene_request = 0;
-        bool scene_pending = false;
-        std::uint32_t queued_scene_batch=UINT32_MAX;
-        std::chrono::steady_clock::time_point queued_scene_at{};
-    };
-    struct state {
-        std::vector<resource> clients;
-    };
-    state* get();
-    void init();
-    void expire(std::chrono::steady_clock::time_point now);
-    void shutdown();
-} // namespace srv::session
+#include "session.hpp"
 #include <thread>
 namespace srv::application {
     using clock = std::chrono::steady_clock;
