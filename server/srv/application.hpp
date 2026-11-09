@@ -1,5 +1,6 @@
 #pragma once
 #include "../net/editor_light.hpp"
+#include "../net/editor_cube.hpp"
 #include "../net/movement.hpp"
 #include "../net/scene_stream.hpp"
 #include "../player.hpp"
@@ -41,6 +42,8 @@ struct state
     scene::state scene;
     std::vector<std::uint32_t> editor_light_versions;
     std::uint32_t editor_light_revision = 1;
+    std::uint32_t editor_cube_revision = 1;
+    std::uint32_t next_cube_id = 0x40000000u;
     std::vector<model_request> models;
 
     bool scene_configured = false;
@@ -116,6 +119,8 @@ jobs::pool &generation_jobs()
 
 void receive_messages();
 void send_editor_lights();
+void send_editor_cubes();
+void handle_editor_cube(const net::endpoint::resource&,const net::editor_cube::resource&);
 void handle_editor_light(const net::endpoint::resource &, const net::editor_light::resource &);
 void send_scene_batches();
 void send_animation_states();
@@ -139,6 +144,11 @@ void set_scene(::scene::state scene)
     get()->scene = std::move(scene);
     get()->editor_light_versions.assign(get()->scene.lights.size(), 1u);
     get()->editor_light_revision = 1;
+    get()->editor_cube_revision=1;
+    get()->next_cube_id=0x40000000u;
+    for(const auto& instance:get()->scene.instances)
+        if(instance.id>=get()->next_cube_id && instance.id<UINT32_MAX)
+            get()->next_cube_id=instance.id+1;
     get()->scene_configured = true;
 }
 
@@ -305,6 +315,7 @@ int run()
         tick_players();
         tick_weapons();
         send_editor_lights();
+        send_editor_cubes();
         send_animation_states();
         if (get()->importing) {
             auto &imported = *get()->importing;
@@ -390,6 +401,8 @@ void shutdown() noexcept
     get()->scene = {};
     get()->editor_light_versions.clear();
     get()->editor_light_revision = 1;
+    get()->editor_cube_revision=1;
+    get()->next_cube_id=0x40000000u;
     get()->models.clear();
     get()->scene_configured = false;
     get()->importing.reset();
@@ -508,6 +521,102 @@ void send_editor_lights()
         }
     }
 }
+
+void send_cube_update(const session::resource& recipient,
+                      const ::scene::instance& cube,net::editor_cube::kind kind,
+                      std::uint32_t sequence) {
+    net::editor_cube::resource update{};
+    update.type=kind;
+    update.token=recipient.token;
+    update.id=cube.id;
+    update.sequence=sequence;
+    update.revision=cube.revision;
+    update.cube=cube;
+    const auto bytes=net::editor_cube::encode(update);
+    net::secure::send(get()->socket,recipient.endpoint,bytes.data(),bytes.size());
+}
+void rebuild_edited_geometry() {
+    auto& data=*get();
+    data.colliders=player::build_colliders(data.scene);
+    data.collision_index=player::build_index(data.colliders);
+    ::weapon::world hit_world{};
+    ::weapon::append(hit_world,data.scene.meshes,data.scene.instances);
+    data.weapon_world=std::move(hit_world);
+}
+void handle_editor_cube(const net::endpoint::resource& peer,
+                        const net::editor_cube::resource& command) {
+    bool local=false;
+    if(peer.address.ss_family==AF_INET) {
+        const auto* addr=reinterpret_cast<const sockaddr_in*>(&peer.address);
+        local=reinterpret_cast<const unsigned char*>(&addr->sin_addr)[0]==127;
+    }else if(peer.address.ss_family==AF_INET6) {
+        const auto* addr=reinterpret_cast<const sockaddr_in6*>(&peer.address);
+        local=IN6_IS_ADDR_LOOPBACK(&addr->sin6_addr)!=0;
+    }
+    if(!local)return;
+    for(auto& client:session::get()->clients) {
+        if(!client.active||client.token!=command.token||
+           !net::endpoint::equal(client.endpoint,peer))continue;
+        const bool duplicate=command.sequence==client.editor_cube_sequence;
+        if(!duplicate && (!net::message::newer(command.sequence,client.editor_cube_sequence) ||
+           (client.editor_cube_sequence && command.sequence-client.editor_cube_sequence>256u)))
+            return;
+        auto& instances=get()->scene.instances;
+        auto found=std::find_if(instances.begin(),instances.end(),
+            [&](const auto& cube){return cube.id==(duplicate?client.editor_cube_id:command.id);});
+        if(!duplicate) {
+            if(command.type==net::editor_cube::kind::create) {
+                if(get()->next_cube_id==UINT32_MAX || std::count_if(instances.begin(),instances.end(),
+                    [](const auto& cube){return cube.editor_cube;})>=128)return;
+                const auto mesh=std::find_if(get()->scene.meshes.begin(),get()->scene.meshes.end(),
+                    [](const auto& value){return value.id==2u;});
+                if(mesh==get()->scene.meshes.end())return;
+                auto cube=command.cube;
+                cube.id=get()->next_cube_id++;
+                cube.mesh_id=mesh->id;
+                cube.editor_cube=true;
+                cube.enabled=true;
+                cube.revision=++get()->editor_cube_revision;
+                net::editor_cube::update_rotation(cube);
+                instances.push_back(cube);
+                found=std::prev(instances.end());
+            }else if(command.type==net::editor_cube::kind::edit) {
+                if(found==instances.end()||!found->editor_cube||!found->enabled||
+                   command.revision>=net::editor_cube::property_keys.size())return;
+                auto updated=*found;
+                if(!net::editor_cube::set(updated,command.revision,
+                       net::editor_cube::value(command.cube,command.revision)))return;
+                updated.revision=++get()->editor_cube_revision;
+                *found=updated;
+            }else if(command.type==net::editor_cube::kind::remove) {
+                if(found==instances.end()||!found->editor_cube||!found->enabled)return;
+                found->enabled=false;
+                found->revision=++get()->editor_cube_revision;
+            }else return;
+            client.editor_cube_sequence=command.sequence;
+            client.editor_cube_id=found->id;
+            rebuild_edited_geometry();
+            for(const auto& recipient:session::get()->clients)
+                if(recipient.active)
+                    send_cube_update(recipient,*found,net::editor_cube::kind::state,found->revision);
+        }
+        if(found!=instances.end())
+            send_cube_update(client,*found,net::editor_cube::kind::ack,
+                             client.editor_cube_sequence);
+        client.last_seen=clock::now();
+        return;
+    }
+}
+void send_editor_cubes() {
+    if(get()->tick%60u)return;
+    for(const auto& recipient:session::get()->clients) {
+        if(!recipient.active)continue;
+        for(const auto& cube:get()->scene.instances)
+            if(cube.editor_cube)
+                send_cube_update(recipient,cube,net::editor_cube::kind::state,
+                                 std::max(1u,cube.revision));
+    }
+}
 void receive_messages()
 {
     std::array<std::uint8_t, 1473> buffer{};
@@ -522,6 +631,13 @@ void receive_messages()
             break;
         if (get()->scene_transport->accept(peer, buffer.data(), *size, clock::now()))
             continue;
+        if (const auto cube_command = net::editor_cube::decode(buffer.data(), *size)) {
+            if(cube_command->type==net::editor_cube::kind::create ||
+               cube_command->type==net::editor_cube::kind::edit ||
+               cube_command->type==net::editor_cube::kind::remove)
+                handle_editor_cube(peer,*cube_command);
+            continue;
+        }
         if (const auto editor_command = net::editor_light::decode(buffer.data(), *size)) {
             if (editor_command->type == net::editor_light::kind::create || editor_command->type == net::editor_light::kind::edit || editor_command->type == net::editor_light::kind::remove)
                 handle_editor_light(peer, *editor_command);

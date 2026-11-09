@@ -35,6 +35,13 @@ inline bool valid(const ::scene::instance& cube) {
         &&finite(c.x,0,1)&&finite(c.y,0,1)&&finite(c.z,0,1)
         &&cube.pattern<=1;
 }
+inline double value(const ::scene::instance& cube,std::uint32_t field) {
+    const auto& p=cube.pose.position; const auto& s=cube.pose.scale;
+    const auto& a=cube.angles; const auto& c=cube.tint;
+    const double values[]{p.x,p.y,p.z,a.x,a.y,a.z,s.x,s.y,s.z,
+                          double(cube.pattern),c.x*100.,c.y*100.,c.z*100.};
+    return field<property_keys.size()?values[field]:0.;
+}
 inline bool set(::scene::instance& cube,std::uint32_t field,double value) {
     if(field>=property_keys.size() || !std::isfinite(value))return false;
     float* fields[]{

@@ -271,6 +271,7 @@ inline void append(world &data, const std::vector<scene::mesh> &meshes, std::spa
 
     for (const auto &instance : instances)
     {
+        if(!instance.enabled)continue;
         const auto mesh = std::find_if(meshes.begin(), meshes.end(), [&](const scene::mesh &m)
                                        { return m.id == instance.mesh_id; });
         if (mesh == meshes.end()) continue;
