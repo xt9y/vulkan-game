@@ -958,10 +958,9 @@ namespace {
     struct cursor {const bytes& data;std::size_t pos;};
     std::size_t left(const cursor& c) {return c.data.size()-c.pos;}
     void put(bytes& b,std::uint32_t value) {
-        b.push_back(std::uint8_t(value>>24));
-        b.push_back(std::uint8_t(value>>16));
-        b.push_back(std::uint8_t(value>>8));
-        b.push_back(std::uint8_t(value));
+        const auto offset=b.size();
+        b.resize(offset+4);
+        net::movement::detail::put(b.data()+offset,value);
     }
     void put(bytes& b,float value) {
         if(!std::isfinite(value))throw std::runtime_error("Non-finite scene value");
@@ -974,8 +973,7 @@ namespace {
     void put_all(bytes& b,const T&... values) {(put(b,values),...);}
     bool take(cursor& c,std::uint32_t& value) {
         if(left(c)<4)return false;
-        const auto* p=c.data.data()+c.pos;
-value=(std::uint32_t(p[0])<<24)|(std::uint32_t(p[1])<<16)| (std::uint32_t(p[2])<<8)|std::uint32_t(p[3]);
+        value=net::movement::detail::get(c.data.data()+c.pos);
         c.pos+=4;
         return true;
     }
