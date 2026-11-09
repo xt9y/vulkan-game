@@ -1,4 +1,5 @@
 #pragma once
+#include <stb_image.h>
 #include <algorithm>
 #include <cmath>
 #include <bit>
