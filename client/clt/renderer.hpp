@@ -280,8 +280,8 @@ gpu::access::for_image(target.hdr,range, vk::ImageLayout::eGeneral, vk::Pipeline
 vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderWrite,true)}, measure(4,[image=active.image,gi_camera](vk::CommandBuffer cmd)
                 {pc::tonemap(cmd,image,gi_camera);})},
 {"presentation",{gpu::access::for_image(target.ldr,range, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eFragmentShader, vk::AccessFlagBits::eShaderRead,false)},
-                measure(5,[image=active.image](vk::CommandBuffer cmd)
-                {postprocess::present(cmd,image);})}
+                measure(5,[image=active.image,render_camera](vk::CommandBuffer cmd)
+                {postprocess::present(cmd,image,render_camera);})}
         });
         try {
             auto result = data.frames.submit(active);

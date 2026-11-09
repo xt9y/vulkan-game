@@ -53,6 +53,9 @@ namespace clt::connection {
         std::deque<::player::input> outgoing;
         std::optional<net::movement::snapshot> authority;
         std::optional<::player::parameters_t> server_parameters;
+        std::mutex peers_mutex;
+        net::movement::peer_snapshot peers;
+        std::chrono::steady_clock::time_point peers_received{};
         std::mutex editor_mutex;
         std::deque<net::editor_light::resource> editor_outgoing;
         std::uint32_t editor_sequence=0;
@@ -76,6 +79,7 @@ namespace clt::connection {
     void send_input(const ::player::input& input);
     std::optional<net::movement::snapshot> take_authority();
     std::optional<::player::parameters_t> movement_parameters();
+    std::vector<net::movement::peer> remote_players();
     void init();
     void shutdown() noexcept;
 
@@ -95,6 +99,11 @@ using clock = std::chrono::steady_clock;
         data.last_publish={};
         data.light_versions.fill(0);
         data.light_pending.fill(std::nullopt);
+        {
+            std::lock_guard peers_lock(data.peers_mutex);
+            data.peers={};
+            data.peers_received={};
+        }
     }
     void reset_queues(state& data,bool reset_parameters) {
         {
@@ -226,6 +235,12 @@ command.index=command.type==net::editor_light::kind::create ? UINT32_MAX:command
         auto& data = *get();
         std::lock_guard<std::mutex> lock(data.player_mutex);
         return data.server_parameters;
+    }
+    std::vector<net::movement::peer> remote_players() {
+        auto& data=*get();
+        std::lock_guard lock(data.peers_mutex);
+        if(clock::now()-data.peers_received>500ms)return {};
+        return data.peers.players;
     }
     void init() {
         if (get()->initialized || get()->worker.joinable()) 
@@ -410,6 +425,18 @@ if (settings->token == token && data.connected.load(std::memory_order_relaxed)) 
                                 std::lock_guard<std::mutex> lock(data.player_mutex);
                                 data.server_parameters = settings->values;
                                 last_received = now;
+                            }
+                            continue;
+                        }
+                        if(const auto peers=net::movement::decode_peers(buffer.data(),*size)) {
+                            if(peers->token==token && data.connected.load(std::memory_order_relaxed)) {
+                                std::lock_guard lock(data.peers_mutex);
+                                if(data.peers_received==clock::time_point{} ||
+                                   net::message::newer(peers->tick,data.peers.tick)) {
+                                    data.peers=*peers;
+                                    data.peers_received=now;
+                                }
+                                last_received=now;
                             }
                             continue;
                         }

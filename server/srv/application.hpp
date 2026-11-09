@@ -657,6 +657,17 @@ const auto settings = net::movement::encode_parameters( request.token, player::p
                 const auto packet = net::movement::encode(snapshot);
                 net::secure::send(get()->socket, client.endpoint, packet.data(), packet.size());
             }
+            if(get()->tick%6u!=0u)return;
+            const auto& clients=session::get()->clients;
+            for(std::size_t i=0;i<clients.size();++i) {
+                if(!clients[i].active)continue;
+                net::movement::peer_snapshot peers{clients[i].token,get()->tick,{}};
+                for(std::size_t j=0;j<clients.size();++j)
+                    if(i!=j && clients[j].active)
+                        peers.players.push_back({std::uint32_t(j),clients[j].avatar.position});
+                const auto bytes=net::movement::encode_peers(peers);
+                net::secure::send(get()->socket,clients[i].endpoint,bytes.data(),bytes.size());
+            }
         }
     } // namespace
 
