@@ -2580,11 +2580,12 @@ if(!animation::sample(mesh.skin_id,clip,std::max(0.f,time), bones,overlay,weight
 vk::buffer::write(mesh.frames.at(image).skin_palette, matrices.data(), matrices.size() * sizeof(matrices[0]));
             }
         }
+        const auto local_mesh=[&](std::uint32_t id) {
+            return std::find_if(data.local_meshes.begin(),data.local_meshes.end(),
+                [&](const gpu_mesh& mesh){return mesh.id==id;});
+        };
         for (const auto& item : weapon_draws) {
-auto found = std::find_if( data.local_meshes.begin(), data.local_meshes.end(), [&](const gpu_mesh& mesh) {
-                    return mesh.id == item.mesh_id;
-                }
-            );
+            auto found=local_mesh(item.mesh_id);
             if (found == data.local_meshes.end()) 
                 continue;
             auto& frame = found->frames.at(image);
@@ -2611,10 +2612,7 @@ graphics.viewport( vk::Viewport{
             for (const auto& item : weapon_draws) {
                 if (item.viewmodel != viewmodel) 
                     continue;
-const auto found = std::find_if( data.local_meshes.begin(), data.local_meshes.end(), [&](const gpu_mesh& mesh) {
-                        return mesh.id == item.mesh_id;
-                    }
-                );
+const auto found=local_mesh(item.mesh_id);
                 if (found == data.local_meshes.end()) 
                     continue;
                 const auto& mesh = *found;
