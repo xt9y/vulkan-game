@@ -1881,11 +1881,7 @@ namespace srv::session {
         bool active = false;
         std::chrono::steady_clock::time_point last_seen;
         ::player::state avatar;
-        struct owned_weapon {
-            std::uint32_t id = 0;
-            ::weapon::state state;
-         };
-        owned_weapon weapon;
+        ::weapon::state weapon;
         std::uint32_t weapon_sequence = 0;
         std::deque<net::weapon::command> weapon_commands;
         std::uint32_t editor_light_sequence=0;
@@ -1950,7 +1946,7 @@ void reply( const net::endpoint::resource& peer, net::message::type type, const 
         void tick_weapons();
         void
         handle_weapon(const net::endpoint::resource& peer, const net::weapon::command& command);
-net::weapon::snapshot weapon_snapshot( const session::resource& client, const session::resource::owned_weapon& owned, double now );
+net::weapon::snapshot weapon_snapshot( const session::resource& client, double now );
     } // namespace
     state* get() {
         static state data;
@@ -2334,13 +2330,13 @@ if(!queue_input(client.inputs,command->input, client.processed_input,128))break;
                     handle(peer, *message);
             }
         }
-net::weapon::snapshot weapon_snapshot( const session::resource& client, const session::resource::owned_weapon& owned, double now ) {
-            const auto& value = owned.state;
+net::weapon::snapshot weapon_snapshot( const session::resource& client, double now ) {
+            const auto& value = client.weapon;
             net::weapon::snapshot snapshot;
             snapshot.token = client.token;
             snapshot.sequence = client.weapon_sequence;
-            snapshot.weapon_id = owned.id;
-            snapshot.active_weapon_id = client.weapon.id;
+            snapshot.weapon_id = get()->weapon.id;
+            snapshot.active_weapon_id = get()->weapon.id;
             snapshot.tick = get()->tick;
             snapshot.magazine = value.magazine;
             snapshot.reserve = value.reserve;
@@ -2375,22 +2371,21 @@ const double seconds=std::chrono::duration<double>( now.time_since_epoch()).coun
                     const auto cmd=queue.front();
                     queue.pop_front();
                     client.weapon_sequence=cmd.sequence;
-                    client.weapon.state.last_result=::weapon::result::none;
-                    if (cmd.weapon_id!=client.weapon.id) continue;
+                    client.weapon.last_result=::weapon::result::none;
 const auto* definition= get()->weapon_registered && get()->weapon.id==cmd.weapon_id
                             ? &get()->weapon : nullptr;
                     if (!definition) continue;
                     if (cmd.kind==::weapon::action::equip) {
-                        client.weapon.state.sequence=cmd.sequence;
-                        client.weapon.state.last_result=::weapon::result::equipped;
+                        client.weapon.sequence=cmd.sequence;
+                        client.weapon.last_result=::weapon::result::equipped;
                     } else {
-const auto result=::weapon::apply( client.weapon.state,cmd.sequence,cmd.kind, seconds,*definition);
+const auto result=::weapon::apply( client.weapon,cmd.sequence,cmd.kind, seconds,*definition);
                         if (cmd.kind==::weapon::action::fire) {
                             const auto impact=result==::weapon::result::fired
 ? ::weapon::trace( get()->weapon_world,client.avatar.position, ::weapon::direction(cmd.yaw,cmd.pitch), definition->range)
                                 : ::weapon::hit{};
                             net::weapon::shot shot{
-                                weapon_snapshot(client,client.weapon,seconds),impact
+                                weapon_snapshot(client,seconds),impact
                             };
                             client.last_shot=shot;
                             if (client.shots.size()>=32) client.shots.pop_front();
@@ -2405,10 +2400,9 @@ const auto result=::weapon::apply( client.weapon.state,cmd.sequence,cmd.kind, se
 const double now=std::chrono::duration<double>( clock::now().time_since_epoch()).count();
             for (auto& client : session::get()->clients) {
                 if (!client.active) continue;
-                auto& owned=client.weapon;
-if (const auto* definition= get()->weapon_registered && get()->weapon.id==owned.id ? &get()->weapon : nullptr) {
-                    ::weapon::advance(owned.state,now,*definition);
-                    const auto state=weapon_snapshot(client,owned,now);
+if (const auto* definition= get()->weapon_registered ? &get()->weapon : nullptr) {
+                    ::weapon::advance(client.weapon,now,*definition);
+                    const auto state=weapon_snapshot(client,now);
                     const auto bytes=net::weapon::encode_snapshot(state);
 net::secure::send(get()->socket,client.endpoint, bytes.data(),bytes.size());
                 }
@@ -2443,9 +2437,7 @@ net::secure::send(get()->socket,client.endpoint, bytes.data(),bytes.size());
                     client->active = true;
                     client->avatar.position = player::parameters().spawn;
                     if(get()->weapon_registered)
-                        client->weapon={
-get()->weapon.id, ::weapon::make_state(get()->weapon)
-                        };
+                        client->weapon=::weapon::make_state(get()->weapon);
                 }
                 client->last_seen = clock::now();
                 reply(peer, net::message::type::welcome, message);
