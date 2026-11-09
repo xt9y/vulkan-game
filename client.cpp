@@ -2,6 +2,7 @@
 #define VULKAN_GAME_SHARED_ONLY
 #include "server.cpp"
 #undef VULKAN_GAME_SHARED_ONLY
+#include <pcloud/pcloud.hpp>
 #include <cstdint>
 namespace clt::input {
     struct frame {
@@ -92,23 +93,9 @@ namespace clt::camera {
     vk::util::math::mat4 view_projection(float aspect);
 } // namespace clt::camera
 namespace clt::postprocess {
-    void set_exposure(float exposure);
-    struct targets {
-        vk::Image grid{};
-        vk::Buffer points{};
-        vk::Image hdr{};
-        vk::Image ldr{};
-    };
-    targets images(std::uint32_t image);
     void create();
     void synchronize_scene();
-    void updated(std::uint32_t image);
-    void toggle_probes();
     void release();
-    void cloud(vk::CommandBuffer command,std::uint32_t image);
-    void gi(vk::CommandBuffer command,std::uint32_t image);
-    void lighting(vk::CommandBuffer command, std::uint32_t image, const camera::frame& frame);
-    void tonemap(vk::CommandBuffer command, std::uint32_t image, const camera::frame& frame);
     void present(vk::CommandBuffer command, std::uint32_t image);
 }
 #include <network/secure.hpp>
@@ -295,7 +282,7 @@ ui.set_properties(editor_light_ids+std::uint64_t(i)+1u, light_properties(light))
         }
         static bool space_held=false;
         const bool space=clt::input::key_down(GLFW_KEY_SPACE);
-        if(space && !space_held)clt::postprocess::toggle_probes();
+        if(space && !space_held)pc::toggle_probes();
         space_held=space;
         const auto keys=clt::weapon::active_bindings();
         static bool inspect_held=false;
@@ -636,7 +623,7 @@ namespace clt::application {
         input::init();
         camera::init();
         prediction::init();
-        postprocess::set_exposure(get()->options.graphics.exposure);
+        pc::set_exposure(get()->options.graphics.exposure);
 renderer::init(get()->options.graphics.vertex_shader.c_str(), get()->options.graphics.fragment_shader.c_str());
         std::atomic<bool> render_stop{false};
         std::exception_ptr render_error;
@@ -1601,15 +1588,11 @@ namespace clt::scene_renderer {
 void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame& camera);
     void shutdown();
 } // namespace clt::scene_renderer
-#include <pcloud/pcloud.hpp>
 #include <editor/vulkan.hpp>
 namespace clt::postprocess {
     namespace {
         std::shared_ptr<const ::scene::state> registered;
         constexpr float bounce_reach=2.6f;
-        pc::camera_frame convert_camera(const camera::frame& frame) {
-            return {frame.eye,frame.pose.yaw,frame.pose.pitch,frame.pose.fov};
-        }
 bool lighting_unchanged(const ::scene::state& previous, const ::scene::state& incoming) {
 if(incoming.instances.size()<previous.instances.size() || incoming.meshes.size()!=previous.meshes.size() || incoming.lights.size()!=previous.lights.size() ||
 incoming.collision_boxes.size()!=previous.collision_boxes.size() || incoming.skins.size()!=previous.skins.size())
@@ -1721,9 +1704,6 @@ m[0]*p.x+m[4]*p.y+m[8]*p.z+m[12], m[1]*p.x+m[5]*p.y+m[9]*p.z+m[13], m[2]*p.x+m[6
             return prepared;
         }
     }
-    void set_exposure(float exposure){pc::set_exposure(exposure);}
-    void toggle_probes(){pc::toggle_probes();}
-    void updated(std::uint32_t image){pc::updated(image);}
     void create() {
         std::vector<pc::gbuffer> gbuffers;
 const auto count=static_cast<std::uint32_t>( vk::swapchain::get()->images.size());
@@ -1736,11 +1716,7 @@ const auto count=static_cast<std::uint32_t>( vk::swapchain::get()->images.size()
         shaders.tonemap_shader=configured.tonemap_shader;
         shaders.fullscreen_shader=configured.fullscreen_shader;
         shaders.presentation_shader=configured.presentation_shader;
-        pc::presentation_target surface{};
-        surface.images=vk::swapchain::get()->images;
-        surface.format=vk::swapchain::get()->format;
-        surface.extent=vk::swapchain::get()->extent;
-        pc::create(shaders,gbuffers,surface);
+        pc::create(gbuffers,shaders);
     }
     void synchronize_scene() {
         const auto source=connection::snapshot();
@@ -1756,22 +1732,6 @@ const auto count=static_cast<std::uint32_t>( vk::swapchain::get()->images.size()
     void release() {
         pc::release();
         registered.reset();
-    }
-    targets images(std::uint32_t image) {
-        const auto output=pc::images(image);
-        return {output.grid,output.points,output.hdr,output.ldr};
-    }
-    void cloud(vk::CommandBuffer cmd,std::uint32_t image) {
-        pc::cloud(cmd,image);
-    }
-    void gi(vk::CommandBuffer cmd,std::uint32_t image) {
-        pc::gi(cmd,image);
-    }
-void lighting(vk::CommandBuffer cmd,std::uint32_t image, const camera::frame& frame) {
-        pc::lighting(cmd,image,convert_camera(frame));
-    }
-void tonemap(vk::CommandBuffer cmd,std::uint32_t image, const camera::frame& frame) {
-        pc::tonemap(cmd,image,convert_camera(frame));
     }
     void present(vk::CommandBuffer cmd,std::uint32_t image) {
         pc::present(cmd,image,[](vk::CommandBuffer command,vk::Extent2D extent) {
@@ -2004,7 +1964,11 @@ if (framebuffer_extent(vk::surface::capabilities()) != vk::swapchain::get()->ext
             return;
         }
         const auto render_camera=camera::capture();
-        const auto target=postprocess::images(active.image);
+        const pc::camera_frame gi_camera{
+            render_camera.eye,render_camera.pose.yaw,
+            render_camera.pose.pitch,render_camera.pose.fov
+        };
+        const auto target=pc::images(active.image);
         const vk::ImageSubresourceRange range{
             vk::ImageAspectFlagBits::eColor,0,1,0,1
         };
@@ -2021,19 +1985,19 @@ return [timings=&data.timings,image=active.image,index, callback=std::move(callb
             {"geometry",{},measure(0,[image=active.image,render_camera](vk::CommandBuffer cmd)
                 {scene_renderer::draw(cmd,image,render_camera);})},
 {"point-cloud",{gpu::access::for_buffer(target.points, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderWrite,true)}, measure(1,[image=active.image](vk::CommandBuffer cmd)
-                {postprocess::cloud(cmd,image);})},
+                {pc::cloud(cmd,image);})},
             {"probe-grid",{
 gpu::access::for_buffer(target.points, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead,false), gpu::access::for_image(target.grid,range, vk::ImageLayout::eGeneral,
 vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderWrite,true)}, measure(2,[image=active.image](vk::CommandBuffer cmd)
-                {postprocess::gi(cmd,image);})},
+                {pc::gi(cmd,image);})},
             {"lighting",{
 gpu::access::for_image(target.grid,range, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead,false), gpu::access::for_image(target.hdr,range, vk::ImageLayout::eGeneral,
-vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderWrite,true)}, measure(3,[image=active.image,render_camera](vk::CommandBuffer cmd)
-                {postprocess::lighting(cmd,image,render_camera);})},
+vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderWrite,true)}, measure(3,[image=active.image,gi_camera](vk::CommandBuffer cmd)
+                {pc::lighting(cmd,image,gi_camera);})},
             {"tonemapping",{
 gpu::access::for_image(target.hdr,range, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead,false), gpu::access::for_image(target.ldr,range, vk::ImageLayout::eGeneral,
-vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderWrite,true)}, measure(4,[image=active.image,render_camera](vk::CommandBuffer cmd)
-                {postprocess::tonemap(cmd,image,render_camera);})},
+vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderWrite,true)}, measure(4,[image=active.image,gi_camera](vk::CommandBuffer cmd)
+                {pc::tonemap(cmd,image,gi_camera);})},
 {"presentation",{gpu::access::for_image(target.ldr,range, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eFragmentShader, vk::AccessFlagBits::eShaderRead,false)},
                 measure(5,[image=active.image](vk::CommandBuffer cmd)
                 {postprocess::present(cmd,image);})}
@@ -2042,7 +2006,7 @@ vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderWrite,true
             auto result = data.frames.submit(active);
             data.timings.submitted(active.image);
             if(result==vk::Result::eSuccess || result==vk::Result::eSuboptimalKHR)
-                postprocess::updated(active.image);
+                pc::updated(active.image);
             if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR) 
                 resize();
         } catch (const vk::OutOfDateKHRError&) {
