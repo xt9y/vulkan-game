@@ -2054,12 +2054,6 @@ namespace clt::scene_renderer {
         };
         static_assert(sizeof(instance_data) == 128);
         static_assert(sizeof(::scene::vertex) == 64);
-        struct cull_parameters {
-            std::array<vec4, 6> planes{};
-            std::uint32_t count = 0;
-            std::uint32_t index_count = 0;
-        };
-        static_assert(sizeof(cull_parameters) <= 128);
         struct state {
             std::shared_ptr<const ::scene::state> snapshot;
             std::vector<gpu_mesh> meshes;
@@ -2119,9 +2113,6 @@ const auto flags = (m.base_color_texture ? 1u : 0u) | (m.metallic_roughness_text
                 {m.metallic,m.roughness,m.occlusion,m.alpha_cutoff},
 {m.emissive[0],m.emissive[1],m.emissive[2],float(flags)}, joints
             };
-        }
-        void destroy_meshes(std::vector<gpu_mesh>& meshes) {
-            meshes.clear();
         }
         struct plane {
             vec3 normal;
@@ -2517,7 +2508,7 @@ bool appended=data.snapshot&&source&& source->textures.size()>=data.snapshot->te
             texture::reset();
             texture::synchronize(::scene::state{});
         }
-        destroy_meshes(data.meshes);
+        data.meshes.clear();
         data.instance_sets=std::move(sets);
         data.meshes=std::move(fresh);
         data.snapshot=source;
@@ -2546,11 +2537,11 @@ clear[i].color = vk::ClearColorValue( std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0
         begin.pClearValues = clear.data();
         if (data.snapshot) {
             const auto camera_planes = frustum(view_projection);
-            cull_parameters params;
-            for (std::size_t i = 0; i < params.planes.size(); ++i) {
+            std::array<vec4,6> planes{};
+            for (std::size_t i = 0; i < planes.size(); ++i) {
                 const auto& plane = camera_planes[i];
                 const float inverse = 1.0f / std::max(plane.magnitude, 1e-6f);
-                params.planes[i] = {
+                planes[i] = {
 plane.normal.x * inverse, plane.normal.y * inverse, plane.normal.z * inverse, plane.offset * inverse
                 };
             }
@@ -2562,7 +2553,7 @@ plane.normal.x * inverse, plane.normal.y * inverse, plane.normal.z * inverse, pl
             data.cull.begin(command, indirects);
             for (const auto& mesh : data.meshes) {
                 if (mesh.transforms.empty()) continue;
-data.cull.dispatch( command, mesh.frames.at(image).set, params.planes, static_cast<std::uint32_t>(mesh.transforms.size()), mesh.index_count );
+data.cull.dispatch( command, mesh.frames.at(image).set, planes, static_cast<std::uint32_t>(mesh.transforms.size()), mesh.index_count );
             }
             data.cull.end(command);
         }
@@ -2652,9 +2643,9 @@ draw_mesh(graphics, mesh, frame, params, false, static_cast<std::uint32_t>(item.
     }
     void shutdown() {
         auto& data = get();
-        destroy_meshes(data.meshes);
+        data.meshes.clear();
         release_local_frames();
-        destroy_meshes(data.local_meshes);
+        data.local_meshes.clear();
         weapon::shutdown();
         data.snapshot.reset();
         data.instance_sets.reset();
