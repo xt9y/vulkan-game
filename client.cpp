@@ -1575,11 +1575,7 @@ void shutdown() {
 } // namespace clt::prediction
 #include <cstddef>
 namespace clt::scene_renderer {
-    struct gbuffer {
-        std::array<vk::ImageView, 4> views{};
-        vk::Extent2D extent{};
-    };
-    gbuffer outputs(std::uint32_t image);
+    pc::gbuffer outputs(std::uint32_t image);
     bool needs_sync();
     void create_frame_resources();
     void release_frame_resources();
@@ -1709,7 +1705,7 @@ m[0]*p.x+m[4]*p.y+m[8]*p.z+m[12], m[1]*p.x+m[5]*p.y+m[9]*p.z+m[13], m[2]*p.x+m[6
 const auto count=static_cast<std::uint32_t>( vk::swapchain::get()->images.size());
         gbuffers.reserve(count);
         for(std::uint32_t i=0;i<count;++i)
-            gbuffers.push_back(scene_renderer::outputs(i).views);
+            gbuffers.push_back(scene_renderer::outputs(i));
         pc::configuration shaders{};
         const auto& configured=game::options::get()->graphics;
         shaders.lighting_shader=configured.lighting_shader;
@@ -2316,11 +2312,9 @@ target.framebuffer->create_framebuffer( data.render_pass,
         texture::synchronize(::scene::state{});
 data.cull.create(game::options::get()->graphics.culling_shader, data.instance_layout);
     }
-    gbuffer outputs(std::uint32_t image) {
-        const auto& target = get().targets.at(image);
-        return {{
-target.images.color(0),target.images.color(1), target.images.color(2),target.images.depth()
-        },vk::swapchain::get()->extent};
+    pc::gbuffer outputs(std::uint32_t image) {
+        const auto& images=get().targets.at(image).images;
+        return {images.color(0),images.color(1),images.color(2),images.depth()};
     }
     void release_local_frames() {
         auto& data = get();
