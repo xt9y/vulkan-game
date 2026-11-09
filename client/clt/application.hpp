@@ -157,7 +157,7 @@ int run()
             events.mouse_y = int(cursor_y * double(display_height) / double(std::max(1, window_height)));
             editor::instance().handle(events);
 
-            if (events.tab) {
+            if (events.tab || events.question) {
                 const bool free_cursor = editor::instance().cursor_free();
                 glfwSetInputMode(handle, GLFW_CURSOR, free_cursor ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
 
