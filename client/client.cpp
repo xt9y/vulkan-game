@@ -83,14 +83,14 @@ static constexpr std::uint64_t editor_light_ids=1ull<<32;
 static std::vector<editor::property> light_properties( const ::scene::point_light& light) {
         using kind=editor::property_kind;
         return {
-            {"pos_x","Pos X",kind::real,light.position.x,-500,500,1,{}},
-            {"pos_y","Pos Y",kind::real,light.position.y,-500,500,1,{}},
-            {"pos_z","Pos Z",kind::real,light.position.z,-500,500,1,{}},
+            {"pos_x","Pos X",kind::real,light.position.x,-500,500,0.1,{}},
+            {"pos_y","Pos Y",kind::real,light.position.y,-500,500,0.1,{}},
+            {"pos_z","Pos Z",kind::real,light.position.z,-500,500,0.1,{}},
             {"color_r","Color X",kind::integer,light.color.x*100,0,100,1,{}},
             {"color_g","Color Y",kind::integer,light.color.y*100,0,100,1,{}},
             {"color_b","Color Z",kind::integer,light.color.z*100,0,100,1,{}},
-            {"radius","Radius",kind::real,light.radius,0.05,64,1,{}},
-            {"strength","Strength",kind::real,light.strength,0,20,1,{}}
+            {"radius","Radius",kind::real,light.radius,0.05,64,0.1,{}},
+            {"strength","Strength",kind::real,light.strength,0,20,0.1,{}}
         };
     }
     static void on_editor_action(const editor::action& action) {
