@@ -140,7 +140,7 @@ bool valid_light(const ::scene::point_light &l)
 } // namespace
 std::vector<std::uint8_t> serialize(const ::scene::state &scene)
 {
-    if (scene.meshes.size() > max_scene_bytes / 12 || scene.instances.size() > max_scene_bytes / 96 || scene.lights.size() > 64)
+    if (scene.meshes.size() > max_scene_bytes / 12 || scene.instances.size() > max_scene_bytes / 104 || scene.lights.size() > 64)
         throw std::runtime_error("Scene snapshot exceeds maximum batch size");
     bytes out{'S', 'C', 'N', 'B'};
     put_all(out, std::uint32_t(scene.meshes.size()), std::uint32_t(scene.instances.size()), std::uint32_t(scene.textures.size()), std::uint32_t(scene.skins.size()), std::uint32_t(scene.collision_boxes.size()),
@@ -243,7 +243,7 @@ bool deserialize(const std::vector<std::uint8_t> &bytes, ::scene::state &scene)
     cursor in{bytes, 4};
     std::uint32_t meshes = 0, instances = 0, textures = 0, skins = 0, boxes = 0, lights = 0;
 
-    if (!take_all(in, meshes, instances, textures, skins, boxes, lights) || lights > 64 || lights > left(in) / 32 || boxes > left(in) / 24 || textures > left(in) / 20 || skins > left(in) / 16 || meshes > left(in) / 12 || instances > left(in) / 96) return false;
+    if (!take_all(in, meshes, instances, textures, skins, boxes, lights) || lights > 64 || lights > left(in) / 32 || boxes > left(in) / 24 || textures > left(in) / 20 || skins > left(in) / 16 || meshes > left(in) / 12 || instances > left(in) / 104) return false;
     ::scene::state result;
     result.meshes.reserve(meshes);
     result.instances.reserve(instances);

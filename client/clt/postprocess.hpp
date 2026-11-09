@@ -286,6 +286,7 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world)
         [](const auto& l){return l.enabled && l.strength>0.f;});
     if(light==world.lights.end())return std::nullopt;
     pm::scene result{};
+    result.omnidirectional_emitter=true;
     for(const auto& inst:world.instances) {
         const auto it=std::find_if(world.meshes.begin(),world.meshes.end(),
             [&](const auto& mesh){return mesh.id==inst.mesh_id;});
@@ -324,7 +325,7 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world)
         }
     }
     pm::surface emitter{};
-    emitter.origin=light->position+vec3{-.2f,0.f,-.2f};
+    emitter.origin=light->position;
     emitter.u={.4f,0.f,0.f};
     emitter.v={0.f,0.f,.4f};
     emitter.normal={0.f,-1.f,0.f};
@@ -391,7 +392,7 @@ void synchronize_scene()
             pm::configuration config{};
             config.transport_only=true;
             config.photons=4096;
-            config.gi_updates=32;
+            config.gi_updates=1; // Stable photon map, reprojected from the camera every frame.
             config.bounces=4;
             config.atlas_tile=32;
             auto mapper=std::make_unique<pm::mapper>();
@@ -399,6 +400,9 @@ void synchronize_scene()
             const auto buffers=mapper->photon_buffers();
             photon_caustics->set_photons({buffers.sorted,buffers.used,buffers.capacity});
             photon_transport=std::move(mapper);
+            std::clog << "optics: initialized photon transport with "
+                      << scene->surfaces.size() << " surfaces and "
+                      << config.photons << " emitted paths\n";
         }
     }
     registered=source;

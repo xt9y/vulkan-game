@@ -111,7 +111,7 @@ static std::vector<editor::property> cube_properties(const ::scene::instance &cu
         {"width", "Width", kind::real, cube.pose.scale.x, 0.01, 100, 0.01, {}},
         {"height", "Height", kind::real, cube.pose.scale.y, 0.01, 100, 0.01, {}},
         {"depth", "Depth", kind::real, cube.pose.scale.z, 0.01, 100, 0.01, {}},
-        {"texture", "Texture", kind::choice, double(cube.pattern <= 3 ? cube.pattern : 0), 0, 3, 1, {"Solid", "Checker", "Glass", "Reflective"}},
+        {"texture", "Texture", kind::choice, double(cube.pattern <= 3 ? cube.pattern : 0), 0, 3, 1, {"Solid", "Generated checker", "Glass", "Reflective"}},
         {"color_r", "Color R", kind::integer, cube.tint.x * 100, 0, 100, 1, {}},
         {"color_g", "Color G", kind::integer, cube.tint.y * 100, 0, 100, 1, {}},
         {"color_b", "Color B", kind::integer, cube.tint.z * 100, 0, 100, 1, {}}
