@@ -179,7 +179,7 @@ void init(const char *vertex_path, const char *fragment_path)
         vk::queue::init(family);
         vk::command::init(family);
         get()->timestamps_supported = vk::physical_device::get()->handle.getQueueFamilyProperties()[family].timestampValidBits > 0;
-        get()->frames.create(2);
+        get()->frames.create(1); // transport-only mapper reuses GPU photon buffers
         scene_renderer::init(vertex_path, fragment_path);
         resize();
     }
@@ -340,7 +340,8 @@ void draw_frame()
     };
 
     data.passes.record(active.command, active.image, {{"geometry", {}, measure(0, [image = active.image, render_camera](vk::CommandBuffer cmd)
-                                                                               { scene_renderer::draw(cmd, image, render_camera); })},
+                                                                               { scene_renderer::draw(cmd, image, render_camera);
+                                                                                 postprocess::update_photons(cmd,image,render_camera); })},
                                                       {"point-cloud", {gpu::access::for_buffer(target.points, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderWrite, true)}, measure(1, [image = active.image](vk::CommandBuffer cmd)
                                                                                                                                                                                                            { pc::cloud(cmd, image); })},
                                                       {"probe-grid", {gpu::access::for_buffer(target.points, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead, false), gpu::access::for_image(target.grid, range, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderWrite, true)}, measure(2, [image = active.image](vk::CommandBuffer cmd)

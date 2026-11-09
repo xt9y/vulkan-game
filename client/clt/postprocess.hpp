@@ -11,11 +11,18 @@
 #include <memory>
 #include <pcloud/pcloud.hpp>
 #include <optics/optics.hpp>
+#include <optics/caustics.hpp>
+#include <pmap/pmap.hpp>
+#include <optional>
 #include <vk/vk.hpp>
 
 namespace clt::postprocess
 {
-namespace { std::unique_ptr<optics::compositor> material_compositor; }
+namespace {
+std::unique_ptr<optics::compositor> material_compositor;
+std::unique_ptr<optics::caustics> photon_caustics;
+std::unique_ptr<pm::mapper> photon_transport;
+}
 void create();
 void synchronize_scene();
 void release();
@@ -267,6 +274,64 @@ std::shared_ptr<pc::world> prepare_world(const ::scene::state *source)
 
     return prepared;
 }
+// Convert the authoritative scene into GPU photon-tracing surfaces.
+// The transport-only mapper uses the full software BVH but does not allocate
+// a per-face irradiance atlas or run a fullscreen ray tracer.
+std::optional<pm::scene> photon_scene(const ::scene::state& world)
+{
+    using namespace vk::util::math;
+    const auto light=std::find_if(world.lights.begin(),world.lights.end(),
+        [](const auto& l){return l.enabled && l.strength>0.f;});
+    if(light==world.lights.end())return std::nullopt;
+    pm::scene result{};
+    for(const auto& inst:world.instances) {
+        const auto it=std::find_if(world.meshes.begin(),world.meshes.end(),
+            [&](const auto& mesh){return mesh.id==inst.mesh_id;});
+        if(it==world.meshes.end() || it->surface.alpha_mode==2)continue;
+        const auto& mesh=*it;
+        const auto transform=[&](vec3 p) {
+            const auto& scale=inst.pose.scale;
+            return inst.pose.position+rotate(inst.pose.rotation,
+                {p.x*scale.x,p.y*scale.y,p.z*scale.z});
+        };
+        for(std::size_t i=0;i+2<mesh.indices.size();i+=3) {
+            const auto ia=mesh.indices[i],ib=mesh.indices[i+1],ic=mesh.indices[i+2];
+            if(ia>=mesh.vertices.size() || ib>=mesh.vertices.size() ||
+               ic>=mesh.vertices.size())continue;
+            const vec3 a=transform(mesh.vertices[ia].position);
+            const vec3 u=transform(mesh.vertices[ib].position)-a;
+            const vec3 v=transform(mesh.vertices[ic].position)-a;
+            const auto n=cross(u,v);
+            if(!std::isfinite(n.x) || !std::isfinite(n.y) ||
+               !std::isfinite(n.z) || length_squared(n)<=1e-8f)continue;
+            pm::surface surface{};
+            surface.origin=a;surface.u=u;surface.v=v;
+            surface.normal=normalize(n);
+            surface.albedo={
+                std::clamp(mesh.surface.base_color[0]*inst.tint.x,0.f,1.f),
+                std::clamp(mesh.surface.base_color[1]*inst.tint.y,0.f,1.f),
+                std::clamp(mesh.surface.base_color[2]*inst.tint.z,0.f,1.f)
+            };
+            surface.triangle=true;
+            if(inst.pattern==2u || inst.pattern==3u) {
+                surface.optical_type=inst.pattern==2u?1u:2u;
+                surface.optical_strength=inst.optical_strength;
+                surface.roughness=inst.optical_mattness;
+            }
+            result.surfaces.push_back(surface);
+        }
+    }
+    pm::surface emitter{};
+    emitter.origin=light->position+vec3{-.2f,0.f,-.2f};
+    emitter.u={.4f,0.f,0.f};
+    emitter.v={0.f,0.f,.4f};
+    emitter.normal={0.f,-1.f,0.f};
+    emitter.emission=light->color*std::max(light->strength,0.f)*6.f;
+    emitter.albedo={0.f,0.f,0.f};
+    result.emitter=std::uint32_t(result.surfaces.size());
+    result.surfaces.push_back(emitter);
+    return result;
+}
 } // namespace
 void create()
 {
@@ -284,6 +349,12 @@ void create()
     shaders.fullscreen_shader = configured.fullscreen_shader;
     shaders.presentation_shader = configured.presentation_shader;
     pc::create(gbuffers, shaders);
+    std::vector<vk::ImageView> depth_views;
+    depth_views.reserve(count);
+    for(std::uint32_t i=0;i<count;++i)
+        depth_views.push_back(scene_renderer::outputs(i)[3]);
+    auto caustics=std::make_unique<optics::caustics>();
+    caustics->create(vk::swapchain::get()->extent,depth_views);
     std::vector<optics::input> material_frames;
     material_frames.reserve(count);
     for(std::uint32_t i=0;i<count;++i) {
@@ -291,12 +362,13 @@ void create()
         const auto optical=scene_renderer::optical_outputs(i);
         material_frames.push_back({
             pc::ldr_view(i),ordinary[3],optical[0],optical[1],
-            optical[2],optical[3]
+            optical[2],optical[3],caustics->buffer(i)
         });
     }
     auto compositor=std::make_unique<optics::compositor>();
     compositor->create(pc::presentation_pass(),material_frames);
     material_compositor=std::move(compositor);
+    photon_caustics=std::move(caustics);
 }
 
 void synchronize_scene()
@@ -304,22 +376,50 @@ void synchronize_scene()
     const auto source = connection::snapshot();
 
     if (source == registered) return;
-    if (source && registered && lighting_unchanged(*registered, *source)) {
-        registered = source;
-
-        return;
+    if (!(source && registered && lighting_unchanged(*registered, *source))) {
+        pc::set_scene(prepare_world(source.get()));
+        pc::synchronize_scene();
     }
-
-    pc::set_scene(prepare_world(source.get()));
-    pc::synchronize_scene();
-    registered = source;
+    if(photon_caustics)photon_caustics->set_photons({});
+    photon_transport.reset();
+    if(source && std::any_of(source->instances.begin(),source->instances.end(),
+        [](const auto& inst){return inst.pattern==2u || inst.pattern==3u;})) {
+        auto scene=photon_scene(*source);
+        if(scene) {
+            pm::configuration config{};
+            config.transport_only=true;
+            config.photons=4096;
+            config.gi_updates=32;
+            config.bounces=4;
+            config.atlas_tile=32;
+            auto mapper=std::make_unique<pm::mapper>();
+            mapper->create(*scene,{1,1},config);
+            const auto buffers=mapper->photon_buffers();
+            photon_caustics->set_photons({buffers.sorted,buffers.used,buffers.capacity});
+            photon_transport=std::move(mapper);
+        }
+    }
+    registered=source;
 }
 
 void release()
 {
     material_compositor.reset();
+    photon_caustics.reset();
+    photon_transport.reset();
     pc::release();
     registered.reset();
+}
+
+void update_photons(vk::CommandBuffer cmd,std::uint32_t image,
+                    const camera::frame& view)
+{
+    if(!photon_caustics || !scene_renderer::has_optics())return;
+    if(photon_transport)photon_transport->record_transport(cmd);
+    const auto extent=vk::swapchain::get()->extent;
+    const auto projection=vk::util::math::perspective(
+        view.pose.fov,float(extent.width)/float(extent.height),.1f,1000.f)*view.view;
+    photon_caustics->record(cmd,image,projection);
 }
 
 void present(vk::CommandBuffer cmd, std::uint32_t image, const camera::frame &view)
