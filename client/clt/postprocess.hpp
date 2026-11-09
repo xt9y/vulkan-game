@@ -119,6 +119,14 @@ bool lighting_unchanged(const ::scene::state &previous, const ::scene::state &in
         incoming.collision_boxes.size() != previous.collision_boxes.size() || incoming.skins.size() != previous.skins.size())
         return false;
 
+    for(std::size_t i=0;i<previous.instances.size();++i) {
+        const auto& a=previous.instances[i];
+        const auto& b=incoming.instances[i];
+        if(a.id!=b.id || ((a.editor_cube||b.editor_cube) &&
+           (a.revision!=b.revision || a.enabled!=b.enabled)))return false;
+    }
+    for(std::size_t i=previous.instances.size();i<incoming.instances.size();++i)
+        if(incoming.instances[i].editor_cube)return false;
     for (std::size_t i = 0; i < previous.lights.size(); ++i)
     {
         const auto &a = previous.lights[i], &b = incoming.lights[i];
@@ -189,6 +197,29 @@ std::shared_ptr<pc::world> prepare_world(const ::scene::state *source)
 
     for (const auto &box : source->collision_boxes)
         prepared->collision_boxes.push_back({box.minimum, box.maximum});
+    constexpr std::array<pc::surface_face,6> cube_faces{{
+        {{-.5f,-.5f,-.5f},{1,0,0},{0,0,1},{0,-1,0}},
+        {{-.5f,.5f,.5f},{1,0,0},{0,0,-1},{0,1,0}},
+        {{-.5f,-.5f,.5f},{1,0,0},{0,1,0},{0,0,1}},
+        {{.5f,-.5f,-.5f},{-1,0,0},{0,1,0},{0,0,-1}},
+        {{.5f,-.5f,.5f},{0,0,-1},{0,1,0},{1,0,0}},
+        {{-.5f,-.5f,-.5f},{0,0,1},{0,1,0},{-1,0,0}}
+    }};
+    for(const auto& cube:source->instances) {
+        if(!cube.enabled || !cube.editor_cube)continue;
+        const auto& scale=cube.pose.scale;
+        const auto& rotation=cube.pose.rotation;
+        const auto transform=[&](vec3 p) {
+            return rotate(rotation,{p.x*scale.x,p.y*scale.y,p.z*scale.z});
+        };
+        for(const auto& f:cube_faces) {
+            const vec3 u=transform(f.u),v=transform(f.v);
+            prepared->probe_faces.push_back({
+                cube.pose.position+transform(f.base),
+                u,v,normalize(cross(u,v))
+            });
+        }
+    }
     std::unordered_map<std::uint32_t, const ::scene::mesh *> mesh_lookup;
     mesh_lookup.reserve(source->meshes.size());
 
@@ -197,6 +228,7 @@ std::shared_ptr<pc::world> prepare_world(const ::scene::state *source)
 
     for (const auto &instance : source->instances)
     {
+        if(!instance.enabled)continue;
         const auto found = mesh_lookup.find(instance.mesh_id);
 
         if (found == mesh_lookup.end()) continue;
