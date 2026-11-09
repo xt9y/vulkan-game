@@ -281,7 +281,6 @@ std::max({t.a.x,t.b.x,t.c.x}), std::max({t.a.y,t.b.y,t.c.y}), std::max({t.a.z,t.
     }
 } // namespace weapon
 #include <filesystem>
-#include <array>
 #include <vk/vk.hpp>
 namespace weapon {
     enum class motion {
@@ -447,7 +446,6 @@ bool decode_batch(const std::vector<std::uint8_t>& bytes,batch_payload& result);
 #include <stb_image.h>
 #include <fastgltf/tools.hpp>
 #include <climits>
-#include <span>
 namespace srv::assets {
     namespace {
 std::span<const std::byte> encoded(const fastgltf::Asset& asset, const fastgltf::Image& image) {
@@ -1861,7 +1859,6 @@ game::options::init(argc, argv, game::options::mode::server_only, std::move(sett
     }
 }
 #include <jobs/pool.hpp>
-#include <network/endpoint.hpp>
 #include <chrono>
 #include <deque>
 namespace srv::session {
@@ -1899,8 +1896,6 @@ namespace srv::session {
     void expire(std::chrono::steady_clock::time_point now);
     void shutdown();
 } // namespace srv::session
-#include <network/endpoint.hpp>
-#include <network/session.hpp>
 #include <thread>
 namespace srv::application {
     using clock = std::chrono::steady_clock;

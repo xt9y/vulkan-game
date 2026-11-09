@@ -1291,8 +1291,8 @@ net::secure::wait_readable( data.socket, std::clamp( delay, 1ms, data.connected.
         }
     } // namespace
 } // namespace clt::connection
-#ifdef __APPLE__
 #include <cstdlib>
+#ifdef __APPLE__
 #include <dlfcn.h>
 namespace {
     PFN_vkGetInstanceProcAddr discover_loader() {
@@ -1684,7 +1684,6 @@ editor::vulkan::record(command, editor::instance().paint(int(extent.width),int(e
 }
 #include <gpu/graph.hpp>
 #include <gpu/upload.hpp>
-#include <cstdlib>
 namespace clt::renderer {
     namespace {
         static vk::Extent2D framebuffer_extent(vk::SurfaceCapabilitiesKHR caps) {
