@@ -881,17 +881,53 @@ namespace net::animation {
     std::optional<resource> decode(const std::uint8_t* data, std::size_t bytes);
 } // namespace net::animation
 #include <cstring>
+namespace net::movement::detail {
+        inline void put(std::uint8_t* p,std::uint32_t n) {
+            p[0]=std::uint8_t(n>>24);p[1]=std::uint8_t(n>>16);
+            p[2]=std::uint8_t(n>>8);p[3]=std::uint8_t(n);
+        }
+        inline std::uint32_t get(const std::uint8_t* p) {
+return (std::uint32_t(p[0])<<24)|(std::uint32_t(p[1])<<16)| (std::uint32_t(p[2])<<8)|std::uint32_t(p[3]);
+        }
+        inline void put_float(std::uint8_t* p,float v) {
+            std::uint32_t n;
+            std::memcpy(&n,&v,4);
+            put(p,n);
+        }
+        inline float get_float(const std::uint8_t* p) {
+            const auto n=get(p);
+            float v;
+            std::memcpy(&v,&n,4);
+            return v;
+        }
+        inline void write(std::uint8_t* p,std::uint32_t v){put(p,v);}
+        inline void write(std::uint8_t* p,float v){put_float(p,v);}
+        inline void read(const std::uint8_t* p,std::uint32_t& v){v=get(p);}
+        inline void read(const std::uint8_t* p,float& v){v=get_float(p);}
+        template<class... T>
+        void write_fields(std::uint8_t* p,const T&... values) {
+            ((write(p,values),p+=4),...);
+        }
+        template<class... T>
+        void read_fields(const std::uint8_t* p,T&... values) {
+            ((read(p,values),p+=4),...);
+        }
+        inline bool header(const std::uint8_t* p,std::size_t n,std::uint8_t kind) {
+return p&&n>=8&&p[0]=='V'&&p[1]=='M'&&p[2]=='O'&&p[3]=='V'&& p[4]==1&&p[5]==kind&&p[6]==0&&p[7]==0;
+        }
+    }
+
 namespace net::animation {
     packet encode(const resource& state) {
         packet p{'A','N','I','M'};
-net::movement::detail::fields(p.data()+4,1u,state.token,state.server_tick, state.instance_id,state.clip,state.start_tick,state.overlay, state.mask_root,state.blend);
+net::movement::detail::write_fields(p.data()+4,1u,state.token,state.server_tick, state.instance_id,state.clip,state.start_tick,state.overlay, state.mask_root,state.blend);
         return p;
     }
     std::optional<resource> decode(const std::uint8_t* p,std::size_t n) {
 if(!p||n!=packet{}.size()||p[0]!='A'||p[1]!='N'|| p[2]!='I'||p[3]!='M'||net::movement::detail::get(p+4)!=1u)
             return std::nullopt;
         resource v{};
-net::movement::detail::fields(p+8,v.token,v.server_tick,v.instance_id, v.clip,v.start_tick,v.overlay,v.mask_root,v.blend);
+net::movement::detail::read_fields(p+8,v.token,v.server_tick,v.instance_id, v.clip,v.start_tick,v.overlay,v.mask_root,v.blend);
 if(!v.token||!v.instance_id||!std::isfinite(v.blend)|| v.blend<0||v.blend>1)return std::nullopt;
         return v;
     }
@@ -899,7 +935,7 @@ if(!v.token||!v.instance_id||!std::isfinite(v.blend)|| v.blend<0||v.blend>1)retu
 namespace net::message {
     packet encode(const resource& message) {
         packet p{'V','G','A','M',1,std::uint8_t(message.type),0,0};
-net::movement::detail::fields(p.data()+8, message.sequence,message.token,message.value);
+net::movement::detail::write_fields(p.data()+8, message.sequence,message.token,message.value);
         return p;
     }
     std::optional<resource> decode(const std::uint8_t* p,std::size_t size) {
@@ -907,7 +943,7 @@ if(!p||size!=packet_size||p[0]!='V'||p[1]!='G'||p[2]!='A'|| p[3]!='M'||p[4]!=1||
             return std::nullopt;
         resource v{};
         v.type=type(p[5]);
-        net::movement::detail::fields(p+8,v.sequence,v.token,v.value);
+        net::movement::detail::read_fields(p+8,v.sequence,v.token,v.value);
         return v;
     }
     bool newer(std::uint32_t sequence,std::uint32_t previous) {
@@ -1247,64 +1283,29 @@ namespace net::movement {
         std::uint32_t token=0,sequence=0,tick=0;
         ::player::state player;
     };
-    namespace detail {
-        inline void put(std::uint8_t* p,std::uint32_t n) {
-            p[0]=std::uint8_t(n>>24);p[1]=std::uint8_t(n>>16);
-            p[2]=std::uint8_t(n>>8);p[3]=std::uint8_t(n);
-        }
-        inline std::uint32_t get(const std::uint8_t* p) {
-return (std::uint32_t(p[0])<<24)|(std::uint32_t(p[1])<<16)| (std::uint32_t(p[2])<<8)|std::uint32_t(p[3]);
-        }
-        inline void put_float(std::uint8_t* p,float v) {
-            std::uint32_t n;
-            std::memcpy(&n,&v,4);
-            put(p,n);
-        }
-        inline float get_float(const std::uint8_t* p) {
-            const auto n=get(p);
-            float v;
-            std::memcpy(&v,&n,4);
-            return v;
-        }
-        inline void write(std::uint8_t* p,std::uint32_t v){put(p,v);}
-        inline void write(std::uint8_t* p,float v){put_float(p,v);}
-        inline void read(const std::uint8_t* p,std::uint32_t& v){v=get(p);}
-        inline void read(const std::uint8_t* p,float& v){v=get_float(p);}
-        template<class... T>
-        void fields(std::uint8_t* p,const T&... values) {
-            ((write(p,values),p+=4),...);
-        }
-        template<class... T>
-        void fields(const std::uint8_t* p,T&... values) {
-            ((read(p,values),p+=4),...);
-        }
-        inline bool header(const std::uint8_t* p,std::size_t n,std::uint8_t kind) {
-return p&&n>=8&&p[0]=='V'&&p[1]=='M'&&p[2]=='O'&&p[3]=='V'&& p[4]==1&&p[5]==kind&&p[6]==0&&p[7]==0;
-        }
-    }
     inline input_packet encode(std::uint32_t token,const ::player::input& in) {
         input_packet p{'V','M','O','V',1,1,0,0};
-        detail::fields(p.data()+8,token,in.sequence,in.buttons,in.yaw);
+        detail::write_fields(p.data()+8,token,in.sequence,in.buttons,in.yaw);
         return p;
     }
     inline std::optional<command> decode_input(const std::uint8_t* p,std::size_t n) {
         if(n!=24||!detail::header(p,n,1))return std::nullopt;
         command v{};
-        detail::fields(p+8,v.token,v.input.sequence,v.input.buttons,v.input.yaw);
+        detail::read_fields(p+8,v.token,v.input.sequence,v.input.buttons,v.input.yaw);
 if(!v.token||!v.input.sequence|| (v.input.buttons&~::player::valid_buttons)|| !std::isfinite(v.input.yaw)||std::abs(v.input.yaw)>1000.f)
             return std::nullopt;
         return v;
     }
 inline parameters_packet encode_parameters(std::uint32_t token, const ::player::parameters_t& v) {
         parameters_packet p{'V','M','O','V',1,3,0,0};
-detail::fields(p.data()+8,token,v.spawn.x,v.spawn.y,v.spawn.z, v.walk_speed,v.sprint_speed,v.gravity,v.radius,v.height);
+detail::write_fields(p.data()+8,token,v.spawn.x,v.spawn.y,v.spawn.z, v.walk_speed,v.sprint_speed,v.gravity,v.radius,v.height);
         return p;
     }
 inline std::optional<player_parameters> decode_parameters(const std::uint8_t* p, std::size_t n) {
         if(n!=44||!detail::header(p,n,3))return std::nullopt;
         player_parameters v{};
         auto& x=v.values;
-detail::fields(p+8,v.token,x.spawn.x,x.spawn.y,x.spawn.z, x.walk_speed,x.sprint_speed,x.gravity,x.radius,x.height);
+detail::read_fields(p+8,v.token,x.spawn.x,x.spawn.y,x.spawn.z, x.walk_speed,x.sprint_speed,x.gravity,x.radius,x.height);
 if(!v.token||!std::isfinite(x.spawn.x)||!std::isfinite(x.spawn.y)|| !std::isfinite(x.spawn.z)||!std::isfinite(x.walk_speed)|| !std::isfinite(x.sprint_speed)||!std::isfinite(x.gravity)||
 !std::isfinite(x.radius)||!std::isfinite(x.height)|| x.walk_speed<=0||x.sprint_speed<=0||x.gravity<=0|| x.radius<=0||x.height<=0)return std::nullopt;
         return v;
@@ -1312,7 +1313,7 @@ if(!v.token||!std::isfinite(x.spawn.x)||!std::isfinite(x.spawn.y)|| !std::isfini
     inline state_packet encode(const snapshot& s) {
         state_packet p{'V','M','O','V',1,2,0,0};
         const auto& x=s.player;
-detail::fields(p.data()+8,s.token,s.sequence,s.tick, x.position.x,x.position.y,x.position.z, x.velocity.x,x.velocity.y,x.velocity.z, std::uint32_t(x.grounded));
+detail::write_fields(p.data()+8,s.token,s.sequence,s.tick, x.position.x,x.position.y,x.position.z, x.velocity.x,x.velocity.y,x.velocity.z, std::uint32_t(x.grounded));
         return p;
     }
 inline std::optional<snapshot> decode_snapshot(const std::uint8_t* p, std::size_t n) {
@@ -1320,7 +1321,7 @@ inline std::optional<snapshot> decode_snapshot(const std::uint8_t* p, std::size_
         snapshot s{};
         auto& x=s.player;
         std::uint32_t flag=0;
-detail::fields(p+8,s.token,s.sequence,s.tick, x.position.x,x.position.y,x.position.z, x.velocity.x,x.velocity.y,x.velocity.z,flag);
+detail::read_fields(p+8,s.token,s.sequence,s.tick, x.position.x,x.position.y,x.position.z, x.velocity.x,x.velocity.y,x.velocity.z,flag);
         x.grounded=flag==1;
         const auto finite=[](float v){
             return std::isfinite(v)&&std::abs(v)<1000000.f;
@@ -1353,14 +1354,14 @@ if(!v.token||!v.weapon_id||!v.active_weapon_id||reload>2|| outcome>std::uint32_t
 }
 command_packet encode_command(const command& v) {
     command_packet p{'V','G','U','N',2,1,0,0};
-net::movement::detail::fields(p.data()+8, v.token,v.sequence,std::uint32_t(v.kind),v.yaw,v.pitch,v.weapon_id);
+net::movement::detail::write_fields(p.data()+8, v.token,v.sequence,std::uint32_t(v.kind),v.yaw,v.pitch,v.weapon_id);
     return p;
 }
 std::optional<command> decode_command(const std::uint8_t* p,std::size_t n) {
     if(!header(p,n,command_packet{}.size(),1))return std::nullopt;
     command v{};
     std::uint32_t kind=0;
-    net::movement::detail::fields(p+8,v.token,v.sequence,kind,v.yaw,v.pitch,v.weapon_id);
+    net::movement::detail::read_fields(p+8,v.token,v.sequence,kind,v.yaw,v.pitch,v.weapon_id);
     v.kind=action(kind);
 if(!v.token||!v.sequence||!v.weapon_id||kind<1||kind>3|| !std::isfinite(v.yaw)||!std::isfinite(v.pitch)|| std::abs(v.yaw)>1000||std::abs(v.pitch)>1.570797f)
         return std::nullopt;
@@ -1379,7 +1380,7 @@ shot_packet encode_shot(const shot& v) {
     shot_packet p{'V','G','U','N',2,3,0,0};
     write_state(p.data(),v.state);
     const auto& h=v.impact;
-net::movement::detail::fields(p.data()+56,std::uint32_t(h.impacted), h.position.x,h.position.y,h.position.z, h.normal.x,h.normal.y,h.normal.z,h.instance,h.triangle);
+net::movement::detail::write_fields(p.data()+56,std::uint32_t(h.impacted), h.position.x,h.position.y,h.position.z, h.normal.x,h.normal.y,h.normal.z,h.instance,h.triangle);
     return p;
 }
 std::optional<shot> decode_shot(const std::uint8_t* p,std::size_t n) {
@@ -1390,7 +1391,7 @@ std::optional<shot> decode_shot(const std::uint8_t* p,std::size_t n) {
     v.state=*state;
     std::uint32_t impacted=0;
     auto& h=v.impact;
-net::movement::detail::fields(p+56,impacted, h.position.x,h.position.y,h.position.z, h.normal.x,h.normal.y,h.normal.z,h.instance,h.triangle);
+net::movement::detail::read_fields(p+56,impacted, h.position.x,h.position.y,h.position.z, h.normal.x,h.normal.y,h.normal.z,h.instance,h.triangle);
     if(impacted>1)return std::nullopt;
     h.impacted=impacted==1;
     const auto finite=[](float x){return std::isfinite(x)&&std::abs(x)<1000000.f;};
@@ -1669,7 +1670,7 @@ return coord(l.position.x)&&coord(l.position.y)&&coord(l.position.z)&& in(l.colo
     inline packet encode(const resource& v) {
 packet p{'V','L','I','T',1,std::uint8_t(v.type), std::uint8_t(v.light.enabled?1:0),0};
         const auto& l=v.light;
-net::movement::detail::fields(p.data()+8,v.token,v.sequence,v.index, v.revision,l.position.x,l.position.y,l.position.z,l.radius, l.color.x,l.color.y,l.color.z,l.strength);
+net::movement::detail::write_fields(p.data()+8,v.token,v.sequence,v.index, v.revision,l.position.x,l.position.y,l.position.z,l.radius, l.color.x,l.color.y,l.color.z,l.strength);
         return p;
     }
     inline std::optional<resource> decode(const std::uint8_t* p,std::size_t n) {
@@ -1677,7 +1678,7 @@ if(!p||n!=packet{}.size()||p[0]!='V'||p[1]!='L'|| p[2]!='I'||p[3]!='T'||p[4]!=1|
         resource v{};
         v.type=kind(p[5]);
         auto& l=v.light;
-net::movement::detail::fields(p+8,v.token,v.sequence,v.index, v.revision,l.position.x,l.position.y,l.position.z,l.radius, l.color.x,l.color.y,l.color.z,l.strength);
+net::movement::detail::read_fields(p+8,v.token,v.sequence,v.index, v.revision,l.position.x,l.position.y,l.position.z,l.radius, l.color.x,l.color.y,l.color.z,l.strength);
         l.enabled=p[6]!=0;
 if(!v.token||!v.sequence||!valid(l)|| (v.type==kind::create?v.index!=UINT32_MAX:v.index>=64))
             return std::nullopt;
