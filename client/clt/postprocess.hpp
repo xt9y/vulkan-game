@@ -293,8 +293,11 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
     for(const auto& inst:world.instances) {
         const auto it=std::find_if(world.meshes.begin(),world.meshes.end(),
             [&](const auto& mesh){return mesh.id==inst.mesh_id;});
-        if(it==world.meshes.end() || it->surface.alpha_mode==2)continue;
+        if(it==world.meshes.end())continue;
         const auto& mesh=*it;
+        // Match the raster pass's stable clip rule for blended hair cards.
+        if(mesh.surface.alpha_mode==2 && !mesh.surface.base_color_texture &&
+           mesh.surface.base_color[3]<.42f)continue;
         const auto transform=[&](vec3 p) {
             const auto& scale=inst.pose.scale;
             return inst.pose.position+rotate(inst.pose.rotation,
@@ -333,6 +336,9 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
             mapping.b={mesh.vertices[ib].u,mesh.vertices[ib].v};
             mapping.c={mesh.vertices[ic].u,mesh.vertices[ic].v};
             mapping.texture_id=mesh.surface.base_color_texture;
+            mapping.alpha_cutoff=mesh.surface.alpha_mode==1 ?
+                mesh.surface.alpha_cutoff :
+                mesh.surface.alpha_mode==2 ? .42f : 0.f;
             faces.push_back(mapping);
         }
     }
