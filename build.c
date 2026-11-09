@@ -21,13 +21,17 @@ static const pc_build_paths paths={
 static void compile_shaders(void)
 {
     if(pc_build_compile_shaders(paths,"build/shaders"))exit(1);
-    const char* shaders[]={"shd/mesh.vert","shd/mesh.frag","shd/cull.comp"};
+    const char* shaders[]={"shd/mesh.vert","shd/mesh.frag",
+        "shd/optics.frag","shd/cull.comp",
+        "third-party/vulkan-systems/optics/optics/shaders/compose.frag"};
     for(size_t i=0;i<sizeof(shaders)/sizeof(*shaders);++i)
     {
         const char* name=strrchr(shaders[i],'/');
         char output[256],command[640];
         struct stat source,binary;
-        snprintf(output,sizeof(output),"build/shaders/%s.spv",name?name+1:shaders[i]);
+        snprintf(output,sizeof(output),"build/shaders/%s%s.spv",
+                 strstr(shaders[i],"/optics/")?"optics_":"",
+                 name?name+1:shaders[i]);
         if(stat(shaders[i],&source))
         {
             fprintf(stderr,"Missing shader: %s\n",shaders[i]);
@@ -121,6 +125,9 @@ void build(C_Build* b)
     const pc_build_targets pc=pc_build_register(b,wrapper,paths);
     C_Target* network=make_module(b,"VulkanNetwork","network",NULL);
     C_Target* editor=make_module(b,"VulkanEditor","editor",wrapper);
+    C_Target* optics=make_module(b,"VulkanOptics","optics",wrapper);
+    c_link_target(optics,pc.render);
+    c_link_target(optics,pc.gpu);
 
     C_Dependency* crypto=c_git(b,"MbedTLS",
         "https://github.com/Mbed-TLS/mbedtls.git",
@@ -198,6 +205,8 @@ void build(C_Build* b)
     C_Target* client=c_executable(b,"vulkan-client");
     c_sources(client,"client/client.cpp");
     game_includes(client);
+    c_include(client,"third-party/vulkan-systems/optics");
+    c_link_target(client,optics);
     c_link_target(client,editor);
     pc_build_link(client,pc,wrapper);
     c_link_target(client,network);

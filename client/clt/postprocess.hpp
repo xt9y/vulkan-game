@@ -10,10 +10,12 @@
 #include <iterator>
 #include <memory>
 #include <pcloud/pcloud.hpp>
+#include <optics/optics.hpp>
 #include <vk/vk.hpp>
 
 namespace clt::postprocess
 {
+namespace { std::unique_ptr<optics::compositor> material_compositor; }
 void create();
 void synchronize_scene();
 void release();
@@ -282,6 +284,19 @@ void create()
     shaders.fullscreen_shader = configured.fullscreen_shader;
     shaders.presentation_shader = configured.presentation_shader;
     pc::create(gbuffers, shaders);
+    std::vector<optics::input> material_frames;
+    material_frames.reserve(count);
+    for(std::uint32_t i=0;i<count;++i) {
+        const auto ordinary=scene_renderer::outputs(i);
+        const auto optical=scene_renderer::optical_outputs(i);
+        material_frames.push_back({
+            pc::ldr_view(i),ordinary[3],optical[0],optical[1],
+            optical[2],optical[3]
+        });
+    }
+    auto compositor=std::make_unique<optics::compositor>();
+    compositor->create(pc::presentation_pass(),material_frames);
+    material_compositor=std::move(compositor);
 }
 
 void synchronize_scene()
@@ -302,14 +317,29 @@ void synchronize_scene()
 
 void release()
 {
+    material_compositor.reset();
     pc::release();
     registered.reset();
 }
 
 void present(vk::CommandBuffer cmd, std::uint32_t image, const camera::frame &view)
 {
-    pc::present(cmd, image, [view](vk::CommandBuffer command, vk::Extent2D extent)
+    pc::present(cmd, image, [view,image](vk::CommandBuffer command, vk::Extent2D extent)
                 {
+            if(material_compositor && scene_renderer::has_optics()) {
+                using namespace vk::util::math;
+                const float half_tan=std::tan(view.pose.fov*.5f);
+                const auto& v=view.view;
+                optics::camera params{};
+                params.view_projection=perspective(view.pose.fov,
+                    float(extent.width)/float(extent.height),.1f,1000.f)*v;
+                params.eye={view.eye.x,view.eye.y,view.eye.z,1.f};
+                params.right={v(0,0),v(0,1),v(0,2),
+                              half_tan*float(extent.width)/float(extent.height)};
+                params.up={v(1,0),v(1,1),v(1,2),half_tan};
+                params.forward={-v(2,0),-v(2,1),-v(2,2),0.f};
+                material_compositor->record(command,image,params);
+            }
             editor::draw_list commands;
             append_remote_players(commands,view,extent);
             auto ui=editor::instance().paint(int(extent.width),int(extent.height));
