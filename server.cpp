@@ -1459,12 +1459,15 @@ v.position.x*pose.scale.x,v.position.y*pose.scale.y, v.position.z*pose.scale.z};
     }
     return boxes;
 }
+std::vector<spatial::bounds> collision_bounds(const collision_world& boxes) {
+    std::vector<spatial::bounds> result;
+    result.reserve(boxes.size());
+    for(const auto& box:boxes)result.push_back({box.min,box.max});
+    return result;
+}
 spatial::index build_index(const collision_world& boxes) {
-    std::vector<spatial::bounds> bounds;
-    bounds.reserve(boxes.size());
-    for(const auto& box:boxes)bounds.push_back({box.min,box.max});
     spatial::index index;
-    index.rebuild(std::move(bounds));
+    index.rebuild(collision_bounds(boxes));
     return index;
 }
 void step(state& p,const input& keys,const collision_world& world, const spatial::index* broadphase) {
@@ -2060,11 +2063,6 @@ combined.skins.insert(combined.skins.end(), std::make_move_iterator(imported.ski
             data.scene.meshes.push_back(std::move(mesh));
         ::weapon::append(data.weapon_world,data.scene.meshes, patch.instances);
         auto added_colliders = player::build_colliders(data.scene.meshes, patch.instances);
-        std::vector<spatial::bounds> boxes;
-        boxes.reserve(added_colliders.size());
-        for (const auto& collider : added_colliders) {
-            boxes.push_back({collider.min, collider.max});
-        }
         for (auto& instance : patch.instances) 
             data.scene.instances.push_back(std::move(instance));
         for (auto& box : patch.collision_boxes) 
@@ -2074,7 +2072,7 @@ combined.skins.insert(combined.skins.end(), std::make_move_iterator(imported.ski
             data.editor_light_versions.push_back(data.editor_light_revision);
         }
 data.colliders.insert( data.colliders.end(), added_colliders.begin(), added_colliders.end() );
-        data.collision_index.append(boxes);
+        data.collision_index.append(player::collision_bounds(added_colliders));
         data.scene_batches.push_back({std::move(bytes),final});
     }
     int run() {

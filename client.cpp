@@ -1456,11 +1456,7 @@ bool append = previous_scene && scene->meshes.size() == previous_scene->meshes.s
                     if (append) {
 const auto added=std::span<const ::scene::instance>(scene->instances).subspan(previous_scene->instances.size());
                         auto new_boxes=::player::build_colliders(scene->meshes,added);
-                        std::vector<spatial::bounds> bounds;
-                        bounds.reserve(new_boxes.size());
-                        for (const auto& b : new_boxes)
-                            bounds.push_back({b.min,b.max});
-                        index.append(bounds);
+                        index.append(::player::collision_bounds(new_boxes));
                         colliders.insert(colliders.end(),new_boxes.begin(),new_boxes.end());
                     } else {
                         colliders = ::player::build_colliders(*scene);
