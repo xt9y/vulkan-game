@@ -1,4 +1,3 @@
-#include <tuple>
 #define VULKAN_GAME_SHARED_ONLY
 #include "../server/server.cpp"
 #undef VULKAN_GAME_SHARED_ONLY
@@ -67,7 +66,6 @@
 #include <gpu/texture_cache.hpp>
 #include <climits>
 
-#define GLFW_INCLUDE_VULKAN
 #include "clt/animation.hpp"
 #include "clt/vulkan_loader.hpp"
 #include "clt/window.hpp"
