@@ -1,26 +1,25 @@
-vulkan-game: two source files
+vulkan-game: one client source and one server source
 
-Only client.cpp and server.cpp are compiled as game application sources.
-The source content is an inlined amalgamation of the original full-feature
-implementation at main e21c3a280e: rendering, editor, asset import,
-animation, networking, movement, weapon logic, and server authority.
-Shaders and original game assets remain separate data files.
+Application code lives in server/server.cpp and client/client.cpp.
+The client includes the shared portion of the server source; these are the
+only two application translation units. Shaders and game assets stay at the
+repository root, so runtime paths are unchanged.
 
-The renderer uses VulkanWrapper and VulkanSystems modules. Other external
-dependencies are still required for original behavior: GLFW (window/input),
-fastgltf (GLB import), Ozz (rigs/animation), stb (image decode), and
-Mbed TLS (DTLS). Those are preserved by build.c; removing them requires
-replacement implementations and is not part of this amalgamation.
+VulkanWrapper, VulkanSystems and Vulkan-Headers are pinned Git submodules.
+The game build reuses the PCloud integration supplied by VulkanSystems for
+GPU, Render, BVH, Spatial, Jobs, PCloud and their shaders. Network and Editor
+are compiled locally from that same submodule. GLFW (window/input), fastgltf
+(GLB import), Ozz (animation), stb (images), and Mbed TLS (DTLS) are still
+required third-party dependencies, handled by c.
 
-Build:
+First build after cloning:
   git submodule update --init --recursive
   c build vulkan-server
   c build vulkan-client
 
-Run:
+Run from the repository root:
   c build run vulkan-server
   c build run vulkan-client
 
-IMPORTANT: The full native build and runtime visual/feature parity have not
-yet been verified in a Vulkan/MoltenVK environment. Do not treat source-level
-amalgamation alone as a validated engine rewrite.
+The previous source layout and build were runtime-tested. After this
+reorganization, compile and runtime verification are required again.

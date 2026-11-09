@@ -1,6 +1,6 @@
 #include <tuple>
 #define VULKAN_GAME_SHARED_ONLY
-#include "server.cpp"
+#include "../server/server.cpp"
 #undef VULKAN_GAME_SHARED_ONLY
 #include <pcloud/pcloud.hpp>
 #include <cstdint>
