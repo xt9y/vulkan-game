@@ -5,6 +5,7 @@
 #include <vk/vk.hpp>
 #include <array>
 #include <cstdint>
+#include <cstddef>
 #include <filesystem>
 #include <span>
 #include <string>

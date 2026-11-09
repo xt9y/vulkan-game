@@ -1,6 +1,9 @@
 vulkan-game: one client source and one server source
 
-Application code lives in server/server.cpp and client/client.cpp.
+Application implementations stay in server/server.cpp and client/client.cpp.
+Each non-game namespace has a matching declaration header in its own folder;
+inline helpers and function bodies remain in the existing .cpp sources.
+The game:: and game_weapons namespaces remain inside the source files.
 The client includes the shared portion of the server source; these are the
 only two application translation units. Shaders and game assets stay at the
 repository root, so runtime paths are unchanged.
