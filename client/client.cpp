@@ -78,7 +78,6 @@
 #include "clt/scene_renderer.hpp"
 #include "clt/postprocess.hpp"
 #include "clt/renderer.hpp"
-#include "clt/application.hpp"
 
 static constexpr std::uint64_t editor_light_ids=1ull<<32;
 static std::vector<editor::property> light_properties( const ::scene::point_light& light) {
@@ -190,6 +189,8 @@ clt::weapon::controls( clt::input::mouse_down(keys.trigger_button), clt::input::
     static void stop(int) {
         game::application::get()->stop.store(true, std::memory_order_relaxed);
     }
+
+#include "clt/application.hpp"
 
 int main(int argc, char** argv) {
     try {
