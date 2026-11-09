@@ -17,6 +17,7 @@
 #include <exception>
 #include <iostream>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <network/endpoint.hpp>
@@ -48,10 +49,10 @@ struct state
     std::shared_ptr<const ::scene::state> scene;
     std::vector<::scene::state> pending_scene;
     std::chrono::steady_clock::time_point last_publish{};
+    std::map<std::uint32_t, net::editor_cube::resource> cube_states;
+    bool cubes_dirty = false;
     std::array<std::uint32_t, 64> light_versions{};
     std::array<std::optional<net::editor_light::resource>, 64> light_pending{};
-    std::unordered_map<std::uint32_t,std::uint32_t> cube_versions;
-    std::unordered_map<std::uint32_t,net::editor_cube::resource> cube_pending;
     std::mutex error_mutex;
     std::exception_ptr worker_error;
     std::mutex player_mutex;
@@ -63,8 +64,9 @@ struct state
     std::chrono::steady_clock::time_point peers_received{};
     std::mutex editor_mutex;
     std::deque<net::editor_light::resource> editor_outgoing;
+    std::uint32_t editor_sequence = 0;
     std::deque<net::editor_cube::resource> cube_outgoing;
-    std::uint32_t editor_sequence = 0, cube_sequence=0;
+    std::uint32_t cube_sequence = 0;
     std::mutex weapon_mutex;
     std::deque<net::weapon::command> weapon_outgoing;
     std::deque<net::weapon::snapshot> weapon_updates;
@@ -113,10 +115,10 @@ void reset_scene(state &data)
     data.scene.reset();
     data.pending_scene.clear();
     data.last_publish = {};
+    data.cube_states.clear();
+    data.cubes_dirty = false;
     data.light_versions.fill(0);
     data.light_pending.fill(std::nullopt);
-    data.cube_pending.clear();
-    data.cube_versions.clear();
     {
         std::lock_guard peers_lock(data.peers_mutex);
         data.peers = {};
@@ -137,8 +139,8 @@ void reset_queues(state &data, bool reset_parameters)
         std::lock_guard lock(data.editor_mutex);
         data.editor_outgoing.clear();
         data.cube_outgoing.clear();
-        data.editor_sequence = 0;
         data.cube_sequence = 0;
+        data.editor_sequence = 0;
     }
 
     reset_scene(data);
@@ -162,7 +164,7 @@ std::shared_ptr<const scene::state> snapshot()
             break;
         }
 
-    if (data.pending_scene.empty() && data.cube_pending.empty() && (!pending_light || !data.scene))
+    if (data.pending_scene.empty() && (!data.scene || (!pending_light && !data.cubes_dirty)))
         return data.scene;
 
     const auto now = clock::now();
@@ -192,28 +194,15 @@ std::shared_ptr<const scene::state> snapshot()
     append(&::scene::state::skins);
     append(&::scene::state::textures);
     append(&::scene::state::meshes);
-    std::size_t new_instances=0;
-    for(const auto& patch:data.pending_scene)new_instances+=patch.instances.size();
-    combined->instances.reserve(combined->instances.size()+new_instances+data.cube_pending.size());
-    std::unordered_map<std::uint32_t,std::size_t> instance_indices;
-    if(new_instances || !data.cube_pending.empty()) {
-        instance_indices.reserve(combined->instances.capacity());
-        for(std::size_t i=0;i<combined->instances.size();++i)
-            instance_indices.emplace(combined->instances[i].id,i);
-    }
-    for(auto& patch:data.pending_scene)
-        for(auto& instance:patch.instances) {
-            const auto found=instance_indices.find(instance.id);
-            if(found==instance_indices.end()) {
-                if(instance.editor_cube && data.cube_versions[instance.id]>instance.revision)continue;
-                const auto id=instance.id;
-                instance_indices.emplace(id,combined->instances.size());
-                combined->instances.push_back(std::move(instance));
-            }else {
-                auto& current=combined->instances[found->second];
-                if(!current.editor_cube || instance.revision>current.revision)
-                    current=std::move(instance);
-            }
+    std::unordered_map<std::uint32_t, std::size_t> instance_slots;
+    instance_slots.reserve(combined->instances.size());
+    for (std::size_t i = 0; i < combined->instances.size(); ++i)
+        instance_slots.emplace(combined->instances[i].id, i);
+    for (auto &patch : data.pending_scene)
+        for (auto &instance : patch.instances) {
+            const auto [slot, inserted] = instance_slots.emplace(instance.id, combined->instances.size());
+            if (inserted) combined->instances.push_back(std::move(instance));
+            else combined->instances[slot->second] = std::move(instance);
         }
     append(&::scene::state::collision_boxes);
     append(&::scene::state::lights);
@@ -242,21 +231,12 @@ std::shared_ptr<const scene::state> snapshot()
         pending.reset();
     }
 
-    for(auto& [id,update]:data.cube_pending) {
-        const auto found=instance_indices.find(id);
-        if(found==instance_indices.end()) {
-            instance_indices.emplace(id,combined->instances.size());
-            combined->instances.push_back(update.cube);
-            changed=true;
-        }else {
-            auto& current=combined->instances[found->second];
-            if(!current.editor_cube || update.revision>current.revision) {
-                current=update.cube;
-                changed=true;
-            }
-        }
-    }
-    data.cube_pending.clear();
+    // Retain authoritative values even after publication: a later stream batch
+    // may still contain the cube's pre-edit pose or a deleted cube.
+    for (const auto &[id, update] : data.cube_states)
+        changed = net::editor_cube::apply_state(*combined, update) || changed;
+    data.cubes_dirty = false;
+
     if (data.pending_scene.empty() && !changed) return data.scene;
     data.scene = std::move(combined);
     data.pending_scene.clear();
@@ -295,19 +275,21 @@ bool send_editor_light(net::editor_light::resource command)
     return true;
 }
 
-bool send_editor_cube(net::editor_cube::resource command) {
-    auto& data=*get();
-    if(command.type!=net::editor_cube::kind::create &&
-       command.type!=net::editor_cube::kind::edit &&
-       command.type!=net::editor_cube::kind::remove)return false;
-    if(!net::editor_cube::valid(command.cube) || !data.connected.load(std::memory_order_relaxed))return false;
+bool send_editor_cube(net::editor_cube::resource command)
+{
+    using namespace net::editor_cube;
+    if ((command.type != kind::create && command.type != kind::edit && command.type != kind::remove) ||
+        !valid(command.cube) || !get()->connected.load(std::memory_order_relaxed)) return false;
+    auto &data = *get();
     std::lock_guard lock(data.editor_mutex);
-    if(data.cube_outgoing.size()>=64)return false;
-    command.sequence=++data.cube_sequence;
-    if(!command.sequence)command.sequence=++data.cube_sequence;
+    if (data.cube_outgoing.size() >= 64) return false;
+    command.sequence = ++data.cube_sequence;
+    if (!command.sequence) command.sequence = ++data.cube_sequence;
+    command.index = command.type == kind::create ? UINT32_MAX : command.index;
     data.cube_outgoing.push_back(command);
     return true;
 }
+
 bool send_weapon(net::weapon::command command)
 {
     auto &data = *get();
@@ -459,10 +441,10 @@ void run(const std::string &host, std::uint16_t port)
         auto next_weapon_send = next_send;
         auto next_editor_send = next_send;
         auto next_cube_send = next_send;
+        std::uint32_t cube_retry_sequence = 0, cube_retry_attempts = 0;
 
         std::uint32_t editor_retry_sequence = 0;
         std::uint32_t editor_retry_attempts = 0;
-        std::uint32_t cube_retry_sequence = 0, cube_retry_attempts = 0;
 
         auto last_received = next_send;
         auto retry = std::chrono::milliseconds(net::limits::retry_ms);
@@ -483,6 +465,7 @@ void run(const std::string &host, std::uint16_t port)
                 std::lock_guard<std::mutex> lock(data.editor_mutex);
                 data.editor_outgoing.clear();
                 data.cube_outgoing.clear();
+                cube_retry_sequence = cube_retry_attempts = 0;
             }
 
             transport.clear();
@@ -525,28 +508,24 @@ void run(const std::string &host, std::uint16_t port)
                     break;
 
                 if (!net::endpoint::equal(peer, server)) continue;
-                if(const auto update=net::editor_cube::decode(buffer.data(),*size)) {
-                    if(update->token==token && data.connected.load(std::memory_order_relaxed) &&
-                       (update->type==net::editor_cube::kind::state ||
-                        update->type==net::editor_cube::kind::ack)) {
-                        if(update->type==net::editor_cube::kind::ack) {
+                if (const auto update = net::editor_cube::decode(buffer.data(), *size)) {
+                    if (update->token == token && data.connected.load(std::memory_order_relaxed) &&
+                        (update->type == net::editor_cube::kind::state || update->type == net::editor_cube::kind::ack)) {
+                        if (update->type == net::editor_cube::kind::ack) {
                             std::lock_guard lock(data.editor_mutex);
-                            if(!data.cube_outgoing.empty() &&
-                               data.cube_outgoing.front().sequence==update->sequence)
+                            if (!data.cube_outgoing.empty() && data.cube_outgoing.front().sequence == update->sequence)
                                 data.cube_outgoing.pop_front();
                         }
                         {
                             std::lock_guard lock(data.scene_mutex);
-                            auto& revision=data.cube_versions[update->id];
-                            if(net::message::newer(update->revision,revision)) {
-                                revision=update->revision;
-                                auto record=*update;
-                                record.cube.mesh_id=2u;
-                                record.cube.revision=update->revision;
-                                data.cube_pending[update->id]=record;
+                            const auto found = data.cube_states.find(update->index);
+                            if ((found == data.cube_states.end() && data.cube_states.size() < net::editor_cube::max_cubes) ||
+                                (found != data.cube_states.end() && net::message::newer(update->revision, found->second.revision))) {
+                                data.cube_states[update->index] = *update;
+                                data.cubes_dirty = true;
                             }
                         }
-                        last_received=now;
+                        last_received = now;
                     }
                     continue;
                 }
@@ -846,6 +825,34 @@ void run(const std::string &host, std::uint16_t port)
                 unacknowledged.clear();
             }
 
+            if (data.connected.load(std::memory_order_relaxed) && now >= next_cube_send) {
+                std::optional<net::editor_cube::resource> pending;
+                {
+                    std::lock_guard lock(data.editor_mutex);
+                    if (!data.cube_outgoing.empty()) pending = data.cube_outgoing.front();
+                }
+                if (pending) {
+                    if (pending->sequence != cube_retry_sequence) {
+                        cube_retry_sequence = pending->sequence;
+                        cube_retry_attempts = 0;
+                    }
+                    if (cube_retry_attempts++ < 100u) {
+                        pending->token = token;
+                        const auto bytes = net::editor_cube::encode(*pending);
+                        net::secure::send(data.socket, server, bytes.data(), bytes.size());
+                    }
+                    else {
+                        std::lock_guard lock(data.editor_mutex);
+                        if (!data.cube_outgoing.empty() && data.cube_outgoing.front().sequence == pending->sequence)
+                            data.cube_outgoing.pop_front();
+                        std::clog << "clt: editor cube request not acknowledged (check server editor permissions)\n";
+                        cube_retry_sequence = cube_retry_attempts = 0;
+                    }
+                }
+                else cube_retry_sequence = cube_retry_attempts = 0;
+                next_cube_send = now + 50ms;
+            }
+
             if (data.connected.load(std::memory_order_relaxed) && now >= next_editor_send) {
                 std::optional<net::editor_light::resource> pending;
                 {
@@ -886,32 +893,6 @@ void run(const std::string &host, std::uint16_t port)
                 next_editor_send = now + 50ms;
             }
 
-            if(data.connected.load(std::memory_order_relaxed) && now>=next_cube_send) {
-                std::optional<net::editor_cube::resource> pending;
-                {
-                    std::lock_guard lock(data.editor_mutex);
-                    if(!data.cube_outgoing.empty())pending=data.cube_outgoing.front();
-                }
-                if(pending) {
-                    if(pending->sequence!=cube_retry_sequence) {
-                        cube_retry_sequence=pending->sequence;
-                        cube_retry_attempts=0;
-                    }
-                    if(cube_retry_attempts++<100u) {
-                        pending->token=token;
-                        const auto bytes=net::editor_cube::encode(*pending);
-                        net::secure::send(data.socket,server,bytes.data(),bytes.size());
-                    }else {
-                        std::lock_guard lock(data.editor_mutex);
-                        if(!data.cube_outgoing.empty() &&
-                           data.cube_outgoing.front().sequence==pending->sequence)
-                            data.cube_outgoing.pop_front();
-                        std::clog<<"clt: cube edit not acknowledged (requires loopback server)\n";
-                        cube_retry_sequence=cube_retry_attempts=0;
-                    }
-                }else cube_retry_sequence=cube_retry_attempts=0;
-                next_cube_send=now+50ms;
-            }
             auto wake = data.connected.load(std::memory_order_relaxed) && !scene_ready
                             ? std::min(next_send, next_scene_send)
                             : next_send;

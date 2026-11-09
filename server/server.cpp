@@ -110,22 +110,21 @@ static ::scene::state make_level()
     world.meshes.push_back(box_mesh(1, {10, .1f, 10}, true));
     world.meshes.push_back(box_mesh(2, {.5f, .5f, .5f}));
 
-    const auto place = [&](std::uint32_t id, std::uint32_t mesh, vec3 pos, vec3 half)
+    const auto place = [&](std::uint32_t id, std::uint32_t mesh, vec3 pos)
     {
         ::scene::instance instance{};
         instance.id = id;
         instance.mesh_id = mesh;
         instance.pose.position = pos;
-        instance.editor_cube = mesh == 2;
-        instance.revision = instance.editor_cube ? 1u : 0u;
         world.instances.push_back(instance);
-        if(mesh!=2)world.collision_boxes.push_back({pos - half, pos + half});
     };
 
-    place(1, 1, {0, -.1f, 0}, {10, .1f, 10});
-    place(2, 2, {-2, .5f, 0}, {.5f, .5f, .5f});
-    place(3, 2, {0, .5f, 0}, {.5f, .5f, .5f});
-    place(4, 2, {2, .5f, 0}, {.5f, .5f, .5f});
+    place(1, 1, {0, -.1f, 0});
+    // Static room probe surface; editable cubes supply transformed probe faces.
+    world.collision_boxes.push_back({{-10, -.2f, -10}, {10, 0, 10}});
+    place(2, 2, {-2, .5f, 0});
+    place(3, 2, {0, .5f, 0});
+    place(4, 2, {2, .5f, 0});
     ::scene::transform mermaid{};
     mermaid.position = {0, 1, .5f / 3.f};
     mermaid.scale = {1.5f, 1.5f, 1.5f};

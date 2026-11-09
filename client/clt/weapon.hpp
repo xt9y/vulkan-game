@@ -31,7 +31,7 @@ struct instance_data
 {
     vk::util::math::mat4 model;
     vk::util::math::mat4 normal;
-    std::array<float,4> appearance{1,1,1,0};
+    vk::util::math::vec4 tint{1, 1, 1, -1};
 };
 
 struct draw
@@ -707,7 +707,7 @@ const std::vector<draw> &update(const mat4 &view)
     }
 
     if (scene != data.collision_source) {
-        bool appended = data.collision_source && scene && scene->meshes.size() == data.collision_source->meshes.size() && scene->instances.size() >= data.collision_source->instances.size();
+        bool appended = data.collision_source && scene && ::scene::geometry_prefix_unchanged(*data.collision_source, *scene);
 
         if (scene) {
             if (!appended) data.collision = {};

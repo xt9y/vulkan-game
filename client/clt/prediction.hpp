@@ -60,27 +60,7 @@ void run()
                 configured = true;
             }
             if (scene != previous_scene) {
-                // Edited instances can move or disappear without changing vector size.
-                bool append = previous_scene && scene->meshes.size() == previous_scene->meshes.size() &&
-                              scene->instances.size() > previous_scene->instances.size();
-                if(append)
-                    for(std::size_t i=0;i<previous_scene->instances.size();++i) {
-                        const auto& a=previous_scene->instances[i];
-                        const auto& b=scene->instances[i];
-                        const auto& p=a.pose.position,&q=b.pose.position;
-                        if(a.id!=b.id||a.enabled!=b.enabled||
-                           p.x!=q.x||p.y!=q.y||p.z!=q.z||
-                           a.pose.scale.x!=b.pose.scale.x||
-                           a.pose.scale.y!=b.pose.scale.y||
-                           a.pose.scale.z!=b.pose.scale.z||
-                           a.pose.rotation.x!=b.pose.rotation.x||
-                           a.pose.rotation.y!=b.pose.rotation.y||
-                           a.pose.rotation.z!=b.pose.rotation.z||
-                           a.pose.rotation.w!=b.pose.rotation.w) {
-                            append=false;
-                            break;
-                        }
-                    }
+                bool append = previous_scene && ::scene::geometry_prefix_unchanged(*previous_scene, *scene);
                 if (append) {
                     const auto added = std::span<const ::scene::instance>(scene->instances).subspan(previous_scene->instances.size());
                     auto new_boxes = ::player::build_colliders(scene->meshes, added);

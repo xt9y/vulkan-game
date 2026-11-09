@@ -25,9 +25,10 @@ struct resource
     ::weapon::state weapon;
     std::uint32_t weapon_sequence = 0;
     std::deque<net::weapon::command> weapon_commands;
+    std::uint32_t editor_cube_sequence = 0;
+    std::uint32_t editor_cube_index = UINT32_MAX;
     std::uint32_t editor_light_sequence = 0;
     std::uint32_t editor_light_index = UINT32_MAX;
-    std::uint32_t editor_cube_sequence = 0, editor_cube_id = UINT32_MAX;
     struct pending_shot
     {
         net::weapon::shot value;

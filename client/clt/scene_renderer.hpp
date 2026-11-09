@@ -11,7 +11,6 @@
 #include <gpu/descriptors.hpp>
 #include <gpu/resource.hpp>
 #include <map>
-#include <unordered_set>
 #include <memory>
 #include <pcloud/pcloud.hpp>
 #include <render/attachments.hpp>
@@ -478,9 +477,8 @@ void append_instance(gpu_mesh &mesh, const ::scene::instance &instance)
     const float max_scale = std::max({std::abs(pose.scale.x), std::abs(pose.scale.y), std::abs(pose.scale.z)});
 
     mesh.instances.push_back(instance);
-    mesh.transforms.push_back({trs(pose.position, pose.rotation, pose.scale),
-        rotation(pose.rotation) * scale(inverse),
-        {instance.tint.x,instance.tint.y,instance.tint.z,float(instance.pattern)}});
+    mesh.transforms.push_back({trs(pose.position, pose.rotation, pose.scale), rotation(pose.rotation) * scale(inverse),
+                               {instance.tint.x, instance.tint.y, instance.tint.z, instance.pattern == UINT32_MAX ? -1.f : float(instance.pattern)}});
 
     const auto position = pose.position + rotate(pose.rotation, center);
     mesh.bounds.push_back({position.x, position.y, position.z, mesh.radius * max_scale});
@@ -582,60 +580,32 @@ void synchronize()
 
     if (source == data.snapshot) return;
 
-    bool appended = data.snapshot && source && source->textures.size() >= data.snapshot->textures.size() && source->meshes.size() == data.snapshot->meshes.size() && source->instances.size() >= data.snapshot->instances.size();
+    const bool retained = data.snapshot && source && source->textures.size() >= data.snapshot->textures.size() &&
+                          source->meshes.size() == data.snapshot->meshes.size();
 
-    if (appended) {
-        const auto& before=data.snapshot->instances;
-        std::unordered_set<std::uint32_t> changed_meshes;
-        for(std::size_t i=0;i<before.size();++i) {
-            const auto& a=before[i],&b=source->instances[i];
-            const auto& x=a.pose.position,&y=b.pose.position;
-            const auto& s=a.pose.scale,&t=b.pose.scale;
-            const auto& q=a.pose.rotation,&r=b.pose.rotation;
-            if(a.id!=b.id||a.enabled!=b.enabled||a.pattern!=b.pattern||
-               x.x!=y.x||x.y!=y.y||x.z!=y.z||
-               s.x!=t.x||s.y!=t.y||s.z!=t.z||
-               q.x!=r.x||q.y!=r.y||q.z!=r.z||q.w!=r.w||
-               a.tint.x!=b.tint.x||a.tint.y!=b.tint.y||a.tint.z!=b.tint.z) {
-                changed_meshes.insert(a.mesh_id);
-                changed_meshes.insert(b.mesh_id);
-            }
-        }
-        for(std::size_t i=before.size();i<source->instances.size();++i)
-            changed_meshes.insert(source->instances[i].mesh_id);
+    if (retained) {
         animation::synchronize(*source);
-        if(source->textures.size()!=data.snapshot->textures.size())
-            texture::synchronize(*source);
-        if(changed_meshes.empty()) {
-            data.snapshot=source;
-            return;
-        }
-        std::unordered_map<std::uint32_t,std::size_t> lookup;
-        for(std::size_t i=0;i<data.meshes.size();++i) {
-            auto& mesh=data.meshes[i];
-            if(!changed_meshes.contains(mesh.id))continue;
-            lookup.emplace(mesh.id,i);
-            mesh.instances.clear();
-            mesh.transforms.clear();
-            mesh.bounds.clear();
-        }
-        for(const auto& instance:source->instances) {
-            if(!instance.enabled)continue;
-            const auto found=lookup.find(instance.mesh_id);
-            if(found!=lookup.end())
-                append_instance(data.meshes[found->second],instance);
-        }
-        bool needs_sets=false;
+        if (source->textures.size() != data.snapshot->textures.size()) texture::synchronize(*source);
+        std::unordered_map<std::uint32_t, std::vector<::scene::instance>> grouped;
+        for (const auto &instance : source->instances) grouped[instance.mesh_id].push_back(instance);
         gpu::upload::batch upload;
-        for(auto& mesh:data.meshes) {
-            if(!changed_meshes.contains(mesh.id) || mesh.transforms.empty())continue;
-            if(mesh.frames.empty() || !mesh.frames.front().set)needs_sets=true;
-            refresh_instances(mesh,0,&upload);
+        bool activate = false;
+        for (auto &mesh : data.meshes) {
+            const auto &incoming = grouped[mesh.id];
+            std::size_t first = 0;
+            while (first < mesh.instances.size() && first < incoming.size() &&
+                   ::scene::same_geometry(mesh.instances[first], incoming[first])) ++first;
+            if (first == mesh.instances.size() && first == incoming.size()) continue;
+            activate = activate || (mesh.instances.empty() && !incoming.empty());
+            mesh.instances.resize(first);
+            mesh.transforms.resize(first);
+            mesh.bounds.resize(first);
+            for (std::size_t i = first; i < incoming.size(); ++i) append_instance(mesh, incoming[i]);
+            refresh_instances(mesh, first, &upload);
         }
         upload.finish();
-        if(needs_sets)rebuild_instance_frames();
+        if (activate) rebuild_instance_frames();
         data.snapshot = source;
-
         return;
     }
 
@@ -678,7 +648,6 @@ void synchronize()
 
         for (const auto &instance : source->instances)
         {
-            if(!instance.enabled)continue;
             const auto found = lookup.find(instance.mesh_id);
 
             if (found != lookup.end() && fresh[found->second].index_count)

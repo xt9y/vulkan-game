@@ -8,6 +8,8 @@
 
 namespace scene
 {
+// The level reserves mesh 2 for shared editable unit-cube geometry.
+inline constexpr std::uint32_t unit_cube_mesh_id = 2;
 struct texture
 {
     std::uint32_t id = 0;
@@ -93,11 +95,10 @@ struct instance
     float overlay_weight = 0.0f;
     transform pose;
     vk::util::math::vec3 tint{1, 1, 1};
-    vk::util::math::vec3 angles{}; // Editor Euler degrees; rendering uses pose.rotation.
-    std::uint32_t pattern = 0;
-    std::uint32_t revision = 0;
-    bool editor_cube = false;
-    bool enabled = true;
+    std::uint32_t pattern = UINT32_MAX; // Inherit mesh pattern, or override with solid/checker.
+    // Editor reference selects continuous Euler controls at/through the poles.
+    // Rendering and simulation always consume pose.rotation.
+    vk::util::math::vec3 rotation_reference{};
 };
 
 struct collision_box
@@ -127,4 +128,28 @@ struct state
     std::vector<collision_box> collision_boxes;
     std::vector<point_light> lights;
 };
+inline bool same_pose(const instance &a, const instance &b)
+{
+    const auto fields = [](const instance &i) {
+        const auto &p = i.pose;
+        return std::array{p.position.x, p.position.y, p.position.z, p.scale.x, p.scale.y, p.scale.z,
+                          p.rotation.x, p.rotation.y, p.rotation.z, p.rotation.w};
+    };
+    return a.id == b.id && a.mesh_id == b.mesh_id && fields(a) == fields(b);
+}
+
+inline bool same_geometry(const instance &a, const instance &b)
+{
+    return same_pose(a, b) && a.tint.x == b.tint.x && a.tint.y == b.tint.y && a.tint.z == b.tint.z && a.pattern == b.pattern &&
+           a.rotation_reference.x == b.rotation_reference.x && a.rotation_reference.y == b.rotation_reference.y &&
+           a.rotation_reference.z == b.rotation_reference.z;
+}
+
+inline bool geometry_prefix_unchanged(const state &previous, const state &incoming, bool surface = false)
+{
+    if (previous.meshes.size() != incoming.meshes.size() || previous.instances.size() > incoming.instances.size()) return false;
+    for (std::size_t i = 0; i < previous.instances.size(); ++i)
+        if (surface ? !same_geometry(previous.instances[i], incoming.instances[i]) : !same_pose(previous.instances[i], incoming.instances[i])) return false;
+    return true;
+}
 } // namespace scene

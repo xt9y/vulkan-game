@@ -81,27 +81,6 @@
 
 static constexpr std::uint64_t editor_light_ids = 1ull << 32;
 static constexpr std::uint64_t editor_cube_ids = 2ull << 32;
-static std::vector<editor::property> cube_properties(const ::scene::instance &cube)
-{
-    using kind = editor::property_kind;
-    const auto angles=net::editor_cube::angles(cube);
-    return {
-        {"pos_x","Pos X",kind::real,cube.pose.position.x,-500,500,0.01,{}},
-        {"pos_y","Pos Y",kind::real,cube.pose.position.y,-500,500,0.01,{}},
-        {"pos_z","Pos Z",kind::real,cube.pose.position.z,-500,500,0.01,{}},
-        {"rot_x","Rotation X",kind::real,angles.x,-180,180,1,{}},
-        {"rot_y","Rotation Y",kind::real,angles.y,-180,180,1,{}},
-        {"rot_z","Rotation Z",kind::real,angles.z,-180,180,1,{}},
-        {"width","Width",kind::real,cube.pose.scale.x,0.01,100,0.01,{}},
-        {"height","Height",kind::real,cube.pose.scale.y,0.01,100,0.01,{}},
-        {"depth","Depth",kind::real,cube.pose.scale.z,0.01,100,0.01,{}},
-        {"texture","Texture",kind::choice,double(cube.pattern==1),0,1,1,{"Solid","Checker"}},
-        {"color_r","Color R",kind::integer,cube.tint.x*100,0,100,1,{}},
-        {"color_g","Color G",kind::integer,cube.tint.y*100,0,100,1,{}},
-        {"color_b","Color B",kind::integer,cube.tint.z*100,0,100,1,{}}
-    };
-}
-
 static std::vector<editor::property> light_properties(const ::scene::point_light &light)
 {
     using kind = editor::property_kind;
@@ -118,50 +97,71 @@ static std::vector<editor::property> light_properties(const ::scene::point_light
     };
 }
 
+static std::vector<editor::property> cube_properties(const ::scene::instance &cube)
+{
+    using kind = editor::property_kind;
+    const auto angles = net::editor_cube::angles(cube);
+    return {
+        {"pos_x", "Pos X", kind::real, cube.pose.position.x, -500, 500, 0.01, {}},
+        {"pos_y", "Pos Y", kind::real, cube.pose.position.y, -500, 500, 0.01, {}},
+        {"pos_z", "Pos Z", kind::real, cube.pose.position.z, -500, 500, 0.01, {}},
+        {"rot_x", "Rotation X", kind::real, angles.x, -180, 180, 1, {}},
+        {"rot_y", "Rotation Y", kind::real, angles.y, -180, 180, 1, {}},
+        {"rot_z", "Rotation Z", kind::real, angles.z, -180, 180, 1, {}},
+        {"width", "Width", kind::real, cube.pose.scale.x, 0.01, 100, 0.01, {}},
+        {"height", "Height", kind::real, cube.pose.scale.y, 0.01, 100, 0.01, {}},
+        {"depth", "Depth", kind::real, cube.pose.scale.z, 0.01, 100, 0.01, {}},
+        {"texture", "Texture", kind::choice, double(cube.pattern == 1), 0, 1, 1, {"Solid", "Checker"}},
+        {"color_r", "Color R", kind::integer, cube.tint.x * 100, 0, 100, 1, {}},
+        {"color_g", "Color G", kind::integer, cube.tint.y * 100, 0, 100, 1, {}},
+        {"color_b", "Color B", kind::integer, cube.tint.z * 100, 0, 100, 1, {}}
+    };
+}
+
+static void on_cube_action(const editor::action &action)
+{
+    using namespace net::editor_cube;
+    resource command{};
+    command.cube.mesh_id = ::scene::unit_cube_mesh_id;
+    if (action.kind == editor::action_kind::insert) {
+        const auto frame = clt::camera::capture();
+        const auto yaw = frame.pose.yaw, pitch = frame.pose.pitch;
+        const vk::util::math::vec3 forward{
+            std::sin(yaw) * std::cos(pitch), std::sin(pitch), -std::cos(yaw) * std::cos(pitch)
+        };
+        command.type = kind::create;
+        command.index = UINT32_MAX;
+        command.cube.pose.position = frame.eye + forward * 2.5f;
+        command.cube.pattern = 0;
+    }
+    else if (action.kind == editor::action_kind::edit || action.kind == editor::action_kind::remove) {
+        const auto world = clt::connection::snapshot();
+        if (!world) return;
+        command.index = std::uint32_t(action.object - editor_cube_ids);
+        const auto found = std::find_if(world->instances.begin(), world->instances.end(), [&](const auto &i) {
+            return i.id == command.index && i.mesh_id == ::scene::unit_cube_mesh_id;
+        });
+        if (found == world->instances.end()) return;
+        command.cube = *found;
+        command.type = action.kind == editor::action_kind::remove ? kind::remove : kind::edit;
+        if (command.type == kind::edit) {
+            const auto key = std::find(property_keys.begin(), property_keys.end(), action.property_id);
+            if (key == property_keys.end()) return;
+            command.revision = std::uint32_t(key - property_keys.begin());
+            command.value = float(action.value);
+            if (!set_property(command.cube, command.revision, command.value)) return;
+        }
+    }
+    else return;
+    if (!clt::connection::send_editor_cube(command))
+        std::clog << "clt: could not queue editor cube command\n";
+}
+
 static void on_editor_action(const editor::action &action)
 {
-    if(action.kind==editor::action_kind::insert && action.type=="cube") {
-        net::editor_cube::resource cube{};
-        cube.type=net::editor_cube::kind::create;
-        cube.id=UINT32_MAX;
-        const auto frame=clt::camera::capture();
-        const float yaw=frame.pose.yaw,pitch=frame.pose.pitch;
-        const vk::util::math::vec3 forward{
-            std::sin(yaw)*std::cos(pitch),std::sin(pitch),
-            -std::cos(yaw)*std::cos(pitch)
-        };
-        cube.cube.pose.position=frame.eye+forward*2.5f;
-        cube.cube.mesh_id=2;
-        cube.cube.editor_cube=true;
-        net::editor_cube::update_rotation(cube.cube);
-        if(!clt::connection::send_editor_cube(cube))
-            std::clog<<"clt: cube insertion not queued\n";
-        return;
-    }
-    if(action.object>=editor_cube_ids &&
-       action.object<editor_cube_ids+(1ull<<32) &&
-       (action.kind==editor::action_kind::edit ||
-        action.kind==editor::action_kind::remove)) {
-        const auto id=std::uint32_t(action.object-editor_cube_ids);
-        const auto world=clt::connection::snapshot();
-        if(!world)return;
-        const auto found=std::find_if(world->instances.begin(),world->instances.end(),
-            [&](const auto& item){return item.id==id && item.editor_cube && item.enabled;});
-        if(found==world->instances.end())return;
-        net::editor_cube::resource cube{};
-        cube.id=id;
-        cube.cube=*found;
-        cube.type=action.kind==editor::action_kind::remove ?
-            net::editor_cube::kind::remove:net::editor_cube::kind::edit;
-        if(cube.type==net::editor_cube::kind::edit) {
-            const auto key=std::find(net::editor_cube::property_keys.begin(),
-                net::editor_cube::property_keys.end(),action.property_id);
-            if(key==net::editor_cube::property_keys.end())return;
-            cube.revision=std::uint32_t(key-net::editor_cube::property_keys.begin());
-            if(!net::editor_cube::set(cube.cube,cube.revision,action.value))return;
-        }
-        if(!clt::connection::send_editor_cube(cube))
-            std::clog<<"clt: cube edit not queued\n";
+    if ((action.kind == editor::action_kind::insert && action.type == "cube") ||
+        (action.object > editor_cube_ids && action.object < editor_cube_ids + UINT32_MAX)) {
+        on_cube_action(action);
         return;
     }
     net::editor_light::resource command{};
@@ -216,7 +216,7 @@ static void on_editor_action(const editor::action &action)
         std::clog << "clt: could not queue editor light command\n";
 }
 
-static void publish_editor_lights()
+static void publish_editor_objects()
 {
     auto &ui = editor::instance();
 
@@ -240,7 +240,7 @@ static void publish_editor_lights()
     const mat4 vp = clt::camera::view_projection(float(width) / float(height));
 
     std::vector<editor::screen_label> labels;
-    labels.reserve(world->lights.size()+world->instances.size());
+    labels.reserve(world->lights.size());
 
     for (std::size_t i = 0; i < world->lights.size(); ++i)
     {
@@ -260,17 +260,14 @@ static void publish_editor_lights()
         labels.push_back({editor_light_ids + std::uint64_t(i) + 1u, "LIGHT", int(std::lround((nx * 0.5f + 0.5f) * float(width))), int(std::lround((ny * 0.5f + 0.5f) * float(height))), true});
     }
 
-    for(const auto& cube:world->instances) {
-        if(!cube.editor_cube || !cube.enabled)continue;
-        const vec4 clip=vp*vec4{cube.pose.position,1.f};
-        if(!std::isfinite(clip.w)||clip.w<=.0001f||
-           clip.z<0.f||clip.z>clip.w)continue;
-        const float nx=clip.x/clip.w,ny=clip.y/clip.w;
-        if(!std::isfinite(nx)||!std::isfinite(ny)||
-           nx<-1.f||nx>1.f||ny<-1.f||ny>1.f)continue;
-        labels.push_back({editor_cube_ids+cube.id,"CUBE",
-            int(std::lround((nx*.5f+.5f)*float(width))),
-            int(std::lround((ny*.5f+.5f)*float(height))),true});
+    for (const auto &cube : world->instances) {
+        if (cube.mesh_id != ::scene::unit_cube_mesh_id) continue;
+        const vec4 clip = vp * vec4{cube.pose.position, 1.f};
+        if (!std::isfinite(clip.w) || clip.w <= .0001f || clip.z < 0.f || clip.z > clip.w) continue;
+        const float nx = clip.x / clip.w, ny = clip.y / clip.w;
+        if (!std::isfinite(nx) || !std::isfinite(ny) || std::abs(nx) > 1.f || std::abs(ny) > 1.f) continue;
+        labels.push_back({editor_cube_ids + cube.id, "CUBE", int(std::lround((nx * .5f + .5f) * width)),
+                          int(std::lround((ny * .5f + .5f) * height)), true});
     }
     ui.set_labels(std::move(labels));
     static std::shared_ptr<const ::scene::state> registered;
@@ -281,17 +278,19 @@ static void publish_editor_lights()
     for (std::size_t i = 0; i < world->lights.size(); ++i)
     {
         const auto &light = world->lights[i];
+
         if (!light.enabled) continue;
         ui.set_properties(editor_light_ids + std::uint64_t(i) + 1u, light_properties(light));
     }
-    for(const auto& cube:world->instances)
-        if(cube.editor_cube && cube.enabled)
-            ui.set_properties(editor_cube_ids+cube.id,cube_properties(cube));
+    for (const auto &cube : world->instances)
+        if (cube.mesh_id == ::scene::unit_cube_mesh_id)
+            ui.set_properties(editor_cube_ids + cube.id, cube_properties(cube));
+
 }
 
 static void on_input(const clt::input::frame &frame)
 {
-    publish_editor_lights();
+    publish_editor_objects();
 
     if (editor::instance().captures_input()) {
         clt::weapon::controls(false, false, false, 0u);
@@ -349,7 +348,7 @@ int main(int argc, char **argv)
         }
 
         clt::weapon::register_weapon(game_weapons::make());
-        editor::instance().set_catalog({{"light","Light","Lighting"},{"cube","Cube","Geometry"}});
+        editor::instance().set_catalog({{"light", "Light", "Lighting"}, {"cube", "Cube", "Geometry"}});
         net::socket::init();
         std::signal(SIGINT, stop);
         std::signal(SIGTERM, stop);

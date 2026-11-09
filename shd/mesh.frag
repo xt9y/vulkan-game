@@ -3,7 +3,7 @@
 layout(location = 0) in vec3 world_normal;
 layout(location = 1) in vec2 uv;
 layout(location = 2) in vec3 world_position;
-layout(location = 3) flat in vec4 instance_appearance;
+layout(location = 3) flat in vec4 instance_tint;
 layout(location = 0) out vec4 out_albedo;
 layout(location = 1) out vec4 out_normal;
 layout(location = 2) out vec4 out_material;
@@ -33,23 +33,25 @@ void main()
 {
     int flags = int(pc.emissive.w + 0.5);
     vec4 base = pc.base_color;
+    base.rgb *= instance_tint.rgb;
     if ((flags & 1) != 0)
     {
         vec4 texel = texture(base_texture, uv);
         base *= vec4(linear_color(texel.rgb), texel.a);
     }
-    base.rgb *= instance_appearance.rgb;
-    if(instance_appearance.a>0.5) {
-        ivec2 tile=ivec2(floor(uv*4.0));
-        base.rgb=((tile.x+tile.y)&1)!=0 ? base.rgb:vec3(0.0);
-    }
-    if ((flags & 128) != 0)
+    if (instance_tint.w < 0.0 && (flags & 128) != 0)
     {
         // World-space shader checker: sharp 0.5 m squares, no texture upload
         // or bilinear texture blur. Works at any floor geometry resolution.
         ivec2 tile = ivec2(floor(world_position.xz * 2.0));
         bool magenta = ((tile.x + tile.y) & 1) != 0;
         base.rgb = magenta ? vec3(1.0, 0.0, 1.0) : vec3(0.0);
+    }
+    if (instance_tint.w > 0.5)
+    {
+        // Face-local checker covers all six faces and rotates with the cube.
+        ivec2 tile = ivec2(floor(uv * 4.0));
+        base.rgb *= ((tile.x + tile.y) & 1) != 0 ? 1.0 : 0.08;
     }
     int alpha = (flags >> 5) & 3;
     if (alpha == 1 && base.a < pc.surface.w) discard;

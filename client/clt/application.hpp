@@ -167,8 +167,9 @@ int run()
 
             const bool captured = editor::instance().captures_input();
 
-            if ((!captured || (editor::instance().visible() &&
-                 !editor::instance().cursor_free())) && !events.tab)
+            // Properties capture gameplay keys, but camera look only depends
+            // on whether Tab has released the cursor for pointing at the UI.
+            if (!editor::instance().cursor_free() && !events.tab)
                 camera::look(frame.mouse_x, frame.mouse_y);
             prediction::controls(captured ? 0u : frame.buttons, camera::snapshot().yaw);
             on_input(frame);
