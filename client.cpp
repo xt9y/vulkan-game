@@ -772,6 +772,14 @@ namespace clt::connection {
         static state data;
         return &data;
     }
+    void reset_scene(state& data) {
+        std::lock_guard lock(data.scene_mutex);
+        data.scene.reset();
+        data.pending_scene.clear();
+        data.last_publish={};
+        data.light_versions.fill(0);
+        data.light_pending.fill(std::nullopt);
+    }
     std::shared_ptr<const scene::state> snapshot() {
         auto& data=*get();
         std::lock_guard lock(data.scene_mutex);
@@ -911,14 +919,7 @@ std::vector<net::weapon::snapshot> result( data.weapon_updates.begin(), data.wea
             get()->editor_outgoing.clear();
             get()->editor_sequence=0;
         }
-        {
-            std::lock_guard<std::mutex> lock(get()->scene_mutex);
-            get()->scene.reset();
-            get()->pending_scene.clear();
-            get()->last_publish = {};
-            get()->light_versions.fill(0);
-            get()->light_pending.fill(std::nullopt);
-        }
+        reset_scene(*get());
         {
             std::lock_guard<std::mutex> lock(get()->error_mutex);
             get()->worker_error = {};
@@ -944,14 +945,7 @@ std::vector<net::weapon::snapshot> result( data.weapon_updates.begin(), data.wea
             get()->editor_outgoing.clear();
             get()->editor_sequence=0;
         }
-        {
-            std::lock_guard<std::mutex> lock(get()->scene_mutex);
-            get()->scene.reset();
-            get()->pending_scene.clear();
-            get()->last_publish = {};
-            get()->light_versions.fill(0);
-            get()->light_pending.fill(std::nullopt);
-        }
+        reset_scene(*get());
         net::secure::destroy(get()->socket);
         {
             std::lock_guard<std::mutex> lock(get()->error_mutex);
@@ -1023,12 +1017,7 @@ data.socket=net::secure::create( net::secure::role::client, game::secure_config:
                     scene_batch = 0;
                     scene_ready = false;
                     data.scene_complete.store(false, std::memory_order_relaxed);
-                    std::lock_guard<std::mutex> lock(data.scene_mutex);
-                    data.scene.reset();
-                    data.pending_scene.clear();
-                    data.last_publish = {};
-                    data.light_versions.fill(0);
-                    data.light_pending.fill(std::nullopt);
+                    reset_scene(data);
                     {
                         std::lock_guard<std::mutex> animation_lock(data.animation_mutex);
                         data.animations.clear();
