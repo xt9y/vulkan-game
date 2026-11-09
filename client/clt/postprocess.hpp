@@ -316,6 +316,9 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world)
                 std::clamp(mesh.surface.base_color[2]*inst.tint.z,0.f,1.f)
             };
             surface.triangle=true;
+            surface.pattern=inst.pattern==1u?2u:
+                (inst.pattern==UINT32_MAX &&
+                 mesh.surface.procedural_pattern==1u?1u:0u);
             if(inst.pattern==2u || inst.pattern==3u) {
                 surface.optical_type=inst.pattern==2u?1u:2u;
                 surface.optical_strength=inst.optical_strength;
