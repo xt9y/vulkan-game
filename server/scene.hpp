@@ -92,6 +92,12 @@ struct instance
 
     float overlay_weight = 0.0f;
     transform pose;
+    vk::util::math::vec3 tint{1, 1, 1};
+    vk::util::math::vec3 angles{}; // Editor Euler degrees; rendering uses pose.rotation.
+    std::uint32_t pattern = 0;
+    std::uint32_t revision = 0;
+    bool editor_cube = false;
+    bool enabled = true;
 };
 
 struct collision_box

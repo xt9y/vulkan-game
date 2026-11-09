@@ -140,7 +140,7 @@ bool valid_light(const ::scene::point_light &l)
 } // namespace
 std::vector<std::uint8_t> serialize(const ::scene::state &scene)
 {
-    if (scene.meshes.size() > max_scene_bytes / 12 || scene.instances.size() > max_scene_bytes / 48 || scene.lights.size() > 64)
+    if (scene.meshes.size() > max_scene_bytes / 12 || scene.instances.size() > max_scene_bytes / 108 || scene.lights.size() > 64)
         throw std::runtime_error("Scene snapshot exceeds maximum batch size");
     bytes out{'S', 'C', 'N', 'A'};
     put_all(out, std::uint32_t(scene.meshes.size()), std::uint32_t(scene.instances.size()), std::uint32_t(scene.textures.size()), std::uint32_t(scene.skins.size()), std::uint32_t(scene.collision_boxes.size()),
@@ -215,7 +215,7 @@ std::vector<std::uint8_t> serialize(const ::scene::state &scene)
     }
 
     for (const auto &i : scene.instances)
-        put_all(out, i.id, i.mesh_id, i.animation, i.animation_tick, i.overlay_animation, i.overlay_root, i.overlay_weight, i.pose.position, i.pose.scale, i.pose.rotation.x, i.pose.rotation.y, i.pose.rotation.z, i.pose.rotation.w);
+        put_all(out, i.id, i.mesh_id, i.animation, i.animation_tick, i.overlay_animation, i.overlay_root, i.overlay_weight, i.pose.position, i.pose.scale, i.pose.rotation.x, i.pose.rotation.y, i.pose.rotation.z, i.pose.rotation.w, i.tint, i.angles, i.pattern, std::uint32_t(i.editor_cube), std::uint32_t(i.enabled), i.revision);
 
     for (const auto &b : scene.collision_boxes)
     {
@@ -341,15 +341,18 @@ bool deserialize(const std::vector<std::uint8_t> &bytes, ::scene::state &scene)
         result.meshes.push_back(std::move(mesh));
     }
 
-    if (instances > left(in) / 48) return false;
+    if (instances > left(in) / 108) return false;
 
     for (std::uint32_t i = 0; i < instances; ++i)
     {
         ::scene::instance item;
+        std::uint32_t editable=0, enabled=0;
 
         if (!take_all(in, item.id, item.mesh_id, item.animation, item.animation_tick, item.overlay_animation, item.overlay_root, item.overlay_weight, item.pose.position, item.pose.scale, item.pose.rotation.x,
-                      item.pose.rotation.y, item.pose.rotation.z, item.pose.rotation.w) ||
-            item.overlay_weight < 0 || item.overlay_weight > 1) return false;
+                      item.pose.rotation.y, item.pose.rotation.z, item.pose.rotation.w, item.tint, item.angles, item.pattern, editable, enabled, item.revision) ||
+            item.overlay_weight < 0 || item.overlay_weight > 1 || editable>1 || enabled>1 || item.pattern>1) return false;
+        item.editor_cube=editable!=0;
+        item.enabled=enabled!=0;
         result.instances.push_back(std::move(item));
     }
 

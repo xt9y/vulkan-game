@@ -116,8 +116,10 @@ static ::scene::state make_level()
         instance.id = id;
         instance.mesh_id = mesh;
         instance.pose.position = pos;
+        instance.editor_cube = mesh == 2;
+        instance.revision = instance.editor_cube ? 1u : 0u;
         world.instances.push_back(instance);
-        world.collision_boxes.push_back({pos - half, pos + half});
+        if(mesh!=2)world.collision_boxes.push_back({pos - half, pos + half});
     };
 
     place(1, 1, {0, -.1f, 0}, {10, .1f, 10});
