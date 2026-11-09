@@ -2835,7 +2835,7 @@ std::uint32_t skin=0,camera_joint=UINT32_MAX,muzzle=UINT32_MAX, ejection=UINT32_
             std::uint32_t clip=0,sequence=0,last_fired_sequence=0,shot_variant=0;
             double clip_started=0,flash_until=0,next_fire=0;
             float speed=1,ads=0,recoil=0;
-bool loop=false,ready=false,registered=false,connected=false, presented_aim=false;
+bool loop=false,ready=false,connected=false,presented_aim=false;
         };
         state data;
         std::mutex input_mutex;
@@ -3040,7 +3040,7 @@ data.camera_correction=inverse_affine(mat4{reference})* data.settings.correction
     }
     bindings active_bindings() {
         std::lock_guard lock(input_mutex);
-        return data.registered?data.settings.input:bindings{};
+        return data.settings.rules.id?data.settings.input:bindings{};
     }
     void controls(bool trigger,bool ads,bool reload,std::uint32_t buttons) {
         const auto camera=camera::snapshot();
@@ -3059,7 +3059,7 @@ next_automatic_fire=now+std::chrono::duration_cast<clock::duration>( std::chrono
         movement=buttons;
     }
     void register_weapon(definition gun) {
-        if(data.ready||data.registered)
+        if(data.ready||data.settings.rules.id)
             throw std::logic_error("Register one weapon before renderer initialization");
         ::weapon::validate(gun.rules);
 if(gun.model.empty()||!gun.max_casings||gun.max_casings>192|| !gun.max_impacts||gun.max_impacts>192|| gun.near_plane<=0||gun.far_plane<=gun.near_plane|| gun.fov<=0||gun.fov>=3.14159265f||
@@ -3074,7 +3074,6 @@ gun.input.ads_sensitivity_multiplier<=0|| gun.input.ads_sensitivity_multiplier>1
                 throw std::invalid_argument("Invalid weapon animation clip");
         data.settings=std::move(gun);
         data.authority=data.predicted=::weapon::make_state(data.settings.rules);
-        data.registered=true;
     }
     void check_magazine() {
         std::lock_guard lock(input_mutex);
@@ -3082,7 +3081,7 @@ gun.input.ads_sensitivity_multiplier<=0|| gun.input.ads_sensitivity_multiplier>1
     }
     void initialize() {
         if(data.ready)return;
-        if(!data.registered) {
+        if(!data.settings.rules.id) {
             data.ready=true;
             return;
         }
@@ -3116,7 +3115,7 @@ const auto found=std::find_if(skin->clips.begin(),skin->clips.end(), [&](const :
     }
     const ::scene::state& assets() {return data.asset;}
     const std::vector<draw>& update(const mat4& view) {
-        if(!data.registered)return data.draws;
+        if(!data.settings.rules.id)return data.draws;
         const auto now=seconds();
         const auto frame_time=clock::now();
 const float dt=std::clamp( std::chrono::duration<float>(frame_time-data.previous).count(),0.f,.05f);
@@ -3340,7 +3339,7 @@ item.instances.push_back(instance(trs( c.position,c.orientation,{1,1,1})));
         return data.draws;
     }
     mat4 view_projection(float aspect,const mat4& view) {
-        if(!data.registered)return view;
+        if(!data.settings.rules.id)return view;
 return perspective(data.settings.fov+ (data.settings.ads_fov-data.settings.fov)*data.ads, aspect,data.settings.near_plane,data.settings.far_plane)*view;
     }
     void shutdown() {
