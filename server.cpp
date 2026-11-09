@@ -891,15 +891,10 @@ namespace net::movement::detail {
 return (std::uint32_t(p[0])<<24)|(std::uint32_t(p[1])<<16)| (std::uint32_t(p[2])<<8)|std::uint32_t(p[3]);
         }
         inline void put_float(std::uint8_t* p,float v) {
-            std::uint32_t n;
-            std::memcpy(&n,&v,4);
-            put(p,n);
+            put(p,std::bit_cast<std::uint32_t>(v));
         }
         inline float get_float(const std::uint8_t* p) {
-            const auto n=get(p);
-            float v;
-            std::memcpy(&v,&n,4);
-            return v;
+            return std::bit_cast<float>(get(p));
         }
         inline void write(std::uint8_t* p,std::uint32_t v){put(p,v);}
         inline void write(std::uint8_t* p,float v){put_float(p,v);}
