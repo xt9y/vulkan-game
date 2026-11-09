@@ -45,15 +45,19 @@ static void compile_shaders(void)
             exit(1);
         }
         const char* pmap_header="third-party/vulkan-systems/pmap/shaders/photon_scene.glsl";
+        const char* optics_header="third-party/vulkan-systems/optics/optics/shaders/raytrace.glsl";
         const int pmap=strstr(shaders[i],"/pmap/shaders/")!=NULL;
+        const int optics=strstr(shaders[i],"/optics/optics/shaders/compose.frag")!=NULL;
         struct stat include;
         if(!stat(output,&binary) && binary.st_mtime>=source.st_mtime &&
            (!pmap || (!stat(pmap_header,&include) &&
-                      binary.st_mtime>=include.st_mtime)))continue;
+                      binary.st_mtime>=include.st_mtime)) &&
+           (!optics || (!stat(optics_header,&include) &&
+                        binary.st_mtime>=include.st_mtime)))continue;
         snprintf(command,sizeof(command),
                  "glslangValidator -V %s\"%s\" -o \"%s\"",
-                 strstr(shaders[i],"/pmap/shaders/")?
-                    "-Ithird-party/vulkan-systems/pmap/shaders ":"",
+                 pmap?"-Ithird-party/vulkan-systems/pmap/shaders ":
+                 optics?"-Ithird-party/vulkan-systems/optics/optics/shaders ":"",
                  shaders[i],output);
         if(system(command))
         {

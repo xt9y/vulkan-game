@@ -383,6 +383,15 @@ void synchronize_scene()
         pc::set_scene(prepare_world(source.get()));
         pc::synchronize_scene();
     }
+    std::vector<optics::light> lights;
+    if(source)
+        for(const auto& light:source->lights)
+            if(light.enabled && light.strength>0.f)
+                lights.push_back({light.position,light.radius,
+                                  light.color,light.strength});
+    // Drop old descriptor references before releasing the mapper's GPU
+    // buffers. synchronize_scene is called only when the renderer is idle.
+    if(material_compositor)material_compositor->set_scene({},lights);
     if(photon_caustics)photon_caustics->set_photons({});
     photon_transport.reset();
     if(source && std::any_of(source->instances.begin(),source->instances.end(),
@@ -391,7 +400,7 @@ void synchronize_scene()
         if(scene) {
             pm::configuration config{};
             config.transport_only=true;
-            config.photons=4096;
+            config.photons=16384; // Denser stable distribution, fewer discrete caustic spots.
             config.gi_updates=1; // Stable photon map, reprojected from the camera every frame.
             config.bounces=4;
             config.atlas_tile=32;
@@ -399,6 +408,12 @@ void synchronize_scene()
             mapper->create(*scene,{1,1},config);
             const auto buffers=mapper->photon_buffers();
             photon_caustics->set_photons({buffers.sorted,buffers.used,buffers.capacity});
+            const auto g=mapper->geometry_buffers();
+            if(material_compositor)
+                material_compositor->set_scene({
+                    g.faces,g.nodes,g.triangles,g.scene_info,
+                    g.photons,g.offsets
+                },lights);
             photon_transport=std::move(mapper);
             std::clog << "optics: initialized photon transport with "
                       << scene->surfaces.size() << " surfaces and "
@@ -426,6 +441,14 @@ void update_photons(vk::CommandBuffer cmd,std::uint32_t image,
     const auto projection=vk::util::math::perspective(
         view.pose.fov,float(extent.width)/float(extent.height),.1f,1000.f)*view.view;
     photon_caustics->record(cmd,image,projection);
+    // The off-screen reflection fragment shader reads the photon map written
+    // by compute. Its buffer dependency crosses compute/graphics stages.
+    vk::MemoryBarrier reflection_barrier{};
+    reflection_barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
+    reflection_barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead;
+    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+                        vk::PipelineStageFlagBits::eFragmentShader,{},
+                        {reflection_barrier},{},{});
 }
 
 void present(vk::CommandBuffer cmd, std::uint32_t image, const camera::frame &view)
