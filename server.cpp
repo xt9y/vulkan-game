@@ -2053,8 +2053,6 @@ combined.skins.insert(combined.skins.end(), std::make_move_iterator(imported.ski
         if (data.scene_batches.size() >= 65535) 
             throw std::runtime_error("Too many scene batches");
         auto bytes = net::scene_stream::serialize(patch);
-        if (bytes.size() > net::scene_stream::max_scene_bytes)
-            throw std::runtime_error("Scene asset exceeds the network batch limit (75 MiB)");
         for (auto& skin : patch.skins)
             data.scene.skins.push_back(std::move(skin));
         for (auto& texture : patch.textures) 
