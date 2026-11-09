@@ -883,7 +883,11 @@ void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame &c
         optical_graphics.viewport(vk::Viewport{0,0,float(extent.width),float(extent.height),0.1f,1.f},
                                   vk::Rect2D{{0,0},extent});
         for(const auto& mesh:data.meshes) {
-            if(mesh.transforms.empty())continue;
+            if(mesh.transforms.empty() ||
+               std::none_of(mesh.instances.begin(),mesh.instances.end(),
+                   [](const auto& instance) {
+                       return instance.pattern==2u || instance.pattern==3u;
+                   }))continue;
             const auto params=material_parameters(mesh.surface,view_projection,mesh.joint_count);
             draw_mesh(optical_graphics,mesh,mesh.frames.at(image),params,true,1,true);
         }
