@@ -212,7 +212,9 @@ std::shared_ptr<pc::world> prepare_world(const ::scene::state *source)
 
         const auto *mesh = found->second;
 
-        if (mesh->surface.alpha_mode == 2) continue;
+        // Transparent glass is handled by photonic transmission, not
+        // opaque point-cloud shadow blocking.
+        if (mesh->surface.alpha_mode == 2 || instance.pattern == 2u) continue;
         std::vector<animation::matrix> palette;
 
         if (mesh->skin_id && !animation::sample(mesh->skin_id, instance.animation, 0.0f, palette, instance.overlay_animation, instance.overlay_weight, instance.overlay_root))

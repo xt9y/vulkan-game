@@ -44,7 +44,12 @@ static void compile_shaders(void)
             fprintf(stderr,"Missing shader: %s\n",shaders[i]);
             exit(1);
         }
-        if(!stat(output,&binary) && binary.st_mtime>=source.st_mtime)continue;
+        const char* pmap_header="third-party/vulkan-systems/pmap/shaders/photon_scene.glsl";
+        const int pmap=strstr(shaders[i],"/pmap/shaders/")!=NULL;
+        struct stat include;
+        if(!stat(output,&binary) && binary.st_mtime>=source.st_mtime &&
+           (!pmap || (!stat(pmap_header,&include) &&
+                      binary.st_mtime>=include.st_mtime)))continue;
         snprintf(command,sizeof(command),
                  "glslangValidator -V %s\"%s\" -o \"%s\"",
                  strstr(shaders[i],"/pmap/shaders/")?

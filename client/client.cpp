@@ -101,7 +101,7 @@ static std::vector<editor::property> cube_properties(const ::scene::instance &cu
 {
     using kind = editor::property_kind;
     const auto angles = net::editor_cube::angles(cube);
-    return {
+    std::vector<editor::property> properties{
         {"pos_x", "Pos X", kind::real, cube.pose.position.x, -500, 500, 0.01, {}},
         {"pos_y", "Pos Y", kind::real, cube.pose.position.y, -500, 500, 0.01, {}},
         {"pos_z", "Pos Z", kind::real, cube.pose.position.z, -500, 500, 0.01, {}},
@@ -114,10 +114,16 @@ static std::vector<editor::property> cube_properties(const ::scene::instance &cu
         {"texture", "Texture", kind::choice, double(cube.pattern <= 3 ? cube.pattern : 0), 0, 3, 1, {"Solid", "Checker", "Glass", "Reflective"}},
         {"color_r", "Color R", kind::integer, cube.tint.x * 100, 0, 100, 1, {}},
         {"color_g", "Color G", kind::integer, cube.tint.y * 100, 0, 100, 1, {}},
-        {"color_b", "Color B", kind::integer, cube.tint.z * 100, 0, 100, 1, {}},
-        {"optical_strength", cube.pattern == 2 ? "Pass through" : "Reflectivity", kind::real, cube.optical_strength, 0, 1, .01, {}},
-        {"optical_mattness", "Mattness", kind::real, cube.optical_mattness, 0, 1, .01, {}}
+        {"color_b", "Color B", kind::integer, cube.tint.z * 100, 0, 100, 1, {}}
     };
+    if(cube.pattern==2u || cube.pattern==3u) {
+        properties.push_back({"optical_strength",
+            cube.pattern==2u ? "Pass through" : "Reflectivity",
+            kind::real,cube.optical_strength,0,1,.01,{}});
+        properties.push_back({"optical_mattness","Mattness",
+            kind::real,cube.optical_mattness,0,1,.01,{}});
+    }
+    return properties;
 }
 
 static void on_cube_action(const editor::action &action)
