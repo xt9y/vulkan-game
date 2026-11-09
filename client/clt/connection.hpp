@@ -187,11 +187,9 @@ command.index=command.type==net::editor_light::kind::create ? UINT32_MAX:command
     bool send_weapon(net::weapon::command command) {
         auto& data = *get();
         std::lock_guard<std::mutex> lock(data.weapon_mutex);
-        if (data.weapon_outgoing.size() < 64) {
-            data.weapon_outgoing.push_back(command);
-            return true;
-        }
-        return false;
+        if(data.weapon_outgoing.size()>=64)return false;
+        data.weapon_outgoing.push_back(command);
+        return true;
     }
     std::deque<net::weapon::snapshot> take_weapon_updates() {
         auto& data=*get();
@@ -222,9 +220,7 @@ command.index=command.type==net::editor_light::kind::create ? UINT32_MAX:command
     std::optional<net::movement::snapshot> take_authority() {
         auto& data = *get();
         std::lock_guard<std::mutex> lock(data.player_mutex);
-        auto result = data.authority;
-        data.authority.reset();
-        return result;
+        return std::exchange(data.authority,std::nullopt);
     }
     std::optional<::player::parameters_t> movement_parameters() {
         auto& data = *get();
