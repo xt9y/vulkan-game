@@ -6,6 +6,7 @@ struct Instance
 {
     mat4 model;
     mat4 normal;
+    vec4 appearance;
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer Transforms
