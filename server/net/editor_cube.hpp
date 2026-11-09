@@ -6,9 +6,9 @@ namespace net::editor_cube
 {
 using kind = editor_light::kind;
 inline constexpr std::size_t max_cubes = 1024;
-inline constexpr std::array<std::string_view, 13> property_keys{
+inline constexpr std::array<std::string_view, 15> property_keys{
     "pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "width", "height", "depth",
-    "color_r", "color_g", "color_b", "texture"
+    "color_r", "color_g", "color_b", "texture", "optical_strength", "optical_mattness"
 };
 
 struct resource
@@ -19,7 +19,7 @@ struct resource
     float value = 0;
     bool enabled = true;
 };
-using packet = std::array<std::uint8_t, 96>;
+using packet = std::array<std::uint8_t, 104>;
 
 inline vk::util::math::vec3 angles(const ::scene::instance &cube)
 {
@@ -71,9 +71,13 @@ inline bool set_property(::scene::instance &cube, std::uint32_t property, float 
         std::array fields{&cube.tint.x, &cube.tint.y, &cube.tint.z};
         *fields[property - 9] = value / 100.f;
     }
-    else {
-        if (value != 0.f && value != 1.f) return false;
+    else if (property == 12) {
+        if (value < 0.f || value > 3.f || value != std::floor(value)) return false;
         cube.pattern = std::uint32_t(value);
+    }
+    else {
+        if (value < 0.f || value > 1.f) return false;
+        (property == 13 ? cube.optical_strength : cube.optical_mattness) = value;
     }
     return true;
 }
@@ -90,7 +94,9 @@ inline bool valid(const ::scene::instance &cube)
            std::isfinite(norm) && std::abs(norm - 1.f) < .001f &&
            coord(cube.rotation_reference.x) && std::abs(cube.rotation_reference.x) <= 180.f &&
            coord(cube.rotation_reference.y) && std::abs(cube.rotation_reference.y) <= 180.f &&
-           coord(cube.rotation_reference.z) && std::abs(cube.rotation_reference.z) <= 180.f && (cube.pattern <= 1 || cube.pattern == UINT32_MAX);
+           coord(cube.rotation_reference.z) && std::abs(cube.rotation_reference.z) <= 180.f && (cube.pattern <= 3 || cube.pattern == UINT32_MAX) &&
+           std::isfinite(cube.optical_strength) && cube.optical_strength >= 0.f && cube.optical_strength <= 1.f &&
+           std::isfinite(cube.optical_mattness) && cube.optical_mattness >= 0.f && cube.optical_mattness <= 1.f;
 }
 
 inline packet encode(const resource &v)
@@ -101,6 +107,7 @@ inline packet encode(const resource &v)
         t.position.x, t.position.y, t.position.z, t.scale.x, t.scale.y, t.scale.z,
         t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w,
         v.cube.tint.x, v.cube.tint.y, v.cube.tint.z, v.cube.pattern, v.value,
+        v.cube.optical_strength, v.cube.optical_mattness,
         v.cube.rotation_reference.x, v.cube.rotation_reference.y, v.cube.rotation_reference.z);
     return p;
 }
@@ -116,6 +123,7 @@ inline std::optional<resource> decode(const std::uint8_t *p, std::size_t n)
         t.position.x, t.position.y, t.position.z, t.scale.x, t.scale.y, t.scale.z,
         t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w,
         v.cube.tint.x, v.cube.tint.y, v.cube.tint.z, v.cube.pattern, v.value,
+        v.cube.optical_strength, v.cube.optical_mattness,
         v.cube.rotation_reference.x, v.cube.rotation_reference.y, v.cube.rotation_reference.z);
     v.cube.id = v.index;
     v.cube.mesh_id = ::scene::unit_cube_mesh_id;

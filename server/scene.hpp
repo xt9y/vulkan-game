@@ -95,7 +95,9 @@ struct instance
     float overlay_weight = 0.0f;
     transform pose;
     vk::util::math::vec3 tint{1, 1, 1};
-    std::uint32_t pattern = UINT32_MAX; // Inherit mesh pattern, or override with solid/checker.
+    std::uint32_t pattern = UINT32_MAX; // 0 solid, 1 checker, 2 glass, 3 reflective; UINT32_MAX inherits.
+    float optical_strength = .9f; // transmission or reflectivity
+    float optical_mattness = .05f; // [0,1]
     // Editor reference selects continuous Euler controls at/through the poles.
     // Rendering and simulation always consume pose.rotation.
     vk::util::math::vec3 rotation_reference{};
@@ -141,6 +143,7 @@ inline bool same_pose(const instance &a, const instance &b)
 inline bool same_geometry(const instance &a, const instance &b)
 {
     return same_pose(a, b) && a.tint.x == b.tint.x && a.tint.y == b.tint.y && a.tint.z == b.tint.z && a.pattern == b.pattern &&
+           a.optical_strength == b.optical_strength && a.optical_mattness == b.optical_mattness &&
            a.rotation_reference.x == b.rotation_reference.x && a.rotation_reference.y == b.rotation_reference.y &&
            a.rotation_reference.z == b.rotation_reference.z;
 }

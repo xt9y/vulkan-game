@@ -215,7 +215,7 @@ std::vector<std::uint8_t> serialize(const ::scene::state &scene)
     }
 
     for (const auto &i : scene.instances)
-        put_all(out, i.id, i.mesh_id, i.animation, i.animation_tick, i.overlay_animation, i.overlay_root, i.overlay_weight, i.pose.position, i.pose.scale, i.pose.rotation.x, i.pose.rotation.y, i.pose.rotation.z, i.pose.rotation.w, i.tint, i.pattern, i.rotation_reference);
+        put_all(out, i.id, i.mesh_id, i.animation, i.animation_tick, i.overlay_animation, i.overlay_root, i.overlay_weight, i.pose.position, i.pose.scale, i.pose.rotation.x, i.pose.rotation.y, i.pose.rotation.z, i.pose.rotation.w, i.tint, i.pattern, i.rotation_reference, i.optical_strength, i.optical_mattness);
 
     for (const auto &b : scene.collision_boxes)
     {
@@ -341,17 +341,19 @@ bool deserialize(const std::vector<std::uint8_t> &bytes, ::scene::state &scene)
         result.meshes.push_back(std::move(mesh));
     }
 
-    if (instances > left(in) / 96) return false;
+    if (instances > left(in) / 104) return false;
 
     for (std::uint32_t i = 0; i < instances; ++i)
     {
         ::scene::instance item;
 
         if (!take_all(in, item.id, item.mesh_id, item.animation, item.animation_tick, item.overlay_animation, item.overlay_root, item.overlay_weight, item.pose.position, item.pose.scale, item.pose.rotation.x,
-                      item.pose.rotation.y, item.pose.rotation.z, item.pose.rotation.w, item.tint, item.pattern, item.rotation_reference) ||
+                      item.pose.rotation.y, item.pose.rotation.z, item.pose.rotation.w, item.tint, item.pattern, item.rotation_reference, item.optical_strength, item.optical_mattness) ||
             item.overlay_weight < 0 || item.overlay_weight > 1 ||
             item.tint.x < 0 || item.tint.x > 1 || item.tint.y < 0 || item.tint.y > 1 || item.tint.z < 0 || item.tint.z > 1 ||
-            (item.pattern > 1 && item.pattern != UINT32_MAX)) return false;
+            (item.pattern > 3 && item.pattern != UINT32_MAX) ||
+            !std::isfinite(item.optical_strength) || item.optical_strength < 0.f || item.optical_strength > 1.f ||
+            !std::isfinite(item.optical_mattness) || item.optical_mattness < 0.f || item.optical_mattness > 1.f) return false;
         result.instances.push_back(std::move(item));
     }
 
