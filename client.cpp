@@ -147,8 +147,8 @@ namespace clt::connection {
     std::optional<net::animation::resource> animation(std::uint32_t instance_id);
     bool send_editor_light(net::editor_light::resource command);
     bool send_weapon(net::weapon::command command);
-    std::vector<net::weapon::snapshot> take_weapon_updates();
-    std::vector<net::weapon::shot> take_weapon_shots();
+    std::deque<net::weapon::snapshot> take_weapon_updates();
+    std::deque<net::weapon::shot> take_weapon_shots();
     void check_error();
     void send_input(const ::player::input& input);
     std::optional<net::movement::snapshot> take_authority();
@@ -863,19 +863,15 @@ command.index=command.type==net::editor_light::kind::create ? UINT32_MAX:command
         }
         return false;
     }
-    std::vector<net::weapon::snapshot> take_weapon_updates() {
-        auto& data = *get();
-        std::lock_guard<std::mutex> lock(data.weapon_mutex);
-std::vector<net::weapon::snapshot> result( data.weapon_updates.begin(), data.weapon_updates.end() );
-        data.weapon_updates.clear();
-        return result;
+    std::deque<net::weapon::snapshot> take_weapon_updates() {
+        auto& data=*get();
+        std::lock_guard lock(data.weapon_mutex);
+        return std::exchange(data.weapon_updates,{});
     }
-    std::vector<net::weapon::shot> take_weapon_shots() {
-        auto& data = *get();
-        std::lock_guard<std::mutex> lock(data.weapon_mutex);
-        std::vector<net::weapon::shot> result(data.weapon_shots.begin(), data.weapon_shots.end());
-        data.weapon_shots.clear();
-        return result;
+    std::deque<net::weapon::shot> take_weapon_shots() {
+        auto& data=*get();
+        std::lock_guard lock(data.weapon_mutex);
+        return std::exchange(data.weapon_shots,{});
     }
     void check_error() {
         std::exception_ptr error;
