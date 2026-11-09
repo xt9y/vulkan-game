@@ -167,7 +167,8 @@ int run()
 
             const bool captured = editor::instance().captures_input();
 
-            if (!captured && !events.tab)
+            if ((!captured || (editor::instance().visible() &&
+                 !editor::instance().cursor_free())) && !events.tab)
                 camera::look(frame.mouse_x, frame.mouse_y);
             prediction::controls(captured ? 0u : frame.buttons, camera::snapshot().yaw);
             on_input(frame);

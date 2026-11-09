@@ -11,6 +11,7 @@ struct Instance
 {
     mat4 model;
     mat4 normal;
+    vec4 appearance;
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer InstanceBuffer
@@ -26,6 +27,7 @@ layout(std430, set = 0, binding = 9) readonly buffer BonePalette
 layout(location = 0) out vec3 world_normal;
 layout(location = 1) out vec2 uv;
 layout(location = 2) out vec3 world_position;
+layout(location = 3) flat out vec4 instance_appearance;
 
 layout(push_constant) uniform Draw
 {
@@ -53,4 +55,5 @@ void main()
     world_position = world.xyz;
     world_normal = normalize(mat3(instance.normal) * mat3(deform) * in_normal);
     uv = in_uv;
+    instance_appearance=instance.appearance;
 }

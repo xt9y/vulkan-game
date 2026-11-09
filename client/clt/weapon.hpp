@@ -31,6 +31,7 @@ struct instance_data
 {
     vk::util::math::mat4 model;
     vk::util::math::mat4 normal;
+    std::array<float,4> appearance{1,1,1,0};
 };
 
 struct draw

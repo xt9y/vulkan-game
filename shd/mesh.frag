@@ -3,6 +3,7 @@
 layout(location = 0) in vec3 world_normal;
 layout(location = 1) in vec2 uv;
 layout(location = 2) in vec3 world_position;
+layout(location = 3) flat in vec4 instance_appearance;
 layout(location = 0) out vec4 out_albedo;
 layout(location = 1) out vec4 out_normal;
 layout(location = 2) out vec4 out_material;
@@ -36,6 +37,11 @@ void main()
     {
         vec4 texel = texture(base_texture, uv);
         base *= vec4(linear_color(texel.rgb), texel.a);
+    }
+    base.rgb *= instance_appearance.rgb;
+    if(instance_appearance.a>0.5) {
+        ivec2 tile=ivec2(floor(uv*4.0));
+        base.rgb=((tile.x+tile.y)&1)!=0 ? base.rgb:vec3(0.0);
     }
     if ((flags & 128) != 0)
     {
