@@ -654,6 +654,7 @@ const auto matrix = fastgltf::getAccessorElement<fastgltf::math::fmat4x4>( asset
 } // namespace srv::assets
 #include "animation.hpp"
 #include <cstring>
+#include "movement_detail.hpp"
 namespace net::movement::detail {
         inline void put(std::uint8_t* p,std::uint32_t n) {
             p[0]=std::uint8_t(n>>24);p[1]=std::uint8_t(n>>16);
