@@ -1482,15 +1482,6 @@ namespace {
                 if (scene != previous_scene) {
 bool append = previous_scene && scene->meshes.size() == previous_scene->meshes.size() && scene->instances.size() >= previous_scene->instances.size();
                     if (append) {
-                        for (std::size_t i = 0; i < scene->meshes.size(); ++i)
-                            if (!::scene::same_mesh(scene->meshes[i],previous_scene->meshes[i]))
-                                append = false;
-                        if (append)
-                            for (std::size_t i = 0; i < previous_scene->instances.size(); ++i)
-if (!::scene::same_instance( scene->instances[i],previous_scene->instances[i]))
-                                    append = false;
-                    }
-                    if (append) {
 const auto first = scene->instances.begin() + previous_scene->instances.size();
                         std::vector<::scene::instance> added(first,scene->instances.end());
                         auto new_boxes = ::player::build_colliders(scene->meshes,added);
@@ -1603,19 +1594,6 @@ if(a.position.x!=b.position.x || a.position.y!=b.position.y || a.position.z!=b.p
 if(a.minimum.x!=b.minimum.x || a.minimum.y!=b.minimum.y || a.minimum.z!=b.minimum.z || a.maximum.x!=b.maximum.x || a.maximum.y!=b.maximum.y || a.maximum.z!=b.maximum.z)
                     return false;
             }
-            for(std::size_t i=0;i<previous.meshes.size();++i)
-                if(!::scene::same_mesh(previous.meshes[i],incoming.meshes[i]))
-                    return false;
-            for(std::size_t i=0;i<previous.skins.size();++i) {
-                const auto& a=previous.skins[i],&b=incoming.skins[i];
-if(a.id!=b.id || a.skeleton!=b.skeleton || a.inverse_bind!=b.inverse_bind || a.clips.size()!=b.clips.size())
-                    return false;
-                for(std::size_t j=0;j<a.clips.size();++j)
-if(a.clips[j].name!=b.clips[j].name || a.clips[j].bytes!=b.clips[j].bytes)
-                        return false;
-            }
-if(!std::equal(previous.instances.begin(),previous.instances.end(), incoming.instances.begin(),::scene::same_instance))
-                return false;
             using namespace vk::util::math;
             for(std::size_t i=previous.instances.size();i<incoming.instances.size();++i) {
                 const auto& instance=incoming.instances[i];
@@ -2498,13 +2476,6 @@ sets->create( std::vector<vk::DescriptorSetLayoutBinding>(schema.begin(), schema
         const auto source=connection::snapshot();
         if(source==data.snapshot)return;
 bool appended=data.snapshot&&source&& source->textures.size()>=data.snapshot->textures.size()&& source->meshes.size()==data.snapshot->meshes.size()&& source->instances.size()>=data.snapshot->instances.size();
-        if(appended) {
-            for(std::size_t i=0;i<source->meshes.size();++i)
-                if(!::scene::same_mesh(source->meshes[i],data.snapshot->meshes[i]))
-                    appended=false;
-            if(appended)
-appended=std::equal(data.snapshot->instances.begin(), data.snapshot->instances.end(),source->instances.begin(), ::scene::same_instance);
-        }
         if(appended) {
             animation::synchronize(*source);
             if(source->textures.size()!=data.snapshot->textures.size())

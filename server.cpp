@@ -44,11 +44,6 @@ namespace scene {
         bool double_sided = false;
         std::uint32_t procedural_pattern = 0;
     };
-    inline bool same_material(const material& a, const material& b) {
-return a.base_color == b.base_color && a.emissive == b.emissive && a.metallic == b.metallic && a.roughness == b.roughness && a.occlusion == b.occlusion && a.alpha_cutoff == b.alpha_cutoff &&
-a.base_color_texture == b.base_color_texture && a.metallic_roughness_texture == b.metallic_roughness_texture && a.normal_texture == b.normal_texture && a.occlusion_texture == b.occlusion_texture &&
-a.emissive_texture == b.emissive_texture && a.alpha_mode == b.alpha_mode && a.double_sided == b.double_sided && a.procedural_pattern == b.procedural_pattern;
-    }
 } // namespace scene
 namespace scene {
     struct vertex {
@@ -66,19 +61,6 @@ namespace scene {
         std::vector<std::uint32_t> indices;
         material surface;
     };
-    inline bool same_mesh(const mesh& a, const mesh& b) {
-if (a.id != b.id || a.skin_id != b.skin_id || a.vertices.size() != b.vertices.size() || a.indices != b.indices || !same_material(a.surface, b.surface)) 
-            return false;
-        for (std::size_t i = 0; i < a.vertices.size(); ++i) {
-            const auto& x = a.vertices[i];
-            const auto& y = b.vertices[i];
-if (x.position.x != y.position.x || x.position.y != y.position.y || x.position.z != y.position.z || x.normal.x != y.normal.x || x.normal.y != y.normal.y || x.normal.z != y.normal.z ||
-x.u != y.u || x.v != y.v || x.joints != y.joints || x.weights != y.weights) {
-                return false;
-            }
-        }
-        return true;
-    }
 }; // namespace scene
 #include <string>
 #include <limits>
@@ -128,12 +110,6 @@ namespace scene {
         std::vector<collision_box> collision_boxes;
         std::vector<point_light> lights;
     };
-    inline bool same_instance(const instance& a, const instance& b) {
-return a.id == b.id && a.mesh_id == b.mesh_id && a.animation == b.animation && a.animation_tick == b.animation_tick && a.overlay_animation == b.overlay_animation && a.overlay_root == b.overlay_root &&
-a.overlay_weight == b.overlay_weight && a.pose.position.x == b.pose.position.x && a.pose.position.y == b.pose.position.y && a.pose.position.z == b.pose.position.z && a.pose.scale.x == b.pose.scale.x &&
-a.pose.scale.y == b.pose.scale.y && a.pose.scale.z == b.pose.scale.z && a.pose.rotation.x == b.pose.rotation.x && a.pose.rotation.y == b.pose.rotation.y && a.pose.rotation.z == b.pose.rotation.z &&
-            a.pose.rotation.w == b.pose.rotation.w;
-    }
 }; // namespace scene
 #include <spatial/index.hpp>
 #include <algorithm>
