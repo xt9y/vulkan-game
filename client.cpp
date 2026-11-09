@@ -1461,9 +1461,8 @@ namespace {
                 if (scene != previous_scene) {
 bool append = previous_scene && scene->meshes.size() == previous_scene->meshes.size() && scene->instances.size() >= previous_scene->instances.size();
                     if (append) {
-const auto first = scene->instances.begin() + previous_scene->instances.size();
-                        std::vector<::scene::instance> added(first,scene->instances.end());
-                        auto new_boxes = ::player::build_colliders(scene->meshes,added);
+const auto added=std::span<const ::scene::instance>(scene->instances).subspan(previous_scene->instances.size());
+                        auto new_boxes=::player::build_colliders(scene->meshes,added);
                         std::vector<spatial::bounds> bounds;
                         bounds.reserve(new_boxes.size());
                         for (const auto& b : new_boxes)
@@ -3289,8 +3288,7 @@ bool appended=data.collision_source&&scene&& scene->meshes.size()==data.collisio
             if(scene) {
                 if(!appended)data.collision={};
                 const auto first=appended?data.collision_source->instances.size():0;
-const std::vector<::scene::instance> added( scene->instances.begin()+first,scene->instances.end());
-                ::weapon::append(data.collision,scene->meshes,added);
+::weapon::append(data.collision,scene->meshes,std::span<const ::scene::instance>(scene->instances).subspan(first));
             } else data.collision={};
             data.collision_source=scene;
         }

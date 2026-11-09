@@ -20,6 +20,7 @@ hello = 1, welcome, ping, state, goodbye, scene_request
 } // namespace net::message
 #include "util/math/vector.hpp"
 #include <vector>
+#include <span>
 namespace scene {
     struct texture {
         std::uint32_t id = 0;
@@ -226,7 +227,7 @@ value.reload_finishes = now + (empty ? reload.empty_reload_duration : reload.rel
         std::vector<triangle> triangles;
         spatial::index index;
     };
-inline void append(world& data,const std::vector<scene::mesh>& meshes, const std::vector<scene::instance>& instances) {
+inline void append(world& data,const std::vector<scene::mesh>& meshes, std::span<const scene::instance> instances) {
         using namespace vk::util::math;
         std::vector<spatial::bounds> boxes;
         for(const auto& instance:instances) {
@@ -1268,7 +1269,7 @@ forward = 1u << 0, backward = 1u << 1, left = 1u << 2, right = 1u << 3, sprint =
     using collision_world = std::vector<box>;
     spatial::index build_index(const collision_world& world);
     collision_world build_colliders(const ::scene::state& scene);
-collision_world build_colliders( const std::vector<::scene::mesh>& meshes, const std::vector<::scene::instance>& instances );
+collision_world build_colliders( const std::vector<::scene::mesh>& meshes, std::span<const ::scene::instance> instances );
     void step(state& player, const input& input, const collision_world& world, const spatial::index* broadphase = nullptr);
 } // namespace player
 namespace net::movement {
@@ -1444,7 +1445,7 @@ const parameters_t& parameters() {
 collision_world build_colliders(const ::scene::state& scene) {
     return build_colliders(scene.meshes,scene.instances);
 }
-collision_world build_colliders(const std::vector<::scene::mesh>& meshes, const std::vector<::scene::instance>& instances) {
+collision_world build_colliders(const std::vector<::scene::mesh>& meshes, std::span<const ::scene::instance> instances) {
     using namespace vk::util::math;
     collision_world boxes;
     boxes.reserve(instances.size());
