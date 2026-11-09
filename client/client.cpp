@@ -28,7 +28,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include "connection.hpp"
-struct GLFWwindow;
 #include "window.hpp"
 #include <network/socket.hpp>
 #include <GLFW/glfw3.h>
