@@ -162,7 +162,6 @@ namespace clt::window {
         GLFWwindow* handle = nullptr;
         int width = 0;
         int height = 0;
-        std::string title;
         bool initialized = false;
     };
     state* get();
@@ -1398,9 +1397,9 @@ namespace clt::window {
         get()->initialized = true;
         get()->width = game::options::get()->graphics.width;
         get()->height = game::options::get()->graphics.height;
-        get()->title = game::options::get()->graphics.title;
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-get()->handle = glfwCreateWindow(get()->width, get()->height, get()->title.c_str(), nullptr, nullptr);
+get()->handle = glfwCreateWindow(get()->width, get()->height,
+            game::options::get()->graphics.title.c_str(), nullptr, nullptr);
         if (!get()->handle) {
             shutdown();
             throw std::runtime_error("Window creation failed");
@@ -1438,7 +1437,7 @@ namespace {
     using vec3 = vk::util::math::vec3;
     std::atomic<bool> stop{false};
     std::atomic<std::uint32_t> buttons{0};
-    std::atomic<float> yaw{0}, error{0};
+    std::atomic<float> yaw{0};
     std::atomic<std::uint64_t> tick_count{0};
     std::mutex pose_mutex;
     vec3 pose{};
@@ -1505,7 +1504,6 @@ while (!pending.empty() && !net::message::newer(pending.front().sequence,update-
                     if (was_ready) {
                         const auto delta = before - avatar.position;
                         const auto distance = vk::util::math::length(delta);
-                        error.store(distance,std::memory_order_relaxed);
                         correction = distance < 2.f ? correction + delta : vec3{};
                     }
                 }
@@ -1537,7 +1535,6 @@ void init() {
     buttons.store(0,std::memory_order_relaxed);
     yaw.store(0,std::memory_order_relaxed);
     tick_count.store(0,std::memory_order_relaxed);
-    error.store(0,std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock(pose_mutex);
         pose = {};
