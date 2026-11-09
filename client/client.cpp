@@ -4,99 +4,18 @@
 #undef VULKAN_GAME_SHARED_ONLY
 #include <pcloud/pcloud.hpp>
 #include <cstdint>
-namespace clt::input {
-    struct frame {
-        std::uint32_t buttons = 0;
-        float mouse_x = 0;
-        float mouse_y = 0;
-    };
-    void init();
-    bool key_down(int key);
-    bool mouse_down(int button);
-    frame poll();
-    void shutdown();
-} // namespace clt::input
+#include "input.hpp"
 #include <editor/editor.hpp>
-namespace clt::application {
-    struct state {
-        bool initialized = false;
-    };
-    state* get();
-    void init();
-    int run();
-    void shutdown() noexcept;
-} // namespace clt::application
+#include "application.hpp"
 #include <array>
 #include <vector>
 #include <string_view>
-namespace clt::animation {
-    using matrix = std::array<float, 16>;
-    void synchronize(const ::scene::state& scene);
-    std::uint32_t joints(std::uint32_t skin_id);
-bool sample( std::uint32_t skin_id, std::uint32_t clip, float seconds, std::vector<matrix>& palette, std::uint32_t overlay = UINT32_MAX, float weight = 0.0f, std::uint32_t mask_root = UINT32_MAX, bool loop = true );
-    float duration(std::uint32_t skin_id, std::uint32_t clip);
-    std::uint32_t joint(std::uint32_t skin_id, std::string_view name);
-    bool joint_transform(std::uint32_t skin_id, std::uint32_t index, matrix& out);
-bool offset_joint( std::uint32_t skin_id, std::uint32_t root, vk::util::math::vec3 model_offset, std::vector<matrix>& palette );
-    void reset();
-} // namespace clt::animation
+#include "animation.hpp"
 #include <string>
 #include <vk/vk.hpp>
-namespace clt::weapon {
-    using motion=::weapon::motion;
-    using clip=::weapon::clip;
-    using bindings=::weapon::bindings;
-    using definition=::weapon::gun;
-    using gun=::weapon::gun;
-    bindings active_bindings();
-    void register_weapon(definition value);
-    void check_magazine();
-    struct instance_data {
-        vk::util::math::mat4 model;
-        vk::util::math::mat4 normal;
-    };
-    struct draw {
-        std::uint32_t mesh_id = 0;
-        bool viewmodel = false;
-        std::vector<instance_data> instances;
-        std::vector<animation::matrix> palette;
-    };
-    void controls(bool trigger, bool ads, bool reload, std::uint32_t movement);
-    void initialize();
-    const ::scene::state& assets();
-    const std::vector<draw>& update(const vk::util::math::mat4& view);
-    vk::util::math::mat4 view_projection(float aspect, const vk::util::math::mat4& view);
-    void shutdown();
-} // namespace clt::weapon
-namespace clt::camera {
-    struct state {
-        float yaw = 0;
-        float pitch = 0;
-        float fov = 0;
-        float sensitivity = 0;
-    };
-    struct frame {
-        state pose;
-        vk::util::math::mat4 view;
-        vk::util::math::vec3 eye;
-    };
-    state* get();
-    void init();
-    void look(float dx, float dy);
-    void set_look_sensitivity(float base,float ads_multiplier);
-    void set_ads_fraction(float fraction);
-    state snapshot();
-    frame capture();
-    void kick(float radians);
-    void aim(float fraction);
-    vk::util::math::mat4 view_projection(float aspect);
-} // namespace clt::camera
-namespace clt::postprocess {
-    void create();
-    void synchronize_scene();
-    void release();
-    void present(vk::CommandBuffer command, std::uint32_t image);
-}
+#include "weapon.hpp"
+#include "camera.hpp"
+#include "postprocess.hpp"
 #include <network/secure.hpp>
 #include <atomic>
 #include <chrono>
@@ -108,71 +27,9 @@ namespace clt::postprocess {
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
-namespace clt::connection {
-    struct state {
-        std::string host;
-        std::uint16_t port = 0;
-        net::secure::resource socket;
-        std::atomic<bool> stop{false};
-        std::atomic<bool> connected{false};
-        std::atomic<std::uint32_t> server_tick{0};
-        std::atomic<bool> scene_complete{false};
-        std::mutex animation_mutex;
-        std::unordered_map<std::uint32_t, net::animation::resource> animations;
-        std::mutex scene_mutex;
-        std::shared_ptr<const ::scene::state> scene;
-        std::vector<::scene::state> pending_scene;
-        std::chrono::steady_clock::time_point last_publish{};
-        std::array<std::uint32_t,64> light_versions{};
-        std::array<std::optional<net::editor_light::resource>,64> light_pending{};
-        std::mutex error_mutex;
-        std::exception_ptr worker_error;
-        std::mutex player_mutex;
-        std::deque<::player::input> outgoing;
-        std::optional<net::movement::snapshot> authority;
-        std::optional<::player::parameters_t> server_parameters;
-        std::mutex editor_mutex;
-        std::deque<net::editor_light::resource> editor_outgoing;
-        std::uint32_t editor_sequence=0;
-        std::mutex weapon_mutex;
-        std::deque<net::weapon::command> weapon_outgoing;
-        std::deque<net::weapon::snapshot> weapon_updates;
-        std::deque<net::weapon::shot> weapon_shots;
-        std::uint32_t weapon_ack = 0;
-        std::uint32_t weapon_seen_id=0,weapon_seen_sequence=0,weapon_seen_tick=0;
-        std::thread worker;
-        bool initialized = false;
-    };
-    state* get();
-    std::shared_ptr<const ::scene::state> snapshot();
-    std::optional<net::animation::resource> animation(std::uint32_t instance_id);
-    bool send_editor_light(net::editor_light::resource command);
-    bool send_weapon(net::weapon::command command);
-    std::deque<net::weapon::snapshot> take_weapon_updates();
-    std::deque<net::weapon::shot> take_weapon_shots();
-    void check_error();
-    void send_input(const ::player::input& input);
-    std::optional<net::movement::snapshot> take_authority();
-    std::optional<::player::parameters_t> movement_parameters();
-    void init();
-    void shutdown() noexcept;
-} // namespace clt::connection
+#include "connection.hpp"
 struct GLFWwindow;
-namespace clt::window {
-    struct state {
-        GLFWwindow* handle = nullptr;
-        int width = 0;
-        int height = 0;
-        bool initialized = false;
-    };
-    state* get();
-    void init();
-    bool should_close();
-    bool minimized();
-    void framebuffer_size(int& width, int& height);
-    void poll_events();
-    void shutdown() noexcept;
-} // namespace clt::window
+#include "window.hpp"
 #include <network/socket.hpp>
 #include <GLFW/glfw3.h>
 #include <algorithm>
@@ -533,42 +390,12 @@ model.cols[3] = model.cols[3] + ozz::math::simd_float4::Load(offset.x, offset.y,
     }
 } // namespace clt::animation
 #define GLFW_INCLUDE_VULKAN
-namespace clt::vulkan_loader {
-    struct state {
-        PFN_vkGetInstanceProcAddr get_instance_proc_addr = nullptr;
-        void* library = nullptr;
-        bool initialized = false;
-    };
-    state* get();
-    PFN_vkGetInstanceProcAddr init();
-    void shutdown() noexcept;
-} // namespace clt::vulkan_loader
-namespace clt::prediction {
-    void init();
-    void controls(std::uint32_t buttons, float yaw);
-    vk::util::math::vec3 position();
-    std::uint64_t ticks();
-    void shutdown();
-} // namespace clt::prediction
+#include "vulkan_loader.hpp"
+#include "prediction.hpp"
 #include <render/frame.hpp>
 #include <render/sequence.hpp>
 #include <gpu/timestamps.hpp>
-namespace clt::renderer {
-    struct state {
-        ::render::frame_scheduler frames;
-        ::render::sequence passes;
-        gpu::timestamps timings;
-        std::array<double,6> gpu_ms{};
-        std::uint32_t profile_frames=0;
-        bool timestamps_supported=false;
-        bool initialized=false;
-    };
-    state* get();
-    void init(const char* vertex_path,const char* fragment_path);
-    void resize();
-    void draw_frame();
-    void shutdown() noexcept;
-}
+#include "renderer.hpp"
 namespace clt::application {
     namespace {
         std::atomic<bool> typed_question{false};
@@ -1530,16 +1357,7 @@ void shutdown() {
 }
 } // namespace clt::prediction
 #include <cstddef>
-namespace clt::scene_renderer {
-    pc::gbuffer outputs(std::uint32_t image);
-    bool needs_sync();
-    void create_frame_resources();
-    void release_frame_resources();
-    void init(const char* vertex_path, const char* fragment_path);
-    void synchronize();
-void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame& camera);
-    void shutdown();
-} // namespace clt::scene_renderer
+#include "scene_renderer.hpp"
 #include <editor/vulkan.hpp>
 namespace clt::postprocess {
     namespace {
@@ -1968,14 +1786,7 @@ vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderWrite,true
         get()->initialized = false;
     }
 } // namespace clt::renderer
-namespace clt::texture {
-    void init();
-    void synchronize(const ::scene::state& source);
-    void bind(vk::DescriptorSet set, const ::scene::material& surface);
-    void pin(const ::scene::state& source);
-    void reset();
-    void shutdown();
-} // namespace clt::texture
+#include "texture.hpp"
 #include <gpu/culler.hpp>
 #include <gpu/resource.hpp>
 #include <gpu/descriptors.hpp>
