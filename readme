@@ -1,21 +1,27 @@
-vulkan-game: one client source and one server source
+vulkan-game
 
-Application implementations stay in server/server.cpp and client/client.cpp.
-Each non-game namespace has a matching declaration header in its own folder;
-inline helpers and function bodies remain in the existing .cpp sources.
-The game:: and game_weapons namespaces remain inside the source files.
-The client includes the shared portion of the server source; these are the
-only two application translation units. Shaders and game assets stay at the
-repository root, so runtime paths are unchanged.
+Game code is organized by namespace. Each namespace has one header,
+including its types, declarations and implementations:
 
-VulkanWrapper, VulkanSystems and Vulkan-Headers are pinned Git submodules.
-The game build reuses the PCloud integration supplied by VulkanSystems for
-GPU, Render, BVH, Spatial, Jobs, PCloud and their shaders. Network and Editor
-are compiled locally from that same submodule. GLFW (window/input), fastgltf
-(GLB import), Ozz (animation), stb (images), and Mbed TLS (DTLS) are still
-required third-party dependencies, handled by c.
+  server/scene.hpp           scene
+  server/weapon.hpp          weapon
+  server/player.hpp          player
+  server/net/*.hpp           net::*
+  server/net/movement/detail.hpp
+  server/srv/*.hpp           srv::*
+  server/game/*.hpp          game::*
+  server/game_weapons.hpp    game_weapons
+  client/clt/*.hpp           clt::*
 
-First build after cloning:
+Only server/server.cpp and client/client.cpp are application translation
+units. They contain the entry points and host setup; the client includes
+the shared server code with VULKAN_GAME_SHARED_ONLY. Assets and shaders
+stay in their existing root directories.
+
+Dependencies: VulkanWrapper, VulkanSystems and Vulkan-Headers submodules,
+GLFW, fastgltf, Ozz, stb and Mbed TLS.
+
+Setup:
   git submodule update --init --recursive
   c build vulkan-server
   c build vulkan-client
@@ -24,5 +30,4 @@ Run from the repository root:
   c build run vulkan-server
   c build run vulkan-client
 
-The previous source layout and build were runtime-tested. After this
-reorganization, compile and runtime verification are required again.
+The namespace-header layout has not yet been validated by a native build.
