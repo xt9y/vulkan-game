@@ -129,7 +129,6 @@ namespace clt::connection {
         std::atomic<bool> stop{false};
         std::atomic<bool> connected{false};
         std::atomic<std::uint32_t> server_tick{0};
-        std::atomic<std::uint64_t> player_snapshots{0};
         std::atomic<bool> scene_complete{false};
         std::mutex animation_mutex;
         std::unordered_map<std::uint32_t, net::animation::resource> animations;
@@ -152,8 +151,8 @@ namespace clt::connection {
         std::deque<net::weapon::command> weapon_outgoing;
         std::deque<net::weapon::snapshot> weapon_updates;
         std::deque<net::weapon::shot> weapon_shots;
-        std::uint32_t weapon_ack = 0, weapon_tick = 0;
-        std::unordered_map<std::uint32_t, std::pair<std::uint32_t, std::uint32_t>> weapon_versions;
+        std::uint32_t weapon_ack = 0;
+        std::uint32_t weapon_seen_id=0,weapon_seen_sequence=0,weapon_seen_tick=0;
         std::thread worker;
         bool initialized = false;
     };
@@ -947,7 +946,6 @@ std::vector<net::weapon::snapshot> result( data.weapon_updates.begin(), data.wea
         get()->stop.store(false, std::memory_order_relaxed);
         get()->connected.store(false, std::memory_order_relaxed);
         get()->server_tick.store(0, std::memory_order_relaxed);
-        get()->player_snapshots.store(0, std::memory_order_relaxed);
         get()->scene_complete.store(false, std::memory_order_relaxed);
         get()->worker = std::thread(run, get()->host, get()->port);
         get()->initialized = true;
@@ -1027,8 +1025,8 @@ data.socket=net::secure::create( net::secure::role::client, game::secure_config:
                         data.weapon_outgoing.clear();
                         data.weapon_updates.clear();
                         data.weapon_shots.clear();
-                        data.weapon_ack = data.weapon_tick = 0;
-                        data.weapon_versions.clear();
+                        data.weapon_ack = 0;
+                        data.weapon_seen_id=data.weapon_seen_sequence=data.weapon_seen_tick=0;
                     }
                     {
                         std::lock_guard<std::mutex> lock(data.editor_mutex);
@@ -1068,8 +1066,9 @@ data.socket=net::secure::create( net::secure::role::client, game::secure_config:
                         const auto size = net::secure::receive(data.socket, peer, buffer.data(), buffer.size());
                         if (!size) 
                             break;
+                        if(!net::endpoint::equal(peer,server))continue;
 if(const auto update=net::editor_light::decode( buffer.data(),*size)) {
-if(net::endpoint::equal(peer,server) && update->token==token && data.connected.load(std::memory_order_relaxed) && (update->type==net::editor_light::kind::state || update->type==net::editor_light::kind::ack)) {
+if(update->token==token && data.connected.load(std::memory_order_relaxed) && (update->type==net::editor_light::kind::state || update->type==net::editor_light::kind::ack)) {
                                 if(update->type==net::editor_light::kind::ack) {
                                     std::lock_guard<std::mutex> lock(data.editor_mutex);
 if(!data.editor_outgoing.empty() && data.editor_outgoing.front().sequence== update->sequence) {
@@ -1092,13 +1091,16 @@ if(!data.editor_outgoing.empty() && data.editor_outgoing.front().sequence== upda
                         }
                         auto accept_weapon = [&](const net::weapon::snapshot& update) {
                             std::lock_guard<std::mutex> lock(data.weapon_mutex);
-                            const auto previous = data.weapon_versions.find(update.weapon_id);
-if (previous != data.weapon_versions.end() && (net::message::newer(previous->second.first, update.sequence) || (update.sequence == previous->second.first && net::message::newer(previous->second.second, update.tick)))) 
+                            if(data.weapon_seen_id==update.weapon_id &&
+                               (net::message::newer(data.weapon_seen_sequence,update.sequence) ||
+                                (update.sequence==data.weapon_seen_sequence &&
+                                 net::message::newer(data.weapon_seen_tick,update.tick))))
                                 return false;
-                            data.weapon_versions[update.weapon_id] = {update.sequence, update.tick};
+                            data.weapon_seen_id=update.weapon_id;
+                            data.weapon_seen_sequence=update.sequence;
+                            data.weapon_seen_tick=update.tick;
                             if (!net::message::newer(data.weapon_ack, update.sequence)) {
                                 data.weapon_ack = update.sequence;
-                                data.weapon_tick = update.tick;
                             }
 while (!data.weapon_outgoing.empty() && !net::message::newer( data.weapon_outgoing.front().sequence, data.weapon_ack )) 
                                 data.weapon_outgoing.pop_front();
@@ -1109,7 +1111,7 @@ while (!data.weapon_outgoing.empty() && !net::message::newer( data.weapon_outgoi
                             return true;
                         };
                         if (const auto shot = net::weapon::decode_shot(buffer.data(), *size)) {
-if (net::endpoint::equal(peer, server) && shot->state.token == token && data.connected.load(std::memory_order_relaxed)) {
+if (shot->state.token == token && data.connected.load(std::memory_order_relaxed)) {
                                 accept_weapon(shot->state);
                                 std::lock_guard<std::mutex> lock(data.weapon_mutex);
                                 if (data.weapon_shots.size() >= 64) 
@@ -1119,12 +1121,12 @@ if (net::endpoint::equal(peer, server) && shot->state.token == token && data.con
                             continue;
                         }
                         if (const auto update = net::weapon::decode_snapshot(buffer.data(), *size)) {
-if (net::endpoint::equal(peer, server) && update->token == token && data.connected.load(std::memory_order_relaxed)) 
+if (update->token == token && data.connected.load(std::memory_order_relaxed)) 
                                 accept_weapon(*update);
                             continue;
                         }
                         if (const auto state = net::animation::decode(buffer.data(), *size)) {
-if (net::endpoint::equal(peer, server) && state->token == token && data.connected.load(std::memory_order_relaxed)) {
+if (state->token == token && data.connected.load(std::memory_order_relaxed)) {
                                 std::lock_guard<std::mutex> lock(data.animation_mutex);
                                 const auto old = data.animations.find(state->instance_id);
 if (old == data.animations.end() || net::message::newer(state->server_tick, old->second.server_tick))
@@ -1134,7 +1136,7 @@ if (old == data.animations.end() || net::message::newer(state->server_tick, old-
                             continue;
                         }
 if (const auto settings = net::movement::decode_parameters( buffer.data(), *size)) {
-if (net::endpoint::equal(peer, server) && settings->token == token && data.connected.load(std::memory_order_relaxed)) {
+if (settings->token == token && data.connected.load(std::memory_order_relaxed)) {
                                 std::lock_guard<std::mutex> lock(data.player_mutex);
                                 data.server_parameters = settings->values;
                                 last_received = now;
@@ -1142,12 +1144,11 @@ if (net::endpoint::equal(peer, server) && settings->token == token && data.conne
                             continue;
                         }
                         if (const auto update = net::movement::decode_snapshot(buffer.data(), *size)) {
-if (net::endpoint::equal(peer, server) && update->token == token && data.connected.load(std::memory_order_relaxed)) {
+if (update->token == token && data.connected.load(std::memory_order_relaxed)) {
                                 last_received = now;
                                 if (!net::message::newer(update->tick, last_player_tick)) 
                                     continue;
                                 last_player_tick = update->tick;
-                                data.player_snapshots.fetch_add(1, std::memory_order_relaxed);
 while (!unacknowledged.empty() && !net::message::newer(unacknowledged.front().sequence, update->sequence)) 
                                     unacknowledged.pop_front();
                                 std::lock_guard<std::mutex> lock(data.player_mutex);
@@ -1156,9 +1157,9 @@ while (!unacknowledged.empty() && !net::message::newer(unacknowledged.front().se
                             continue;
                         }
                         const auto message = net::message::decode(buffer.data(), *size);
-if(net::endpoint::equal(peer,server) && transport.accept(peer,buffer.data(),*size,now)) 
+if(transport.accept(peer,buffer.data(),*size,now)) 
                             continue;
-if (!message || !net::endpoint::equal(peer, server) || message->token != token || !net::message::newer(message->sequence, last_accepted) || net::message::newer(message->sequence, outstanding) || !waiting) 
+if (!message || message->token != token || !net::message::newer(message->sequence, last_accepted) || net::message::newer(message->sequence, outstanding) || !waiting) 
                             continue;
                         const bool is_connected = data.connected.load(std::memory_order_relaxed);
 if ((!is_connected && message->type != net::message::type::welcome) || (is_connected && message->type != net::message::type::state)) 
