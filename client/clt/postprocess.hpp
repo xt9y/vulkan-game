@@ -11,7 +11,6 @@
 #include <memory>
 #include <pcloud/pcloud.hpp>
 #include <optics/optics.hpp>
-#include <optics/caustics.hpp>
 #include <pmap/pmap.hpp>
 #include <optional>
 #include <vk/vk.hpp>
@@ -20,7 +19,6 @@ namespace clt::postprocess
 {
 namespace {
 std::unique_ptr<optics::compositor> material_compositor;
-std::unique_ptr<optics::caustics> photon_caustics;
 std::unique_ptr<pm::mapper> photon_transport;
 }
 void create();
@@ -355,12 +353,6 @@ void create()
     shaders.fullscreen_shader = configured.fullscreen_shader;
     shaders.presentation_shader = configured.presentation_shader;
     pc::create(gbuffers, shaders);
-    std::vector<vk::ImageView> depth_views;
-    depth_views.reserve(count);
-    for(std::uint32_t i=0;i<count;++i)
-        depth_views.push_back(scene_renderer::outputs(i)[3]);
-    auto caustics=std::make_unique<optics::caustics>();
-    caustics->create(vk::swapchain::get()->extent,depth_views);
     std::vector<optics::input> material_frames;
     material_frames.reserve(count);
     for(std::uint32_t i=0;i<count;++i) {
@@ -368,13 +360,12 @@ void create()
         const auto optical=scene_renderer::optical_outputs(i);
         material_frames.push_back({
             pc::ldr_view(i),ordinary[3],optical[0],optical[1],
-            optical[2],optical[3],caustics->buffer(i)
+            optical[2],optical[3]
         });
     }
     auto compositor=std::make_unique<optics::compositor>();
     compositor->create(pc::presentation_pass(),material_frames);
     material_compositor=std::move(compositor);
-    photon_caustics=std::move(caustics);
 }
 
 void synchronize_scene()
@@ -395,7 +386,6 @@ void synchronize_scene()
     // Drop old descriptor references before releasing the mapper's GPU
     // buffers. synchronize_scene is called only when the renderer is idle.
     if(material_compositor)material_compositor->set_scene({},lights);
-    if(photon_caustics)photon_caustics->set_photons({});
     photon_transport.reset();
     if(source && std::any_of(source->instances.begin(),source->instances.end(),
         [](const auto& inst){return inst.pattern==2u || inst.pattern==3u;})) {
@@ -403,14 +393,12 @@ void synchronize_scene()
         if(scene) {
             pm::configuration config{};
             config.transport_only=true;
-            config.photons=16384; // Denser stable distribution, fewer discrete caustic spots.
+            config.photons=8192; // Invisible indirect-lighting cache; no projected splats.
             config.gi_updates=1; // Stable photon map, reprojected from the camera every frame.
             config.bounces=4;
             config.atlas_tile=32;
             auto mapper=std::make_unique<pm::mapper>();
             mapper->create(*scene,{1,1},config);
-            const auto buffers=mapper->photon_buffers();
-            photon_caustics->set_photons({buffers.sorted,buffers.used,buffers.capacity});
             const auto g=mapper->geometry_buffers();
             if(material_compositor)
                 material_compositor->set_scene({
@@ -429,29 +417,22 @@ void synchronize_scene()
 void release()
 {
     material_compositor.reset();
-    photon_caustics.reset();
     photon_transport.reset();
     pc::release();
     registered.reset();
 }
 
-void update_photons(vk::CommandBuffer cmd,std::uint32_t image,
-                    const camera::frame& view)
+void update_photons(vk::CommandBuffer cmd,std::uint32_t,
+                    const camera::frame&)
 {
-    if(!photon_caustics || !scene_renderer::has_optics())return;
-    if(photon_transport)photon_transport->record_transport(cmd);
-    const auto extent=vk::swapchain::get()->extent;
-    const auto projection=vk::util::math::perspective(
-        view.pose.fov,float(extent.width)/float(extent.height),.1f,1000.f)*view.view;
-    photon_caustics->record(cmd,image,projection);
-    // The off-screen reflection fragment shader reads the photon map written
-    // by compute. Its buffer dependency crosses compute/graphics stages.
-    vk::MemoryBarrier reflection_barrier{};
-    reflection_barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
-    reflection_barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead;
+    if(!photon_transport || !scene_renderer::has_optics())return;
+    photon_transport->record_transport(cmd);
+    vk::MemoryBarrier barrier{};
+    barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
+    barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead;
     cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
                         vk::PipelineStageFlagBits::eFragmentShader,{},
-                        {reflection_barrier},{},{});
+                        {barrier},{},{});
 }
 
 void present(vk::CommandBuffer cmd, std::uint32_t image, const camera::frame &view)
