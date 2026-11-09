@@ -346,7 +346,7 @@ idle,walk,draw,reload,reload_empty, ads_idle,ads_in,ads_out,ads_walk, fire1,fire
     };
 }
 namespace game_weapons {
-    std::vector<::weapon::gun> all();
+    ::weapon::gun make();
 }
 #include <fstream>
 #include <iterator>
@@ -389,7 +389,7 @@ const auto normal = clip(reload_clip, refill_frame), empty = clip(empty_reload_c
     }
 } // namespace weapon
 namespace game_weapons {
-    std::vector<::weapon::gun> all() {
+    ::weapon::gun make() {
         using motion=::weapon::motion;
         ::weapon::gun glock{};
         glock.rules.id=1;
@@ -444,7 +444,7 @@ glock.rules.reload=weapon::load_timing( "assets/glock/metadata.json", "Glock_Rel
         glock.impact_radius=.009f;
         glock.impact_lifetime=120.f;
         glock.max_impacts=192;
-        return {std::move(glock)};
+        return glock;
     }
 }
 #include <fastgltf/types.hpp>
@@ -1881,8 +1881,7 @@ game::options::init(argc, argv, game::options::mode::server_only, std::move(sett
             0.3f,      // player radius (collision width)
             1.8f       // player height (collision and camera)
         });
-        for(const auto& gun:game_weapons::all())
-            srv::application::add_weapon(gun.rules);
+        srv::application::add_weapon(game_weapons::make().rules);
         net::socket::init();
         std::signal(SIGINT, stop);
         std::signal(SIGTERM, stop);

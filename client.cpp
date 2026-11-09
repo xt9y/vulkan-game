@@ -288,10 +288,6 @@ editor_light_ids+std::uint64_t(i)+1u, "LIGHT", int(std::lround((nx*0.5f+0.5f)*fl
 ui.set_properties(editor_light_ids+std::uint64_t(i)+1u, light_properties(light));
         }
     }
-    void load_weapons() {
-        for(auto&& gun:game_weapons::all())
-            clt::weapon::register_weapon(std::move(gun));
-    }
     void on_input(const clt::input::frame& frame) {
         publish_editor_lights();
         if(editor::instance().captures_input()) {
@@ -341,7 +337,7 @@ game::options::init(argc, argv, game::options::mode::client_only, std::move(sett
             game::options::print_help();
             return 0;
         }
-        load_weapons();
+        clt::weapon::register_weapon(game_weapons::make());
         editor::instance().set_catalog({{"light","Light","Lighting"}});
         net::socket::init();
         std::signal(SIGINT, stop);
