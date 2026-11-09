@@ -1995,10 +1995,7 @@ namespace clt::texture {
 namespace clt::scene_renderer {
     namespace {
         using namespace vk::util::math;
-        struct instance_data {
-            mat4 model;
-            mat4 normal;
-        };
+        using instance_data=::clt::weapon::instance_data;
         struct draw_parameters {
             mat4 view_projection;
             std::array<float, 4> base_color;
