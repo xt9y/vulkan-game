@@ -2503,24 +2503,26 @@ if (existing->has_sequence && !net::message::newer(message.sequence, existing->l
             }
         }
         void send_animation_states() {
-            if (get()->tick % net::limits::animation_period != 0 || get()->scene.instances.empty()) return;
-            const auto& instances = get()->scene.instances;
-            const std::size_t count = std::min<std::size_t>(net::limits::animations_per_tick, instances.size());
-            const std::size_t start = get()->animation_cursor % instances.size();
-            for (auto& client : session::get()->clients) {
-                if (!client.active) continue;
-                for (std::size_t i = 0; i < count; ++i) {
-                    const auto& instance = instances[(start + i) % instances.size()];
-const auto mesh = std::find_if( get()->scene.meshes.begin(), get()->scene.meshes.end(), [&](const ::scene::mesh& m) { return m.id == instance.mesh_id; });
-                    if (mesh == get()->scene.meshes.end() || !mesh->skin_id)
-                        continue;
-                    const auto message = net::animation::encode({
-client.token, get()->tick, instance.id, instance.animation, instance.animation_tick, instance.overlay_animation, instance.overlay_root, instance.overlay_weight
+            if(get()->tick%net::limits::animation_period || get()->scene.instances.empty())return;
+            const auto& world=get()->scene;
+            const auto count=std::min<std::size_t>(net::limits::animations_per_tick,world.instances.size());
+            const auto start=get()->animation_cursor%world.instances.size();
+            for(std::size_t i=0;i<count;++i) {
+                const auto& instance=world.instances[(start+i)%world.instances.size()];
+                const auto mesh=std::find_if(world.meshes.begin(),world.meshes.end(),
+                    [&](const ::scene::mesh& value){return value.id==instance.mesh_id;});
+                if(mesh==world.meshes.end()||!mesh->skin_id)continue;
+                for(const auto& client:session::get()->clients) {
+                    if(!client.active)continue;
+                    const auto packet=net::animation::encode({
+                        client.token,get()->tick,instance.id,instance.animation,
+                        instance.animation_tick,instance.overlay_animation,
+                        instance.overlay_root,instance.overlay_weight
                     });
-net::secure::send( get()->socket, client.endpoint, message.data(), message.size());
+                    net::secure::send(get()->socket,client.endpoint,packet.data(),packet.size());
                 }
             }
-            get()->animation_cursor = (start + count) % instances.size();
+            get()->animation_cursor=(start+count)%world.instances.size();
         }
         void send_scene_batches() {
             const auto now=clock::now();
