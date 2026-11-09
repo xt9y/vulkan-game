@@ -9,11 +9,6 @@ namespace clt::input {
         float mouse_x = 0;
         float mouse_y = 0;
     };
-    void init();
-    bool key_down(int key);
-    bool mouse_down(int button);
-    frame poll();
-    void shutdown();
 
 namespace {
         double last_x = 0;

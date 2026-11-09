@@ -18,10 +18,6 @@ namespace clt::application {
     struct state {
         bool initialized = false;
     };
-    state* get();
-    void init();
-    int run();
-    void shutdown() noexcept;
 
 namespace {
         std::atomic<bool> typed_question{false};
