@@ -1740,7 +1740,6 @@ namespace srv::application {
         player::collision_world colliders;
         ::weapon::world weapon_world;
         ::weapon::definition weapon{};
-        bool weapon_registered=false;
         spatial::index collision_index;
         struct batch {
             std::vector<std::uint8_t> bytes;
@@ -1965,11 +1964,10 @@ void load_model(std::filesystem::path path, ::scene::transform pose, std::uint32
     void add_weapon(::weapon::definition definition) {
         if (get()->initialized) 
             throw std::runtime_error("Register weapons before init");
-        if(get()->weapon_registered)
+        if(get()->weapon.id)
             throw std::logic_error("Only one weapon belongs to this game");
         ::weapon::validate(definition);
         get()->weapon=std::move(definition);
-        get()->weapon_registered=true;
     }
     void init() {
         if (get()->initialized) 
@@ -2179,7 +2177,6 @@ if (clock::now() + std::chrono::milliseconds(net::limits::generation_slack_ms) <
         get()->colliders.clear();
         get()->weapon_world = {};
         get()->weapon={};
-        get()->weapon_registered=false;
         get()->scene = {};
         get()->editor_light_versions.clear();
         get()->editor_light_revision=1;
@@ -2363,7 +2360,7 @@ const double seconds=std::chrono::duration<double>( now.time_since_epoch()).coun
                     queue.pop_front();
                     client.weapon_sequence=cmd.sequence;
                     client.weapon.last_result=::weapon::result::none;
-const auto* definition= get()->weapon_registered && get()->weapon.id==cmd.weapon_id
+const auto* definition= get()->weapon.id==cmd.weapon_id
                             ? &get()->weapon : nullptr;
                     if (!definition) continue;
                     if (cmd.kind==::weapon::action::equip) {
@@ -2391,7 +2388,7 @@ const auto result=::weapon::apply( client.weapon,cmd.sequence,cmd.kind, seconds,
 const double now=std::chrono::duration<double>( clock::now().time_since_epoch()).count();
             for (auto& client : session::get()->clients) {
                 if (!client.active) continue;
-if (const auto* definition= get()->weapon_registered ? &get()->weapon : nullptr) {
+if (const auto* definition= get()->weapon.id ? &get()->weapon : nullptr) {
                     ::weapon::advance(client.weapon,now,*definition);
                     const auto state=weapon_snapshot(client,now);
                     const auto bytes=net::weapon::encode_snapshot(state);
@@ -2427,7 +2424,7 @@ net::secure::send(get()->socket,client.endpoint, bytes.data(),bytes.size());
                     client->token = message.token;
                     client->active = true;
                     client->avatar.position = player::parameters().spawn;
-                    if(get()->weapon_registered)
+                    if(get()->weapon.id)
                         client->weapon=::weapon::make_state(get()->weapon);
                 }
                 client->last_seen = clock::now();
