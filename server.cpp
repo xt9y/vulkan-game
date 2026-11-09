@@ -2363,22 +2363,17 @@ const double seconds=std::chrono::duration<double>( now.time_since_epoch()).coun
 const auto* definition= get()->weapon.id==cmd.weapon_id
                             ? &get()->weapon : nullptr;
                     if (!definition) continue;
-                    if (cmd.kind==::weapon::action::equip) {
-                        client.weapon.sequence=cmd.sequence;
-                        client.weapon.last_result=::weapon::result::equipped;
-                    } else {
-const auto result=::weapon::apply( client.weapon,cmd.sequence,cmd.kind, seconds,*definition);
-                        if (cmd.kind==::weapon::action::fire) {
-                            const auto impact=result==::weapon::result::fired
-? ::weapon::trace( get()->weapon_world,client.avatar.position, ::weapon::direction(cmd.yaw,cmd.pitch), definition->range)
-                                : ::weapon::hit{};
-                            net::weapon::shot shot{
-                                weapon_snapshot(client,seconds),impact
-                            };
-                            client.last_shot=shot;
-                            if (client.shots.size()>=32) client.shots.pop_front();
-                            client.shots.push_back({shot,3});
-                        }
+                    const auto result=::weapon::apply(
+                        client.weapon,cmd.sequence,cmd.kind,seconds,*definition);
+                    if(cmd.kind==::weapon::action::fire) {
+                        const auto impact=result==::weapon::result::fired
+                            ? ::weapon::trace(get()->weapon_world,client.avatar.position,
+                                ::weapon::direction(cmd.yaw,cmd.pitch),definition->range)
+                            : ::weapon::hit{};
+                        net::weapon::shot shot{weapon_snapshot(client,seconds),impact};
+                        client.last_shot=shot;
+                        if(client.shots.size()>=32)client.shots.pop_front();
+                        client.shots.push_back({shot,3});
                     }
                 }
                 return;
