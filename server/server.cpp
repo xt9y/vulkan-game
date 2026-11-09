@@ -55,7 +55,6 @@
 #include "scene.hpp"
 #include "weapon.hpp"
 #include "game_weapons.hpp"
-#include "net/scene_stream.hpp"
 #include "srv/assets.hpp"
 #include "net/animation.hpp"
 #include "net/limits.hpp"
