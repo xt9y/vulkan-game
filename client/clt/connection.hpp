@@ -192,15 +192,26 @@ std::shared_ptr<const scene::state> snapshot()
     append(&::scene::state::skins);
     append(&::scene::state::textures);
     append(&::scene::state::meshes);
+    std::size_t new_instances=0;
+    for(const auto& patch:data.pending_scene)new_instances+=patch.instances.size();
+    combined->instances.reserve(combined->instances.size()+new_instances+data.cube_pending.size());
+    std::unordered_map<std::uint32_t,std::size_t> instance_indices;
+    instance_indices.reserve(combined->instances.capacity());
+    for(std::size_t i=0;i<combined->instances.size();++i)
+        instance_indices.emplace(combined->instances[i].id,i);
     for(auto& patch:data.pending_scene)
         for(auto& instance:patch.instances) {
-            const auto found=std::find_if(combined->instances.begin(),combined->instances.end(),
-                [&](const auto& old){return old.id==instance.id;});
-            if(found==combined->instances.end()) {
+            const auto found=instance_indices.find(instance.id);
+            if(found==instance_indices.end()) {
                 if(instance.editor_cube && data.cube_versions[instance.id]>instance.revision)continue;
+                const auto id=instance.id;
+                instance_indices.emplace(id,combined->instances.size());
                 combined->instances.push_back(std::move(instance));
-            }else if(!found->editor_cube || instance.revision>found->revision)
-                *found=std::move(instance);
+            }else {
+                auto& current=combined->instances[found->second];
+                if(!current.editor_cube || instance.revision>current.revision)
+                    current=std::move(instance);
+            }
         }
     append(&::scene::state::collision_boxes);
     append(&::scene::state::lights);
@@ -230,13 +241,18 @@ std::shared_ptr<const scene::state> snapshot()
     }
 
     for(auto& [id,update]:data.cube_pending) {
-        auto found=std::find_if(combined->instances.begin(),combined->instances.end(),
-            [&](const auto& old){return old.id==id;});
-        if(found==combined->instances.end())
+        const auto found=instance_indices.find(id);
+        if(found==instance_indices.end()) {
+            instance_indices.emplace(id,combined->instances.size());
             combined->instances.push_back(update.cube);
-        else if(!found->editor_cube || update.revision>found->revision)
-            *found=update.cube;
-        changed=true;
+            changed=true;
+        }else {
+            auto& current=combined->instances[found->second];
+            if(!current.editor_cube || update.revision>current.revision) {
+                current=update.cube;
+                changed=true;
+            }
+        }
     }
     data.cube_pending.clear();
     if (data.pending_scene.empty() && !changed) return data.scene;

@@ -585,35 +585,34 @@ void synchronize()
 
     if (appended) {
         const auto& before=data.snapshot->instances;
-        bool modified=source->instances.size()!=before.size();
-        if(!modified) {
-            for(std::size_t i=0;i<before.size();++i) {
-                const auto& a=before[i],&b=source->instances[i];
-                const auto& x=a.pose.position,&y=b.pose.position;
-                const auto& s=a.pose.scale,&t=b.pose.scale;
-                const auto& q=a.pose.rotation,&r=b.pose.rotation;
-                if(a.id!=b.id||a.enabled!=b.enabled||a.pattern!=b.pattern||
-                   x.x!=y.x||x.y!=y.y||x.z!=y.z||
-                   s.x!=t.x||s.y!=t.y||s.z!=t.z||
-                   q.x!=r.x||q.y!=r.y||q.z!=r.z||q.w!=r.w||
-                   a.tint.x!=b.tint.x||a.tint.y!=b.tint.y||a.tint.z!=b.tint.z) {
-                    modified=true;
-                    break;
-                }
+        std::unordered_set<std::uint32_t> changed_meshes;
+        for(std::size_t i=0;i<before.size();++i) {
+            const auto& a=before[i],&b=source->instances[i];
+            const auto& x=a.pose.position,&y=b.pose.position;
+            const auto& s=a.pose.scale,&t=b.pose.scale;
+            const auto& q=a.pose.rotation,&r=b.pose.rotation;
+            if(a.id!=b.id||a.enabled!=b.enabled||a.pattern!=b.pattern||
+               x.x!=y.x||x.y!=y.y||x.z!=y.z||
+               s.x!=t.x||s.y!=t.y||s.z!=t.z||
+               q.x!=r.x||q.y!=r.y||q.z!=r.z||q.w!=r.w||
+               a.tint.x!=b.tint.x||a.tint.y!=b.tint.y||a.tint.z!=b.tint.z) {
+                changed_meshes.insert(a.mesh_id);
+                changed_meshes.insert(b.mesh_id);
             }
         }
-        if(!modified) {
+        for(std::size_t i=before.size();i<source->instances.size();++i)
+            changed_meshes.insert(source->instances[i].mesh_id);
+        animation::synchronize(*source);
+        if(source->textures.size()!=data.snapshot->textures.size())
+            texture::synchronize(*source);
+        if(changed_meshes.empty()) {
             data.snapshot=source;
             return;
         }
-        animation::synchronize(*source);
-
-        if (source->textures.size() != data.snapshot->textures.size())
-            texture::synchronize(*source);
         std::unordered_map<std::uint32_t,std::size_t> lookup;
-        lookup.reserve(data.meshes.size());
         for(std::size_t i=0;i<data.meshes.size();++i) {
             auto& mesh=data.meshes[i];
+            if(!changed_meshes.contains(mesh.id))continue;
             lookup.emplace(mesh.id,i);
             mesh.instances.clear();
             mesh.transforms.clear();
@@ -628,8 +627,8 @@ void synchronize()
         bool needs_sets=false;
         gpu::upload::batch upload;
         for(auto& mesh:data.meshes) {
-            if(mesh.transforms.empty())continue;
-            if(mesh.frames.empty()||!mesh.frames.front().set)needs_sets=true;
+            if(!changed_meshes.contains(mesh.id) || mesh.transforms.empty())continue;
+            if(mesh.frames.empty() || !mesh.frames.front().set)needs_sets=true;
             refresh_instances(mesh,0,&upload);
         }
         upload.finish();
