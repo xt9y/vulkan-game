@@ -196,26 +196,27 @@ void init()
     get()->initialized = true;
 
     auto requests = std::move(get()->models);
+    std::array<std::uint32_t,4> initial_ids{1,1,1,1};
+    for(const auto& mesh:get()->scene.meshes)
+        initial_ids[0]=std::max(initial_ids[0],mesh.id+1);
+    for(const auto& instance:get()->scene.instances)
+        if(instance.id<0x40000000u)
+            initial_ids[1]=std::max(initial_ids[1],instance.id+1);
+    for(const auto& texture:get()->scene.textures)
+        initial_ids[2]=std::max(initial_ids[2],texture.id+1);
+    for(const auto& skin:get()->scene.skins)
+        initial_ids[3]=std::max(initial_ids[3],skin.id+1);
 
     if (!requests.empty()) {
         begin_stream();
 
-        if (!generation_jobs().submit([requests = std::move(requests)]() -> jobs::completion
+        if (!generation_jobs().submit([requests = std::move(requests),initial_ids]() -> jobs::completion
                                       {
                 ::scene::state combined;
-                auto mesh_id = std::uint32_t(1);
-                auto instance_id = std::uint32_t(1);
-                auto texture_id = std::uint32_t(1);
-                auto skin_id = std::uint32_t(1);
-                for (const auto& mesh : get()->scene.meshes)
-                    mesh_id = std::max(mesh_id, mesh.id + 1);
-                for (const auto& instance : get()->scene.instances)
-                    if(instance.id<0x40000000u)
-                        instance_id = std::max(instance_id, instance.id + 1);
-                for (const auto& texture : get()->scene.textures)
-                    texture_id = std::max(texture_id, texture.id + 1);
-                for (const auto& skin : get()->scene.skins)
-                    skin_id = std::max(skin_id, skin.id + 1);
+                auto mesh_id=initial_ids[0];
+                auto instance_id=initial_ids[1];
+                auto texture_id=initial_ids[2];
+                auto skin_id=initial_ids[3];
                 for (const auto& request : requests) {
                     const auto import_started = clock::now();
 auto imported = assets::load(request.path, mesh_id, instance_id, texture_id, skin_id);

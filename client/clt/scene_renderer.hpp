@@ -11,6 +11,7 @@
 #include <gpu/descriptors.hpp>
 #include <gpu/resource.hpp>
 #include <map>
+#include <unordered_set>
 #include <memory>
 #include <pcloud/pcloud.hpp>
 #include <render/attachments.hpp>
