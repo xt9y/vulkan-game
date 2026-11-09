@@ -107,6 +107,7 @@ namespace clt::postprocess {
 #include <optional>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 namespace clt::connection {
     struct state {
         std::string host;
@@ -186,14 +187,14 @@ namespace {
 std::vector<editor::property> light_properties( const ::scene::point_light& light) {
         using kind=editor::property_kind;
         return {
-            {"pos_x","Pos X",kind::real,light.position.x,-500,500,1},
-            {"pos_y","Pos Y",kind::real,light.position.y,-500,500,1},
-            {"pos_z","Pos Z",kind::real,light.position.z,-500,500,1},
-            {"color_r","Color X",kind::integer,light.color.x*100,0,100,1},
-            {"color_g","Color Y",kind::integer,light.color.y*100,0,100,1},
-            {"color_b","Color Z",kind::integer,light.color.z*100,0,100,1},
-            {"radius","Radius",kind::real,light.radius,0.05,64,1},
-            {"strength","Strength",kind::real,light.strength,0,20,1}
+            {"pos_x","Pos X",kind::real,light.position.x,-500,500,1,{}},
+            {"pos_y","Pos Y",kind::real,light.position.y,-500,500,1,{}},
+            {"pos_z","Pos Z",kind::real,light.position.z,-500,500,1,{}},
+            {"color_r","Color X",kind::integer,light.color.x*100,0,100,1,{}},
+            {"color_g","Color Y",kind::integer,light.color.y*100,0,100,1,{}},
+            {"color_b","Color Z",kind::integer,light.color.z*100,0,100,1,{}},
+            {"radius","Radius",kind::real,light.radius,0.05,64,1,{}},
+            {"strength","Strength",kind::real,light.strength,0,20,1,{}}
         };
     }
     void on_editor_action(const editor::action& action) {
@@ -2290,7 +2291,6 @@ result.geometry.upload(transfers,mesh.vertices.data(), mesh.vertices.size()*size
         }
 const auto count=std::uint32_t( data.local_meshes.size()*vk::swapchain::get()->images.size());
         const auto schema=instance_bindings();
-        const auto device=vk::device::get()->handle;
         data.local_sets=std::make_unique<gpu::descriptors>();
         data.local_sets->create(std::vector<vk::DescriptorSetLayoutBinding>(schema.begin(),schema.end()),count);
         std::uint32_t descriptor_index=0;
@@ -2800,7 +2800,6 @@ std::sin(pose.yaw)*std::cos(pose.pitch), std::sin(pose.pitch), -std::cos(pose.ya
         return perspective(frame.pose.fov,aspect,.1f,1000.f)*frame.view;
     }
 } // namespace clt::camera
-#include <unordered_set>
 namespace clt::weapon {
     using namespace vk::util::math;
     namespace {
@@ -2943,7 +2942,7 @@ mesh.indices.insert( mesh.indices.end(),
             const vec3 travel = to - from;
             const float distance = length(travel);
             if (distance < 1e-7f) return {};
-            return ::weapon::trace(get().collision,from,travel / distance,distance);
+            return ::weapon::trace(data.collision,from,travel / distance,distance);
         }
 void add_impact(const ::weapon::hit& impact, const definition& settings) {
             if (!impact.impacted) 
@@ -2962,10 +2961,9 @@ void add_impact(const ::weapon::hit& impact, const definition& settings) {
             m(0, 3) = p.x;
             m(1, 3) = p.y;
             m(2, 3) = p.z;
-            auto& d = get();
-            if (d.holes.size() >= settings.max_impacts) 
-                d.holes.pop_front();
-            d.holes.push_back({m, 0, settings.impact_lifetime});
+            if (data.holes.size() >= settings.max_impacts) 
+                data.holes.pop_front();
+            data.holes.push_back({m, 0, settings.impact_lifetime});
         }
         std::uint32_t clip_index(motion name) {
             return data.skin?data.clips[std::size_t(name)]:0u;
