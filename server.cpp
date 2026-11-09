@@ -304,11 +304,11 @@ std::max({t.a.x,t.b.x,t.c.x}), std::max({t.a.y,t.b.y,t.c.y}), std::max({t.a.z,t.
     }
 } // namespace weapon
 #include <filesystem>
-#include <map>
+#include <array>
 #include <vk/vk.hpp>
 namespace weapon {
     enum class motion {
-idle,walk,draw,reload,reload_empty, ads_idle,ads_in,ads_out,ads_walk, fire1,fire2,fire3,ads_fire1,ads_fire2,ads_fire3
+idle,walk,draw,reload,reload_empty, ads_idle,ads_in,ads_out,ads_walk, fire1,fire2,fire3,ads_fire1,ads_fire2,ads_fire3,count
     };
     struct clip {
         std::string name;
@@ -326,7 +326,7 @@ idle,walk,draw,reload,reload_empty, ads_idle,ads_in,ads_out,ads_walk, fire1,fire
         definition rules;
         bindings input{};
         std::filesystem::path model,casing_model;
-        std::map<motion,clip> animations;
+        std::array<clip,std::size_t(motion::count)> animations{};
         std::string camera_joint,muzzle_joint,ejection_joint,slide_joint;
         vk::util::math::vec3 muzzle_offset{0.f,0.f,-.4f};
         vk::util::math::vec3 ejection_offset{.08f,-.04f,-.12f};
@@ -411,23 +411,23 @@ glock.rules.reload=weapon::load_timing( "assets/glock/metadata.json", "Glock_Rel
         glock.muzzle_joint="Muzzle";
         glock.ejection_joint="EjectionPort";
         glock.slide_joint="Slide";
-        glock.animations={
-            {motion::idle,{"Glock_Idle",1,true}},
-            {motion::walk,{"Glock_Walk",1,true}},
-            {motion::draw,{"Glock_Draw",1,false}},
-            {motion::reload,{"Glock_Reload",1,false}},
-            {motion::reload_empty,{"Glock_ReloadEmpty",1,false}},
-            {motion::ads_idle,{"Glock_ADS_Idle",1,true}},
-            {motion::ads_walk,{"Glock_ADS_Walk",1,true}},
-            {motion::ads_in,{"Glock_ADS_In",3,false}},
-            {motion::ads_out,{"Glock_ADS_Out",3,false}},
-            {motion::fire1,{"Glock_Fire1",1.5f,false}},
-            {motion::fire2,{"Glock_Fire2",1.5f,false}},
-            {motion::fire3,{"Glock_Fire3",1.5f,false}},
-            {motion::ads_fire1,{"Glock_ADS_Fire1",1.5f,false}},
-            {motion::ads_fire2,{"Glock_ADS_Fire2",1.5f,false}},
-            {motion::ads_fire3,{"Glock_ADS_Fire3",1.5f,false}}
-        };
+        glock.animations={{
+            {"Glock_Idle",1,true},
+            {"Glock_Walk",1,true},
+            {"Glock_Draw",1,false},
+            {"Glock_Reload",1,false},
+            {"Glock_ReloadEmpty",1,false},
+            {"Glock_ADS_Idle",1,true},
+            {"Glock_ADS_In",3,false},
+            {"Glock_ADS_Out",3,false},
+            {"Glock_ADS_Walk",1,true},
+            {"Glock_Fire1",1.5f,false},
+            {"Glock_Fire2",1.5f,false},
+            {"Glock_Fire3",1.5f,false},
+            {"Glock_ADS_Fire1",1.5f,false},
+            {"Glock_ADS_Fire2",1.5f,false},
+            {"Glock_ADS_Fire3",1.5f,false}
+        }};
         glock.fov=1.1f;
         glock.ads_fov=glock.fov-.58f;
         glock.ads_zoom=.58f;

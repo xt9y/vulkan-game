@@ -2920,7 +2920,7 @@ namespace clt::weapon {
             definition settings;
             ::scene::state asset;
             resource model,casing_mesh;
-            std::map<motion,std::uint32_t> clips;
+            std::array<std::uint32_t,std::size_t(motion::count)> clips{};
             ::weapon::state authority,predicted;
             std::vector<draw> draws;
             std::vector<casing> casings;
@@ -3057,7 +3057,7 @@ void add_impact(const ::weapon::hit& impact, const definition& settings) {
             d.holes.push_back({m, 0, settings.impact_lifetime});
         }
         std::uint32_t clip_index(motion name) {
-            return data.skin?data.clips.at(name):0u;
+            return data.skin?data.clips[std::size_t(name)]:0u;
         }
         void play(motion name,double time) {
             data.clip_started=time;
@@ -3068,7 +3068,7 @@ void add_impact(const ::weapon::hit& impact, const definition& settings) {
                 return;
             }
             data.clip=clip_index(name);
-            const auto& animation=data.settings.animations.at(name);
+            const auto& animation=data.settings.animations[std::size_t(name)];
             data.speed=animation.speed;
             data.loop=animation.loop;
         }
@@ -3168,10 +3168,11 @@ if(gun.model.empty()||!gun.max_casings||gun.max_casings>192|| !gun.max_impacts||
 gun.ads_fov<=0||gun.ads_fov>=3.14159265f|| !std::isfinite(gun.input.sensitivity)||gun.input.sensitivity<=0|| gun.input.sensitivity>.1f|| !std::isfinite(gun.input.ads_sensitivity_multiplier)||
 gun.input.ads_sensitivity_multiplier<=0|| gun.input.ads_sensitivity_multiplier>1)
             throw std::invalid_argument("Invalid client weapon definition");
-        if(!gun.animations.empty()&&!gun.animations.contains(motion::idle))
+        if(!gun.animations[0].name.size() && std::any_of(gun.animations.begin(),gun.animations.end(),
+            [](const clip& value){return !value.name.empty();}))
             throw std::invalid_argument("Animated gun requires idle");
-        for(const auto& [_,clip]:gun.animations)
-            if(clip.name.empty()||!std::isfinite(clip.speed)||clip.speed<=0)
+        for(const auto& clip:gun.animations)
+            if(!clip.name.empty()&&(!std::isfinite(clip.speed)||clip.speed<=0))
                 throw std::invalid_argument("Invalid weapon animation clip");
         data.settings=std::move(gun);
         data.authority=data.predicted=::weapon::make_state(data.settings.rules);
@@ -3192,17 +3193,20 @@ gun.input.ads_sensitivity_multiplier<=0|| gun.input.ads_sensitivity_multiplier>1
         data.model=load_asset(data.settings.model,next_id);
         if(!data.settings.casing_model.empty())
             data.casing_mesh=load_asset(data.settings.casing_model,next_id);
-if(data.casing_mesh.skin || (data.model.skin&&data.settings.animations.empty())|| (!data.model.skin&&!data.settings.animations.empty()))
+if(data.casing_mesh.skin || (data.model.skin&&data.settings.animations[0].name.empty())||
+           (!data.model.skin&&!data.settings.animations[0].name.empty()))
             throw std::runtime_error("Invalid animated weapon or casing model");
         if(data.model.skin) {
 const auto skin=std::find_if(data.asset.skins.begin(),data.asset.skins.end(), [&](const ::scene::skin& s){return s.id==data.model.skin;});
             if(skin==data.asset.skins.end())
                 throw std::runtime_error("Weapon skeleton missing");
-            for(const auto& [motion,configured]:data.settings.animations) {
+            for(std::size_t i=0;i<data.settings.animations.size();++i) {
+                const auto& configured=data.settings.animations[i];
+                if(configured.name.empty())continue;
 const auto found=std::find_if(skin->clips.begin(),skin->clips.end(), [&](const ::scene::clip& entry){return entry.name==configured.name;});
                 if(found==skin->clips.end())
                     throw std::runtime_error("Missing weapon animation: "+configured.name);
-                data.clips.emplace(motion,std::uint32_t(found-skin->clips.begin()));
+                data.clips[i]=std::uint32_t(found-skin->clips.begin());
             }
         }
         animation::synchronize(data.asset);
