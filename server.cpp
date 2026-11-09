@@ -1336,12 +1336,12 @@ namespace {
 return p&&n==expected&&p[0]=='V'&&p[1]=='G'&&p[2]=='U'&& p[3]=='N'&&p[4]==2&&p[5]==type&&!p[6]&&!p[7];
     }
     void write_state(std::uint8_t* p,const snapshot& v) {
-fields(p+8,v.token,v.sequence,v.tick,v.magazine,v.reserve, std::uint32_t(v.reload),std::uint32_t(v.outcome), v.reload_elapsed,v.reload_duration,v.refill_time, v.weapon_id,v.active_weapon_id);
+write_fields(p+8,v.token,v.sequence,v.tick,v.magazine,v.reserve, std::uint32_t(v.reload),std::uint32_t(v.outcome), v.reload_elapsed,v.reload_duration,v.refill_time, v.weapon_id,v.active_weapon_id);
     }
     std::optional<snapshot> read_state(const std::uint8_t* p) {
         snapshot v{};
         std::uint32_t reload=0,outcome=0;
-fields(p+8,v.token,v.sequence,v.tick,v.magazine,v.reserve,reload,outcome, v.reload_elapsed,v.reload_duration,v.refill_time, v.weapon_id,v.active_weapon_id);
+read_fields(p+8,v.token,v.sequence,v.tick,v.magazine,v.reserve,reload,outcome, v.reload_elapsed,v.reload_duration,v.refill_time, v.weapon_id,v.active_weapon_id);
         v.reload=reload_phase(reload);
         v.outcome=result(outcome);
 if(!v.token||!v.weapon_id||!v.active_weapon_id||reload>2|| outcome>std::uint32_t(result::equipped)|| !std::isfinite(v.reload_elapsed)||!std::isfinite(v.reload_duration)||
