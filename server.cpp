@@ -1735,10 +1735,8 @@ namespace srv::application {
         std::vector<model_request> models;
         bool scene_configured = false;
         std::shared_ptr<scene::state> importing;
-        std::size_t next_texture = 0;
-        std::size_t next_skin = 0;
-        std::size_t next_mesh = 0;
-        std::size_t next_instance = 0;
+        enum import_slot { texture_slot, skin_slot, mesh_slot, instance_slot };
+        std::array<std::size_t,4> import_cursor{};
         std::size_t animation_cursor = 0;
         player::collision_world colliders;
         ::weapon::world weapon_world;
@@ -2047,10 +2045,7 @@ combined.skins.insert(combined.skins.end(), std::make_move_iterator(imported.ski
                 }
                 return [imported = std::make_shared<::scene::state>(std::move(combined))]() mutable {
                     get()->importing = std::move(imported);
-                    get()->next_texture = 0;
-                    get()->next_skin = 0;
-                    get()->next_mesh = 0;
-                    get()->next_instance = 0;
+                    get()->import_cursor={};
                 };
             }))
                 throw std::runtime_error("Could not queue model imports");
@@ -2121,35 +2116,35 @@ if (game::options::get()->duration > 0 && std::chrono::duration<double>(now - st
                 };
                 while (true) {
                     std::size_t size = 0;
-                    if (get()->next_texture < imported.textures.size()) {
-                        auto& texture = imported.textures[get()->next_texture];
+                    if (get()->import_cursor[texture_slot] < imported.textures.size()) {
+                        auto& texture = imported.textures[get()->import_cursor[texture_slot]];
 size = 20 + (texture.encoded.empty() ? texture.pixels.size() : texture.encoded.size());
                         if (!fits(size)) break;
                         patch.textures.push_back(std::move(texture));
-                        ++get()->next_texture;
-                    } else if (get()->next_skin < imported.skins.size()) {
-                        auto& skin = imported.skins[get()->next_skin];
+                        ++get()->import_cursor[texture_slot];
+                    } else if (get()->import_cursor[skin_slot] < imported.skins.size()) {
+                        auto& skin = imported.skins[get()->import_cursor[skin_slot]];
                         size = 16 + skin.skeleton.size() + skin.inverse_bind.size() * 64;
                         for (const auto& clip : skin.clips)
                             size += 8 + clip.name.size() + clip.bytes.size();
                         if (!fits(size)) break;
                         patch.skins.push_back(std::move(skin));
-                        ++get()->next_skin;
-                    } else if (get()->next_mesh < imported.meshes.size()) {
-                        auto& mesh = imported.meshes[get()->next_mesh];
+                        ++get()->import_cursor[skin_slot];
+                    } else if (get()->import_cursor[mesh_slot] < imported.meshes.size()) {
+                        auto& mesh = imported.meshes[get()->import_cursor[mesh_slot]];
 size = 96 + mesh.vertices.size() * (mesh.skin_id ? 64 : 32) + mesh.indices.size() * 4;
                         if (!fits(size)) break;
                         patch.meshes.push_back(std::move(mesh));
-                        ++get()->next_mesh;
-                    } else if (get()->next_instance < imported.instances.size()) {
+                        ++get()->import_cursor[mesh_slot];
+                    } else if (get()->import_cursor[instance_slot] < imported.instances.size()) {
                         size = 80;
                         if (!fits(size)) break;
-patch.instances.push_back( std::move(imported.instances[get()->next_instance++]));
+patch.instances.push_back( std::move(imported.instances[get()->import_cursor[instance_slot]++]));
                     } else break;
                     used += size;
                     if (used >= target_bytes) break;
                 }
-const bool final = get()->next_texture == imported.textures.size() && get()->next_skin == imported.skins.size() && get()->next_mesh == imported.meshes.size() && get()->next_instance == imported.instances.size();
+const bool final = get()->import_cursor[texture_slot] == imported.textures.size() && get()->import_cursor[skin_slot] == imported.skins.size() && get()->import_cursor[mesh_slot] == imported.meshes.size() && get()->import_cursor[instance_slot] == imported.instances.size();
 if (!patch.textures.empty() || !patch.skins.empty() || !patch.meshes.empty() || !patch.instances.empty())
                     append_scene(std::move(patch), final);
                 if (final) {
@@ -2192,10 +2187,7 @@ if (clock::now() + std::chrono::milliseconds(net::limits::generation_slack_ms) <
         get()->models.clear();
         get()->scene_configured = false;
         get()->importing.reset();
-        get()->next_texture = 0;
-        get()->next_skin = 0;
-        get()->next_mesh = 0;
-        get()->next_instance = 0;
+        get()->import_cursor={};
         get()->animation_cursor = 0;
         get()->tick = 0;
         get()->initialized = false;
