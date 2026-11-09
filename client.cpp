@@ -246,8 +246,6 @@ namespace clt::connection
 
         std::mutex animation_mutex;
         std::unordered_map<std::uint32_t, net::animation::resource> animations;
-        std::deque<net::animation::attachment_event> attachment_events;
-        std::uint32_t last_attachment_sequence = 0;
 
         std::mutex scene_mutex;
         std::shared_ptr<const ::scene::state> scene;
@@ -284,7 +282,6 @@ namespace clt::connection
     state* get();
     std::shared_ptr<const ::scene::state> snapshot();
     std::optional<net::animation::resource> animation(std::uint32_t instance_id);
-    std::vector<net::animation::attachment_event> take_attachment_events();
     bool send_editor_light(net::editor_light::resource command);
     bool send_weapon(net::weapon::command command);
     std::vector<net::weapon::snapshot> take_weapon_updates();
@@ -918,7 +915,6 @@ namespace clt::prediction
     void controls(std::uint32_t buttons, float yaw);
     vk::util::math::vec3 position();
     std::uint64_t ticks();
-    float correction();
     void shutdown();
 } // namespace clt::prediction
 
@@ -1379,16 +1375,6 @@ namespace clt::connection
         return it->second;
     }
 
-    std::vector<net::animation::attachment_event> take_attachment_events()
-    {
-        auto& data = *get();
-        std::lock_guard<std::mutex> lock(data.animation_mutex);
-        std::vector<net::animation::attachment_event> events(
-            data.attachment_events.begin(), data.attachment_events.end());
-        data.attachment_events.clear();
-        return events;
-    }
-
     bool send_editor_light(net::editor_light::resource command)
     {
         if((command.type!=net::editor_light::kind::create &&
@@ -1651,8 +1637,6 @@ namespace clt::connection
                     {
                         std::lock_guard<std::mutex> animation_lock(data.animation_mutex);
                         data.animations.clear();
-                        data.attachment_events.clear();
-                        data.last_attachment_sequence = 0;
                     }
                 };
 
@@ -1764,26 +1748,6 @@ namespace clt::connection
                                 data.connected.load(std::memory_order_relaxed))
                             {
                                 accept_weapon(*update);
-                            }
-                            continue;
-                        }
-
-                        if (const auto event = net::animation::decode_event(
-                                buffer.data(), *size))
-                        {
-                            if (net::endpoint::equal(peer, server) && event->token == token &&
-                                data.connected.load(std::memory_order_relaxed))
-                            {
-                                std::lock_guard<std::mutex> lock(data.animation_mutex);
-                                if (net::message::newer(event->sequence,
-                                                        data.last_attachment_sequence))
-                                {
-                                    data.last_attachment_sequence = event->sequence;
-                                    if (data.attachment_events.size() >= 128)
-                                        data.attachment_events.pop_front();
-                                    data.attachment_events.push_back(*event);
-                                }
-                                last_received = now;
                             }
                             continue;
                         }
@@ -2511,7 +2475,6 @@ vk::util::math::vec3 position() {
     return pose;
 }
 std::uint64_t ticks() {return tick_count.load(std::memory_order_relaxed);}
-float correction() {return error.load(std::memory_order_relaxed);}
 void shutdown() {
     stop.store(true,std::memory_order_relaxed);
     if (worker.joinable()) worker.join();

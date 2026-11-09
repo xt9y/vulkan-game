@@ -904,8 +904,6 @@ namespace srv::assets
     };
 
     rig import_rig(const fastgltf::Asset& asset, std::size_t skin_index);
-    ::scene::skin serialize_rig(const fastgltf::Asset& asset,
-                                std::size_t skin_index, std::uint32_t id);
     ::scene::skin serialize_rig(
         const fastgltf::Asset& asset, std::size_t skin_index, std::uint32_t id, const rig& imported
     );
@@ -1396,13 +1394,6 @@ namespace srv::assets
         return result;
     }
 
-    ::scene::skin serialize_rig(const fastgltf::Asset& asset,
-                                std::size_t skin_index, std::uint32_t id)
-    {
-        auto imported = import_rig(asset, skin_index);
-        return serialize_rig(asset, skin_index, id, imported);
-    }
-
     ::scene::skin serialize_rig(
         const fastgltf::Asset& asset, std::size_t skin_index, std::uint32_t id, const rig& imported
     )
@@ -1462,20 +1453,6 @@ namespace net::animation
         float blend = 0;
     };
 
-    struct attachment_event
-    {
-        std::uint32_t token = 0;
-        std::uint32_t tick = 0;
-        std::uint32_t sequence = 0;
-        std::uint32_t instance_id = 0;
-        std::uint32_t joint = 0;
-        std::uint32_t kind = 0;
-    };
-
-    using event_packet = std::array<std::uint8_t, 28>;
-    event_packet encode_event(const attachment_event& event);
-    std::optional<attachment_event> decode_event(const std::uint8_t* bytes, std::size_t size);
-
     using packet = std::array<std::uint8_t, 40>;
     packet encode(const resource& state);
     std::optional<resource> decode(const std::uint8_t* data, std::size_t bytes);
@@ -1503,21 +1480,6 @@ namespace net::animation {
             v.clip,v.start_tick,v.overlay,v.mask_root,v.blend);
         if(!v.token||!v.instance_id||!std::isfinite(v.blend)||
            v.blend<0||v.blend>1)return std::nullopt;
-        return v;
-    }
-    event_packet encode_event(const attachment_event& e) {
-        event_packet p{'E','V','N','T'};
-        net::movement::detail::fields(p.data()+4,e.token,e.tick,e.sequence,
-            e.instance_id,e.joint,e.kind);
-        return p;
-    }
-    std::optional<attachment_event> decode_event(const std::uint8_t* p,std::size_t n) {
-        if(!p||n!=event_packet{}.size()||p[0]!='E'||p[1]!='V'||
-           p[2]!='N'||p[3]!='T')return std::nullopt;
-        attachment_event v{};
-        net::movement::detail::fields(p+4,v.token,v.tick,v.sequence,
-            v.instance_id,v.joint,v.kind);
-        if(!v.token||!v.instance_id||!v.sequence)return std::nullopt;
         return v;
     }
 } // namespace net::animation
@@ -2715,9 +2677,6 @@ namespace srv::application
         std::size_t next_mesh = 0;
         std::size_t next_instance = 0;
         std::size_t animation_cursor = 0;
-        struct pending_event { net::animation::attachment_event event; std::uint32_t repeats = 3; };
-        std::vector<pending_event> attachment_events;
-        std::uint32_t next_event = 0;
         player::collision_world colliders;
         ::weapon::world weapon_world;
         ::weapon::definition weapon{};
@@ -2744,13 +2703,6 @@ namespace srv::application
     // Background jobs return a completion that invokes append_scene().
     void begin_stream();
     void append_scene(::scene::state patch, bool final = false);
-    // Call on the authoritative server tick (not from an import worker).
-    bool play_animation(std::uint32_t instance_id, std::uint32_t clip,
-                        std::uint32_t overlay = UINT32_MAX, float blend = 0.0f,
-                        std::uint32_t mask_root = UINT32_MAX);
-    // Send a named game effect at a skeleton socket; replicated to clients.
-    bool emit_attachment_event(std::uint32_t instance_id, std::uint32_t joint,
-                               std::uint32_t kind);
     int run();
     void shutdown() noexcept;
 } // namespace srv::application
@@ -3034,7 +2986,6 @@ namespace srv::application
         void handle_editor_light(const net::endpoint::resource&,const net::editor_light::resource&);
         void send_scene_batches();
         void send_animation_states();
-        void send_attachment_events();
         void handle(const net::endpoint::resource& peer, const net::message::resource& message);
         void reply(
             const net::endpoint::resource& peer,
@@ -3270,57 +3221,6 @@ namespace srv::application
         data.scene_batches.push_back({std::move(bytes),final});
     }
 
-    bool play_animation(std::uint32_t instance_id, std::uint32_t clip,
-                        std::uint32_t overlay, float blend, std::uint32_t mask_root)
-    {
-        if (!std::isfinite(blend) || blend < 0.f || blend > 1.f)
-            return false;
-        auto& world = get()->scene;
-        const auto it = std::find_if(world.instances.begin(), world.instances.end(),
-            [=](const ::scene::instance& instance) { return instance.id == instance_id; });
-        if (it == world.instances.end()) return false;
-        const auto mesh = std::find_if(world.meshes.begin(), world.meshes.end(),
-            [&](const ::scene::mesh& entry) { return entry.id == it->mesh_id; });
-        if (mesh == world.meshes.end() || !mesh->skin_id) return false;
-        const auto skin = std::find_if(world.skins.begin(), world.skins.end(),
-            [&](const ::scene::skin& entry) { return entry.id == mesh->skin_id; });
-        if (skin == world.skins.end() || clip >= skin->clips.size() ||
-            (overlay != UINT32_MAX && overlay >= skin->clips.size()) ||
-            (mask_root != UINT32_MAX && mask_root >= skin->inverse_bind.size()))
-            return false;
-
-        it->animation = clip;
-        it->animation_tick = get()->tick;
-        it->overlay_animation = overlay;
-        it->overlay_weight = blend;
-        it->overlay_root = mask_root;
-        return true;
-    }
-
-    bool emit_attachment_event(std::uint32_t instance_id,
-                               std::uint32_t joint, std::uint32_t kind)
-    {
-        auto& state = *get();
-        if (state.attachment_events.size() >= 128) return false;
-        const auto it = std::find_if(state.scene.instances.begin(),
-            state.scene.instances.end(), [&](const ::scene::instance& instance)
-            { return instance.id == instance_id; });
-        if (it == state.scene.instances.end()) return false;
-        const auto mesh = std::find_if(state.scene.meshes.begin(),
-            state.scene.meshes.end(), [&](const ::scene::mesh& m)
-            { return m.id == it->mesh_id; });
-        if (mesh == state.scene.meshes.end() || !mesh->skin_id) return false;
-        const auto skin = std::find_if(state.scene.skins.begin(),
-            state.scene.skins.end(), [&](const ::scene::skin& entry)
-            { return entry.id == mesh->skin_id; });
-        if (skin == state.scene.skins.end() ||
-            joint >= skin->inverse_bind.size()) return false;
-        state.attachment_events.push_back({
-            {0, state.tick, ++state.next_event, instance_id, joint, kind}, 3
-        });
-        return true;
-    }
-
     int run()
     {
         if (!get()->initialized)
@@ -3352,7 +3252,6 @@ namespace srv::application
             tick_weapons();
             send_editor_lights();
             send_animation_states();
-            send_attachment_events();
 
             // Group small assets together instead of adding only one asset
             // every 60 Hz tick. Bound serialization work to a few MiB per batch.
@@ -3488,8 +3387,6 @@ namespace srv::application
         get()->next_mesh = 0;
         get()->next_instance = 0;
         get()->animation_cursor = 0;
-        get()->attachment_events.clear();
-        get()->next_event = 0;
         get()->tick = 0;
         get()->initialized = false;
     }
@@ -3918,27 +3815,6 @@ namespace srv::application
                 existing->scene_request = message.value;
                 existing->scene_pending = true;
             }
-        }
-
-        void send_attachment_events()
-        {
-            auto& queue = get()->attachment_events;
-            for (auto& item : queue)
-            {
-                for (const auto& client : session::get()->clients)
-                {
-                    if (!client.active) continue;
-                    auto event = item.event;
-                    event.token = client.token;
-                    const auto bytes = net::animation::encode_event(event);
-                    net::secure::send(get()->socket, client.endpoint,
-                                      bytes.data(), bytes.size());
-                }
-                if (item.repeats) --item.repeats;
-            }
-            queue.erase(std::remove_if(queue.begin(), queue.end(),
-                [](const state::pending_event& item) { return !item.repeats; }),
-                queue.end());
         }
 
         void send_animation_states()
