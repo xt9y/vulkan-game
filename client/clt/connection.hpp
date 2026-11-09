@@ -196,9 +196,11 @@ std::shared_ptr<const scene::state> snapshot()
     for(const auto& patch:data.pending_scene)new_instances+=patch.instances.size();
     combined->instances.reserve(combined->instances.size()+new_instances+data.cube_pending.size());
     std::unordered_map<std::uint32_t,std::size_t> instance_indices;
-    instance_indices.reserve(combined->instances.capacity());
-    for(std::size_t i=0;i<combined->instances.size();++i)
-        instance_indices.emplace(combined->instances[i].id,i);
+    if(new_instances || !data.cube_pending.empty()) {
+        instance_indices.reserve(combined->instances.capacity());
+        for(std::size_t i=0;i<combined->instances.size();++i)
+            instance_indices.emplace(combined->instances[i].id,i);
+    }
     for(auto& patch:data.pending_scene)
         for(auto& instance:patch.instances) {
             const auto found=instance_indices.find(instance.id);
