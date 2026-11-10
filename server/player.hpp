@@ -10,6 +10,7 @@
 #include <span>
 #include <spatial/index.hpp>
 #include <stdexcept>
+#include <unordered_map>
 #include <vector>
 
 namespace player
@@ -102,11 +103,14 @@ collision_world build_colliders(const std::vector<::scene::mesh> &meshes, std::s
     collision_world boxes;
     boxes.reserve(instances.size());
 
+    std::unordered_map<std::uint32_t,const ::scene::mesh*> by_id;
+    by_id.reserve(meshes.size());
+    for(const auto& mesh:meshes)by_id.emplace(mesh.id,&mesh);
     for (const auto &instance : instances)
     {
-        const auto mesh = std::find_if(meshes.begin(), meshes.end(), [&](const ::scene::mesh &m)
-                                       { return m.id == instance.mesh_id; });
-        if (mesh == meshes.end() || mesh->vertices.empty()) continue;
+        const auto it=by_id.find(instance.mesh_id);
+        if(it==by_id.end() || it->second->vertices.empty())continue;
+        const auto& mesh=*it->second;
 
         const float limit = std::numeric_limits<float>::max();
         box b{{limit, limit, limit}, {-limit, -limit, -limit}};
