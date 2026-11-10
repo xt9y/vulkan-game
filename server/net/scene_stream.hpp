@@ -140,7 +140,7 @@ bool valid_light(const ::scene::point_light &l)
 } // namespace
 std::vector<std::uint8_t> serialize(const ::scene::state &scene)
 {
-    if (scene.meshes.size() > max_scene_bytes / 12 || scene.instances.size() > max_scene_bytes / 104 || scene.lights.size() > 64)
+    if (scene.meshes.size() > max_scene_bytes / 12 || scene.instances.size() > max_scene_bytes / 108 || scene.lights.size() > 64)
         throw std::runtime_error("Scene snapshot exceeds maximum batch size");
     bytes out{'S', 'C', 'N', 'B'};
     put_all(out, std::uint32_t(scene.meshes.size()), std::uint32_t(scene.instances.size()), std::uint32_t(scene.textures.size()), std::uint32_t(scene.skins.size()), std::uint32_t(scene.collision_boxes.size()),
@@ -215,7 +215,7 @@ std::vector<std::uint8_t> serialize(const ::scene::state &scene)
     }
 
     for (const auto &i : scene.instances)
-        put_all(out, i.id, i.mesh_id, i.animation, i.animation_tick, i.overlay_animation, i.overlay_root, i.overlay_weight, i.pose.position, i.pose.scale, i.pose.rotation.x, i.pose.rotation.y, i.pose.rotation.z, i.pose.rotation.w, i.tint, i.pattern, i.rotation_reference, i.optical_strength, i.optical_mattness);
+        put_all(out, i.id, i.mesh_id, i.animation, i.animation_tick, i.overlay_animation, i.overlay_root, i.overlay_weight, i.pose.position, i.pose.scale, i.pose.rotation.x, i.pose.rotation.y, i.pose.rotation.z, i.pose.rotation.w, i.tint, i.pattern, i.rotation_reference, i.optical_strength, i.optical_mattness, i.editor_group);
 
     for (const auto &b : scene.collision_boxes)
     {
@@ -243,7 +243,7 @@ bool deserialize(const std::vector<std::uint8_t> &bytes, ::scene::state &scene)
     cursor in{bytes, 4};
     std::uint32_t meshes = 0, instances = 0, textures = 0, skins = 0, boxes = 0, lights = 0;
 
-    if (!take_all(in, meshes, instances, textures, skins, boxes, lights) || lights > 64 || lights > left(in) / 32 || boxes > left(in) / 24 || textures > left(in) / 20 || skins > left(in) / 16 || meshes > left(in) / 12 || instances > left(in) / 104) return false;
+    if (!take_all(in, meshes, instances, textures, skins, boxes, lights) || lights > 64 || lights > left(in) / 32 || boxes > left(in) / 24 || textures > left(in) / 20 || skins > left(in) / 16 || meshes > left(in) / 12 || instances > left(in) / 108) return false;
     ::scene::state result;
     result.meshes.reserve(meshes);
     result.instances.reserve(instances);
@@ -341,14 +341,14 @@ bool deserialize(const std::vector<std::uint8_t> &bytes, ::scene::state &scene)
         result.meshes.push_back(std::move(mesh));
     }
 
-    if (instances > left(in) / 104) return false;
+    if (instances > left(in) / 108) return false;
 
     for (std::uint32_t i = 0; i < instances; ++i)
     {
         ::scene::instance item;
 
         if (!take_all(in, item.id, item.mesh_id, item.animation, item.animation_tick, item.overlay_animation, item.overlay_root, item.overlay_weight, item.pose.position, item.pose.scale, item.pose.rotation.x,
-                      item.pose.rotation.y, item.pose.rotation.z, item.pose.rotation.w, item.tint, item.pattern, item.rotation_reference, item.optical_strength, item.optical_mattness) ||
+                      item.pose.rotation.y, item.pose.rotation.z, item.pose.rotation.w, item.tint, item.pattern, item.rotation_reference, item.optical_strength, item.optical_mattness, item.editor_group) ||
             item.overlay_weight < 0 || item.overlay_weight > 1 ||
             item.tint.x < 0 || item.tint.x > 1 || item.tint.y < 0 || item.tint.y > 1 || item.tint.z < 0 || item.tint.z > 1 ||
             (item.pattern > 3 && item.pattern != UINT32_MAX) ||
