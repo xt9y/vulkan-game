@@ -512,7 +512,8 @@ void present(vk::CommandBuffer cmd, std::uint32_t image, const camera::frame &vi
                               half_tan*float(extent.width)/float(extent.height)};
                 params.up={v(1,0),v(1,1),v(1,2),half_tan};
                 params.forward={-v(2,0),-v(2,1),-v(2,2),0.f};
-                material_compositor->record(command,image,params);
+                const auto regions=scene_renderer::optical_rects(view);
+                material_compositor->record(command,image,params,regions,extent);
             }
             editor::draw_list commands;
             append_remote_players(commands,view,extent);

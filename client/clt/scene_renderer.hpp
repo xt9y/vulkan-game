@@ -73,6 +73,7 @@ struct gpu_mesh
 
     vec3 center;
     float radius = 0;
+    vec3 local_min{},local_max{};
 
     std::uint32_t index_count = 0;
 };
@@ -353,6 +354,91 @@ bool has_optics()
         [](const auto& i){return i.pattern==2u || i.pattern==3u;});
 }
 
+// Conservative screen-space bounds for all visible glass/mirror instances.
+// Clipped to a compact set of disjoint scissor rectangles so the expensive
+// BVH fragment shader never runs across non-optical portions of the frame.
+std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
+{
+    const auto extent=vk::swapchain::get()->extent;
+    std::vector<vk::Rect2D> regions;
+    if(!extent.width || !extent.height)return regions;
+    const auto vp=perspective(camera.pose.fov,
+        float(extent.width)/float(extent.height),.1f,1000.f)*camera.view;
+    const auto full=vk::Rect2D{{0,0},extent};
+    const auto overlaps=[](const vk::Rect2D& a,const vk::Rect2D& b) {
+        return a.offset.x<=b.offset.x+int(b.extent.width) &&
+               b.offset.x<=a.offset.x+int(a.extent.width) &&
+               a.offset.y<=b.offset.y+int(b.extent.height) &&
+               b.offset.y<=a.offset.y+int(a.extent.height);
+    };
+    const auto combined=[](const vk::Rect2D& a,const vk::Rect2D& b) {
+        const int x=std::min(a.offset.x,b.offset.x);
+        const int y=std::min(a.offset.y,b.offset.y);
+        const int right=std::max(a.offset.x+int(a.extent.width),
+                                 b.offset.x+int(b.extent.width));
+        const int bottom=std::max(a.offset.y+int(a.extent.height),
+                                  b.offset.y+int(b.extent.height));
+        return vk::Rect2D{{x,y},{std::uint32_t(right-x),
+                                 std::uint32_t(bottom-y)}};
+    };
+    for(const auto& mesh:get().meshes) {
+        if(mesh.instances.empty())continue;
+        for(const auto& instance:mesh.instances) {
+            if(instance.pattern!=2u && instance.pattern!=3u)continue;
+            float min_x=float(extent.width),min_y=float(extent.height);
+            float max_x=0.f,max_y=0.f;
+            bool near_clip=false;
+            for(int corner=0;corner<8;++corner) {
+                const auto local=vec3{
+                    (corner&1)?mesh.local_max.x:mesh.local_min.x,
+                    (corner&2)?mesh.local_max.y:mesh.local_min.y,
+                    (corner&4)?mesh.local_max.z:mesh.local_min.z};
+                const auto scale=instance.pose.scale;
+                const auto world=instance.pose.position+
+                    rotate(instance.pose.rotation,{
+                        local.x*scale.x,local.y*scale.y,local.z*scale.z});
+                const auto clip=vp*vec4{world,1.f};
+                // A bound crossing the near plane cannot be safely
+                // projected; conservatively shade the complete viewport.
+                if(clip.w<=.00001f || clip.z<=.00001f) {
+                    near_clip=true;
+                    break;
+                }
+                const float x=(clip.x/clip.w*.5f+.5f)*float(extent.width);
+                const float y=(clip.y/clip.w*.5f+.5f)*float(extent.height);
+                min_x=std::min(min_x,x);max_x=std::max(max_x,x);
+                min_y=std::min(min_y,y);max_y=std::max(max_y,y);
+            }
+            if(near_clip)return {full};
+            const int x0=std::clamp(int(std::floor(min_x))-2,0,int(extent.width));
+            const int y0=std::clamp(int(std::floor(min_y))-2,0,int(extent.height));
+            const int x1=std::clamp(int(std::ceil(max_x))+2,0,int(extent.width));
+            const int y1=std::clamp(int(std::ceil(max_y))+2,0,int(extent.height));
+            if(x1<=x0 || y1<=y0)continue;
+            vk::Rect2D region{{x0,y0},{std::uint32_t(x1-x0),
+                                       std::uint32_t(y1-y0)}};
+            // Merge overlaps to avoid re-shading the same pixels.
+            for(std::size_t i=0;i<regions.size();) {
+                if(overlaps(regions[i],region)) {
+                    region=combined(region,regions[i]);
+                    regions.erase(regions.begin()+i);
+                    i=0;
+                } else ++i;
+            }
+            regions.push_back(region);
+            // Many tiny overlapping regions cost more CPU/draw calls than
+            // one union. Retain safe coverage without excessive submissions.
+            if(regions.size()>32) {
+                auto united=regions.front();
+                for(std::size_t i=1;i<regions.size();++i)
+                    united=combined(united,regions[i]);
+                regions.assign(1,united);
+            }
+        }
+    }
+    return regions;
+}
+
 pc::gbuffer outputs(std::uint32_t image)
 {
     const auto &images = get().targets.at(image).images;
@@ -396,6 +482,20 @@ gpu_mesh upload_mesh(const ::scene::mesh &mesh, gpu::upload::batch &transfers)
     result.joint_count = animation::joints(mesh.skin_id);
     result.surface = mesh.surface;
     result.index_count = std::uint32_t(mesh.indices.size());
+    if(!mesh.vertices.empty()) {
+        result.local_min=result.local_max=mesh.vertices.front().position;
+        for(const auto& vertex:mesh.vertices) {
+            const auto p=vertex.position;
+            result.local_min={
+                std::min(result.local_min.x,p.x),
+                std::min(result.local_min.y,p.y),
+                std::min(result.local_min.z,p.z)};
+            result.local_max={
+                std::max(result.local_max.x,p.x),
+                std::max(result.local_max.y,p.y),
+                std::max(result.local_max.z,p.z)};
+        }
+    }
     result.geometry.upload(transfers, mesh.vertices.data(), mesh.vertices.size() * sizeof(::scene::vertex), mesh.indices.data(), mesh.indices.size() * sizeof(std::uint32_t), result.index_count);
 
     return result;

@@ -73,7 +73,19 @@ inline bool set_property(::scene::instance &cube, std::uint32_t property, float 
     }
     else if (property == 12) {
         if (value < 0.f || value > 3.f || value != std::floor(value)) return false;
-        cube.pattern = std::uint32_t(value);
+        const auto selected=std::uint32_t(value);
+        if(cube.pattern!=selected) {
+            if(selected==2u) {
+                cube.tint={.10f,.50f,.70f};
+                cube.optical_strength=.98f;
+                cube.optical_mattness=.35f;
+            } else if(selected==3u) {
+                cube.tint={.70f,.90f,1.f};
+                cube.optical_strength=1.f;
+                cube.optical_mattness=.35f;
+            }
+        }
+        cube.pattern=selected;
     }
     else {
         if (value < 0.f || value > 1.f) return false;
