@@ -9,7 +9,10 @@
 namespace scene
 {
 // The level reserves mesh 2 for shared editable unit-cube geometry.
+inline constexpr std::uint32_t ground_mesh_id = 1;
 inline constexpr std::uint32_t unit_cube_mesh_id = 2;
+inline constexpr std::uint32_t unit_sphere_mesh_id = 3;
+inline constexpr std::uint32_t mermaid_insert_mesh_id = UINT32_MAX - 1;
 struct texture
 {
     std::uint32_t id = 0;
@@ -96,6 +99,7 @@ struct instance
     transform pose;
     vk::util::math::vec3 tint{1, 1, 1};
     std::uint32_t pattern = UINT32_MAX; // 0 solid, 1 checker, 2 glass, 3 reflective; UINT32_MAX inherits.
+    std::uint32_t editor_group = 0; // Shared root instance ID for multi-mesh Mermaid models.
     float optical_strength = .9f; // transmission or reflectivity
     float optical_mattness = .05f; // [0,1]
     // Editor reference selects continuous Euler controls at/through the poles.
@@ -143,7 +147,7 @@ inline bool same_pose(const instance &a, const instance &b)
 inline bool same_geometry(const instance &a, const instance &b)
 {
     return same_pose(a, b) && a.tint.x == b.tint.x && a.tint.y == b.tint.y && a.tint.z == b.tint.z && a.pattern == b.pattern &&
-           a.optical_strength == b.optical_strength && a.optical_mattness == b.optical_mattness &&
+           a.optical_strength == b.optical_strength && a.optical_mattness == b.optical_mattness && a.editor_group == b.editor_group &&
            a.rotation_reference.x == b.rotation_reference.x && a.rotation_reference.y == b.rotation_reference.y &&
            a.rotation_reference.z == b.rotation_reference.z;
 }
