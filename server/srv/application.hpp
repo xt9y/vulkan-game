@@ -572,6 +572,8 @@ void handle_editor_cube(const net::endpoint::resource &peer, const net::editor_c
                 changed=command;
                 changed.index=data.next_cube_id++;
                 changed.cube.id=changed.index;
+                // Only a validated imported prefab may carry group metadata.
+                changed.cube.editor_group=0;
                 if(insert_mermaid) {
                     // All prefab primitives remain separate for their own
                     // GLB textures, while one root owns the editor controls.
