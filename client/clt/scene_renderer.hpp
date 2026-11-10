@@ -412,7 +412,8 @@ std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
             float max_x=0.f,max_y=0.f;
             bool projected=false;
             const auto include=[&](const vec4& p) {
-                if(p.z<0.f || p.w<=.00001f)return;
+                // Near-plane edge intersections can round slightly below zero.
+                if(p.z<-.00001f || p.w<=.00001f)return;
                 const float x=(p.x/p.w*.5f+.5f)*float(extent.width);
                 const float y=(p.y/p.w*.5f+.5f)*float(extent.height);
                 if(!std::isfinite(x) || !std::isfinite(y))return;
