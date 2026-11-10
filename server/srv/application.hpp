@@ -47,6 +47,7 @@ struct state
     std::uint32_t editor_cube_revision = 1;
     std::uint32_t next_cube_id = 0x80000000u;
     std::vector<model_request> models;
+    std::vector<::scene::instance> mermaid_template;
 
     bool scene_configured = false;
 
@@ -147,10 +148,14 @@ void set_scene(::scene::state scene)
     get()->editor_light_versions.assign(get()->scene.lights.size(), 1u);
     get()->editor_light_revision = 1;
     get()->editor_cubes.clear();
+    get()->mermaid_template.clear();
     get()->editor_cube_revision = 1;
     get()->next_cube_id = 0x80000000u;
     for (const auto &instance : get()->scene.instances) {
-        if (instance.mesh_id != ::scene::unit_cube_mesh_id) continue;
+        if (instance.mesh_id != ::scene::ground_mesh_id &&
+            instance.mesh_id != ::scene::unit_cube_mesh_id &&
+            instance.mesh_id != ::scene::unit_sphere_mesh_id &&
+            !instance.editor_group)continue;
         net::editor_cube::resource update{};
         update.index = instance.id;
         update.cube = instance;
@@ -228,6 +233,13 @@ void init()
 auto imported = assets::load(request.path, mesh_id, instance_id, texture_id, skin_id);
                     if (imported.meshes.empty())
                         throw std::runtime_error("Model has no renderable meshes: " + request.path.string());
+                    // The mermaid is one selectable prefab even when its
+                    // source GLB contains several distinct materials/meshes.
+                    if(request.path.filename()=="mermaid.glb" &&
+                       !imported.instances.empty()) {
+                        const auto root=imported.instances.front().id;
+                        for(auto& inst:imported.instances)inst.editor_group=root;
+                    }
                     for (auto& instance : imported.instances) {
 const auto mesh = std::find_if(imported.meshes.begin(), imported.meshes.end(), [&](const ::scene::mesh& entry) { return entry.id == instance.mesh_id; });
                         if (mesh == imported.meshes.end())
@@ -257,6 +269,10 @@ combined.textures.insert(combined.textures.end(), std::make_move_iterator(import
 combined.skins.insert(combined.skins.end(), std::make_move_iterator(imported.skins.begin()), std::make_move_iterator(imported.skins.end()));
                 }
                 return [imported = std::make_shared<::scene::state>(std::move(combined))]() mutable {
+                    auto& template_instances=get()->mermaid_template;
+                    template_instances.clear();
+                    for(const auto& inst:imported->instances)
+                        if(inst.editor_group)template_instances.push_back(inst);
                     get()->importing = std::move(imported);
                     get()->import_cursor={};
                 }; }))
@@ -294,6 +310,14 @@ void append_scene(::scene::state patch, bool final)
 
     auto added_colliders = player::build_colliders(data.scene.meshes, patch.instances);
 
+    for(const auto& instance:patch.instances)
+        if(instance.editor_group) {
+            net::editor_cube::resource update{};
+            update.index=instance.id;
+            update.cube=instance;
+            update.sequence=update.revision=1;
+            data.editor_cubes.emplace(instance.id,update);
+        }
     append(data.scene.instances, patch.instances);
     append(data.scene.collision_boxes, patch.collision_boxes);
     data.editor_light_versions.insert(data.editor_light_versions.end(),
@@ -408,6 +432,7 @@ void shutdown() noexcept
     get()->weapon = {};
     get()->scene = {};
     get()->editor_cubes.clear();
+    get()->mermaid_template.clear();
     get()->editor_light_versions.clear();
     get()->editor_light_revision = 1;
     get()->models.clear();
