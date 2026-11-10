@@ -116,7 +116,7 @@ collision_world build_colliders(const std::vector<::scene::mesh> &meshes, std::s
         box b{{limit, limit, limit}, {-limit, -limit, -limit}};
         const auto &pose = instance.pose;
 
-        for (const auto &v : mesh->vertices)
+        for (const auto &v : mesh.vertices)
         {
             const vec3 scaled{
                 v.position.x * pose.scale.x, v.position.y * pose.scale.y, v.position.z * pose.scale.z
