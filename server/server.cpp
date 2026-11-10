@@ -153,7 +153,7 @@ static ::scene::state make_level()
 
     place(1, 1, {0, -.1f, 0});
     // Static room probe surface; editable cubes supply transformed probe faces.
-    world.collision_boxes.push_back({{-10, -.2f, -10}, {10, 0, 10}});
+    // PCloud derives the floor's occlusion box from its live mesh pose.
     place(2, 2, {-2, .5f, 0});
     place(3, 2, {0, .5f, 0});
     place(4, 2, {2, .5f, 0});
