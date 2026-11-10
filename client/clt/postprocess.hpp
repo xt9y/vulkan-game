@@ -14,6 +14,7 @@
 #include <optics/optics.hpp>
 #include <pmap/pmap.hpp>
 #include <optional>
+#include <unordered_map>
 #include <unordered_set>
 #include <climits>
 #include <stb_image.h>
@@ -296,11 +297,13 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
     faces.clear();
     normals.clear();
     result.omnidirectional_emitter=true;
+    std::unordered_map<std::uint32_t,const ::scene::mesh*> meshes;
+    meshes.reserve(world.meshes.size());
+    for(const auto& mesh:world.meshes)meshes.emplace(mesh.id,&mesh);
     for(const auto& inst:world.instances) {
-        const auto it=std::find_if(world.meshes.begin(),world.meshes.end(),
-            [&](const auto& mesh){return mesh.id==inst.mesh_id;});
-        if(it==world.meshes.end())continue;
-        const auto& mesh=*it;
+        const auto it=meshes.find(inst.mesh_id);
+        if(it==meshes.end())continue;
+        const auto& mesh=*it->second;
         // Match the raster pass's stable clip rule for blended hair cards.
         if(mesh.surface.alpha_mode==2 && !mesh.surface.base_color_texture &&
            mesh.surface.base_color[3]<.42f)continue;
