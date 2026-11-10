@@ -258,6 +258,19 @@ std::shared_ptr<pc::world> prepare_world(const ::scene::state *source)
         for (const auto &vertex : mesh->vertices)
             positions.push_back(transformed(vertex));
 
+        // Preserve the original ground-box occlusion exactly at its
+        // default transform, but follow edits and disappear on deletion.
+        if(instance.mesh_id==::scene::ground_mesh_id && !positions.empty()) {
+            vec3 minimum=positions.front(),maximum=positions.front();
+            for(const auto& p:positions) {
+                minimum={std::min(minimum.x,p.x),std::min(minimum.y,p.y),
+                         std::min(minimum.z,p.z)};
+                maximum={std::max(maximum.x,p.x),std::max(maximum.y,p.y),
+                         std::max(maximum.z,p.z)};
+            }
+            prepared->collision_boxes.push_back({minimum,maximum});
+        }
+
         if (instance.mesh_id == ::scene::unit_cube_mesh_id)
             for (std::size_t i = 0; i + 3 < positions.size(); i += 4) {
                 const auto base = positions[i];
