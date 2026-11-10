@@ -23,6 +23,7 @@ namespace clt::postprocess
 namespace {
 std::unique_ptr<optics::compositor> material_compositor;
 std::unique_ptr<pm::mapper> photon_transport;
+bool transport_pending=false;
 }
 void create();
 void synchronize_scene();
@@ -424,11 +425,43 @@ void create()
     material_compositor=std::move(compositor);
 }
 
+// Reuse the GPU texture atlas when a network update changes only lights,
+// object transforms or optical strengths. UV/texture contents and triangle
+// ordering are the only data relevant to this atlas; uploaded materials
+// and acceleration structures are handled separately by the mapper.
+bool atlas_unchanged(const ::scene::state& a,const ::scene::state& b)
+{
+    if(a.instances.size()!=b.instances.size() ||
+       a.meshes.size()!=b.meshes.size() ||
+       a.textures.size()!=b.textures.size())return false;
+    for(std::size_t i=0;i<a.instances.size();++i)
+        if(a.instances[i].mesh_id!=b.instances[i].mesh_id)return false;
+    for(std::size_t i=0;i<a.meshes.size();++i) {
+        const auto& x=a.meshes[i];const auto& y=b.meshes[i];
+        if(x.id!=y.id || x.vertices.size()!=y.vertices.size() ||
+           x.indices!=y.indices ||
+           x.surface.base_color_texture!=y.surface.base_color_texture ||
+           x.surface.alpha_mode!=y.surface.alpha_mode ||
+           x.surface.alpha_cutoff!=y.surface.alpha_cutoff)return false;
+        for(std::size_t j=0;j<x.vertices.size();++j)
+            if(x.vertices[j].u!=y.vertices[j].u ||
+               x.vertices[j].v!=y.vertices[j].v)return false;
+    }
+    for(std::size_t i=0;i<a.textures.size();++i) {
+        const auto& x=a.textures[i];const auto& y=b.textures[i];
+        if(x.id!=y.id || x.width!=y.width || x.height!=y.height ||
+           x.pixels!=y.pixels || x.encoded!=y.encoded)return false;
+    }
+    return true;
+}
+
 void synchronize_scene()
 {
     const auto source = connection::snapshot();
 
     if (source == registered) return;
+    const bool reuse_atlas=source && registered &&
+        atlas_unchanged(*registered,*source);
     if (!(source && registered && lighting_unchanged(*registered, *source))) {
         pc::set_scene(prepare_world(source.get()));
         pc::synchronize_scene();
@@ -443,6 +476,7 @@ void synchronize_scene()
     // buffers. synchronize_scene is called only when the renderer is idle.
     if(material_compositor)material_compositor->set_scene({},lights);
     photon_transport.reset();
+    transport_pending=false;
     if(source && std::any_of(source->instances.begin(),source->instances.end(),
         [](const auto& inst){return inst.pattern==2u || inst.pattern==3u;})) {
         std::vector<optics::face_uv> face_uvs;
@@ -461,12 +495,15 @@ void synchronize_scene()
             {
                 material_compositor->set_scene({
                     g.faces,g.nodes,g.triangles,g.scene_info,
-                    g.photons,g.offsets
+                    g.photons,g.offsets,
+                    std::uint32_t(scene->surfaces.size())
                 },lights);
-                material_compositor->set_textures(
-                    face_uvs,optical_textures(*source,face_uvs));
+                if(!reuse_atlas)
+                    material_compositor->set_textures(
+                        face_uvs,optical_textures(*source,face_uvs));
             }
             photon_transport=std::move(mapper);
+            transport_pending=true;
             std::clog << "optics: initialized photon transport with "
                       << scene->surfaces.size() << " surfaces and "
                       << config.photons << " emitted paths\n";
@@ -479,6 +516,7 @@ void release()
 {
     material_compositor.reset();
     photon_transport.reset();
+    transport_pending=false;
     pc::release();
     registered.reset();
 }
@@ -486,14 +524,26 @@ void release()
 void update_photons(vk::CommandBuffer cmd,std::uint32_t,
                     const camera::frame&)
 {
-    if(!photon_transport || !scene_renderer::has_optics())return;
+    if(!transport_pending || !photon_transport ||
+       !scene_renderer::has_optics())return;
     photon_transport->record_transport(cmd);
+    // Photon production is a compute pass; finish its buffer writes before
+    // the cached irradiance compute kernel consumes its spatial grid.
+    vk::MemoryBarrier photon_ready{};
+    photon_ready.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
+    photon_ready.dstAccessMask=vk::AccessFlagBits::eShaderRead;
+    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+                        vk::PipelineStageFlagBits::eComputeShader,{},
+                        {photon_ready},{},{});
+    if(material_compositor)
+        material_compositor->update_radiance(cmd,0);
     vk::MemoryBarrier barrier{};
     barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
     barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead;
     cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
                         vk::PipelineStageFlagBits::eFragmentShader,{},
                         {barrier},{},{});
+    transport_pending=false;
 }
 
 void present(vk::CommandBuffer cmd, std::uint32_t image, const camera::frame &view)
