@@ -223,7 +223,10 @@ void init()
                 for (const auto& mesh : get()->scene.meshes)
                     mesh_id = std::max(mesh_id, mesh.id + 1);
                 for (const auto& instance : get()->scene.instances)
-                    instance_id = std::max(instance_id, instance.id + 1);
+                    // Runtime editor IDs occupy the upper half of the space.
+                    // Imported prefab IDs must not jump into that range.
+                    if(instance.id<0x80000000u)
+                        instance_id=std::max(instance_id,instance.id+1);
                 for (const auto& texture : get()->scene.textures)
                     texture_id = std::max(texture_id, texture.id + 1);
                 for (const auto& skin : get()->scene.skins)
