@@ -124,7 +124,8 @@ static std::vector<editor::property> geometry_properties(const ::scene::instance
     properties.push_back({"depth","Depth",kind::real,cube.pose.scale.z*depth,
                           .01,100,.01,{}});
     properties.push_back({"texture","Texture",kind::choice,
-        double(cube.pattern<=3?cube.pattern:0),0,3,1,
+        double(cube.pattern<=3?cube.pattern:
+               (cube.mesh_id==::scene::ground_mesh_id?1u:0u)),0,3,1,
         {"Solid","Generated checker","Glass","Reflective"}});
     properties.push_back({"color_r","Color R",kind::integer,cube.tint.x*100,
                           0,100,1,{}});
