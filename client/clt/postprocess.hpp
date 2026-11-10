@@ -416,7 +416,7 @@ void create()
         const auto optical=scene_renderer::optical_outputs(i);
         material_frames.push_back({
             pc::ldr_view(i),ordinary[3],optical[0],optical[1],
-            optical[2],optical[3],ordinary[1]
+            optical[2],optical[3]
         });
     }
     auto compositor=std::make_unique<optics::compositor>();
