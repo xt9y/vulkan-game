@@ -6,9 +6,9 @@ namespace net::editor_cube
 {
 using kind = editor_light::kind;
 inline constexpr std::size_t max_cubes = 1024;
-inline constexpr std::array<std::string_view, 15> property_keys{
+inline constexpr std::array<std::string_view, 16> property_keys{
     "pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "width", "height", "depth",
-    "color_r", "color_g", "color_b", "texture", "optical_strength", "optical_mattness"
+    "color_r", "color_g", "color_b", "texture", "optical_strength", "optical_mattness", "scale"
 };
 
 struct resource
@@ -19,7 +19,7 @@ struct resource
     float value = 0;
     bool enabled = true;
 };
-using packet = std::array<std::uint8_t, 104>;
+using packet = std::array<std::uint8_t, 112>;
 
 inline vk::util::math::vec3 angles(const ::scene::instance &cube)
 {
@@ -62,9 +62,11 @@ inline bool set_property(::scene::instance &cube, std::uint32_t property, float 
         cube.rotation_reference = a;
     }
     else if (property < 9) {
-        if (value < .01f || value > 100.f) return false;
+        if (cube.editor_group || value < .01f || value > 100.f) return false;
         std::array fields{&cube.pose.scale.x, &cube.pose.scale.y, &cube.pose.scale.z};
-        *fields[property - 6] = value;
+        const float base=cube.mesh_id==::scene::ground_mesh_id ?
+            (property==7u?.2f:20.f):1.f;
+        *fields[property - 6] = value/base;
     }
     else if (property < 12) {
         if (value < 0.f || value > 100.f) return false;
@@ -87,6 +89,10 @@ inline bool set_property(::scene::instance &cube, std::uint32_t property, float 
         }
         cube.pattern=selected;
     }
+    else if(property==15) {
+        if(!cube.editor_group || value < .01f || value > 100.f)return false;
+        cube.pose.scale={value,value,value};
+    }
     else {
         if (value < 0.f || value > 1.f) return false;
         (property == 13 ? cube.optical_strength : cube.optical_mattness) = value;
@@ -101,8 +107,16 @@ inline bool valid(const ::scene::instance &cube)
     const auto dim = [](float v) { return std::isfinite(v) && v >= .01f && v <= 100.f; };
     const auto color = [](float v) { return std::isfinite(v) && v >= 0.f && v <= 1.f; };
     const float norm = vk::util::math::dot(p.rotation, p.rotation);
-    return cube.mesh_id == ::scene::unit_cube_mesh_id && coord(p.position.x) && coord(p.position.y) && coord(p.position.z) &&
-           dim(p.scale.x) && dim(p.scale.y) && dim(p.scale.z) && color(cube.tint.x) && color(cube.tint.y) && color(cube.tint.z) &&
+    const bool editable=cube.mesh_id==::scene::ground_mesh_id ||
+        cube.mesh_id==::scene::unit_cube_mesh_id ||
+        cube.mesh_id==::scene::unit_sphere_mesh_id ||
+        cube.mesh_id==::scene::mermaid_insert_mesh_id ||
+        (cube.editor_group!=0 && cube.mesh_id>=4u);
+    const bool dimensions=cube.mesh_id==::scene::ground_mesh_id ?
+        dim(p.scale.x*20.f)&&dim(p.scale.y*.2f)&&dim(p.scale.z*20.f) :
+        dim(p.scale.x)&&dim(p.scale.y)&&dim(p.scale.z);
+    return editable && coord(p.position.x) && coord(p.position.y) && coord(p.position.z) &&
+           dimensions && color(cube.tint.x) && color(cube.tint.y) && color(cube.tint.z) &&
            std::isfinite(norm) && std::abs(norm - 1.f) < .001f &&
            coord(cube.rotation_reference.x) && std::abs(cube.rotation_reference.x) <= 180.f &&
            coord(cube.rotation_reference.y) && std::abs(cube.rotation_reference.y) <= 180.f &&
@@ -113,20 +127,21 @@ inline bool valid(const ::scene::instance &cube)
 
 inline packet encode(const resource &v)
 {
-    packet p{'V', 'C', 'U', 'B', 1, std::uint8_t(v.type), std::uint8_t(v.enabled), 0};
+    packet p{'V', 'C', 'U', 'B', 2, std::uint8_t(v.type), std::uint8_t(v.enabled), 0};
     const auto &t = v.cube.pose;
     movement::detail::write_fields(p.data() + 8, v.token, v.sequence, v.index, v.revision,
         t.position.x, t.position.y, t.position.z, t.scale.x, t.scale.y, t.scale.z,
         t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w,
         v.cube.tint.x, v.cube.tint.y, v.cube.tint.z, v.cube.pattern, v.value,
         v.cube.optical_strength, v.cube.optical_mattness,
-        v.cube.rotation_reference.x, v.cube.rotation_reference.y, v.cube.rotation_reference.z);
+        v.cube.rotation_reference.x, v.cube.rotation_reference.y, v.cube.rotation_reference.z,
+        v.cube.mesh_id, v.cube.editor_group);
     return p;
 }
 
 inline std::optional<resource> decode(const std::uint8_t *p, std::size_t n)
 {
-    if (!p || n != packet{}.size() || p[0] != 'V' || p[1] != 'C' || p[2] != 'U' || p[3] != 'B' || p[4] != 1 || p[5] < 1 || p[5] > 5 || p[6] > 1 || p[7]) return std::nullopt;
+    if (!p || n != packet{}.size() || p[0] != 'V' || p[1] != 'C' || p[2] != 'U' || p[3] != 'B' || p[4] != 2 || p[5] < 1 || p[5] > 5 || p[6] > 1 || p[7]) return std::nullopt;
     resource v{};
     v.type = kind(p[5]);
     v.enabled = p[6] != 0;
@@ -136,9 +151,9 @@ inline std::optional<resource> decode(const std::uint8_t *p, std::size_t n)
         t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w,
         v.cube.tint.x, v.cube.tint.y, v.cube.tint.z, v.cube.pattern, v.value,
         v.cube.optical_strength, v.cube.optical_mattness,
-        v.cube.rotation_reference.x, v.cube.rotation_reference.y, v.cube.rotation_reference.z);
+        v.cube.rotation_reference.x, v.cube.rotation_reference.y, v.cube.rotation_reference.z,
+        v.cube.mesh_id, v.cube.editor_group);
     v.cube.id = v.index;
-    v.cube.mesh_id = ::scene::unit_cube_mesh_id;
     if (!v.token || !v.sequence || !valid(v.cube) || !std::isfinite(v.value) ||
         (v.type == kind::create ? v.index != UINT32_MAX : !v.index || v.index == UINT32_MAX) ||
         ((v.type == kind::state || v.type == kind::ack) && !v.revision) ||
