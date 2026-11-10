@@ -384,6 +384,10 @@ std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
         if(mesh.instances.empty())continue;
         for(const auto& instance:mesh.instances) {
             if(instance.pattern!=2u && instance.pattern!=3u)continue;
+            // Bind-pose bounds do not conservatively contain every skin
+            // deformation. Never clip a reflective animated surface.
+            if(mesh.joint_count)
+                return {vk::Rect2D{{0,0},extent}};
             std::array<vec4,8> clips{};
             for(int corner=0;corner<8;++corner) {
                 const auto local=vec3{
