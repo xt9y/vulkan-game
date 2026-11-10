@@ -385,7 +385,7 @@ int run()
                     ++get()->import_cursor[state::mesh_slot];
                 }
                 else if (get()->import_cursor[state::instance_slot] < imported.instances.size()) {
-                    size = 80;
+                    size = 108; // Serialized instance including editor group.
                     if (!fits(size)) break;
                     patch.instances.push_back(std::move(imported.instances[get()->import_cursor[state::instance_slot]++]));
                 }
