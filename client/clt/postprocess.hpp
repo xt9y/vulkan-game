@@ -290,7 +290,8 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
     using namespace vk::util::math;
     const auto light=std::find_if(world.lights.begin(),world.lights.end(),
         [](const auto& l){return l.enabled && l.strength>0.f;});
-    if(light==world.lights.end())return std::nullopt;
+    // Optical geometry must exist even in a dark scene: reflecting the
+    // world is not conditional on a point light being enabled.
     pm::scene result{};
     faces.clear();
     normals.clear();
@@ -368,11 +369,12 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
         }
     }
     pm::surface emitter{};
-    emitter.origin=light->position;
+    emitter.origin=light==world.lights.end()?vec3{}:light->position;
     emitter.u={.4f,0.f,0.f};
     emitter.v={0.f,0.f,.4f};
     emitter.normal={0.f,-1.f,0.f};
-    emitter.emission=light->color*std::max(light->strength,0.f)*6.f;
+    emitter.emission=light==world.lights.end()?vec3{}:
+        light->color*std::max(light->strength,0.f)*6.f;
     emitter.albedo={0.f,0.f,0.f};
     result.emitter=std::uint32_t(result.surfaces.size());
     result.surfaces.push_back(emitter);
