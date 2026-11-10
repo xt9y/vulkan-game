@@ -364,7 +364,6 @@ std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
     if(!extent.width || !extent.height)return regions;
     const auto vp=perspective(camera.pose.fov,
         float(extent.width)/float(extent.height),.1f,1000.f)*camera.view;
-    const auto full=vk::Rect2D{{0,0},extent};
     const auto overlaps=[](const vk::Rect2D& a,const vk::Rect2D& b) {
         return a.offset.x<=b.offset.x+int(b.extent.width) &&
                b.offset.x<=a.offset.x+int(a.extent.width) &&
@@ -385,9 +384,7 @@ std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
         if(mesh.instances.empty())continue;
         for(const auto& instance:mesh.instances) {
             if(instance.pattern!=2u && instance.pattern!=3u)continue;
-            float min_x=float(extent.width),min_y=float(extent.height);
-            float max_x=0.f,max_y=0.f;
-            bool near_clip=false;
+            std::array<vec4,8> clips{};
             for(int corner=0;corner<8;++corner) {
                 const auto local=vec3{
                     (corner&1)?mesh.local_max.x:mesh.local_min.x,
@@ -397,23 +394,54 @@ std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
                 const auto world=instance.pose.position+
                     rotate(instance.pose.rotation,{
                         local.x*scale.x,local.y*scale.y,local.z*scale.z});
-                const auto clip=vp*vec4{world,1.f};
-                // A bound crossing the near plane cannot be safely
-                // projected; conservatively shade the complete viewport.
-                if(clip.w<=.00001f || clip.z<=.00001f) {
-                    near_clip=true;
-                    break;
-                }
-                const float x=(clip.x/clip.w*.5f+.5f)*float(extent.width);
-                const float y=(clip.y/clip.w*.5f+.5f)*float(extent.height);
+                clips[corner]=vp*vec4{world,1.f};
+            }
+            // Homogeneous frustum rejection also handles optical objects
+            // wholly behind the camera. The old early near-plane fallback
+            // incorrectly made those objects shade the entire screen.
+            const auto outside=[&](auto predicate) {
+                return std::all_of(clips.begin(),clips.end(),predicate);
+            };
+            if(outside([](const vec4& p){return p.z<0.f;}) ||
+               outside([](const vec4& p){return p.z>p.w;}) ||
+               outside([](const vec4& p){return p.x<-p.w;}) ||
+               outside([](const vec4& p){return p.x>p.w;}) ||
+               outside([](const vec4& p){return p.y<-p.w;}) ||
+               outside([](const vec4& p){return p.y>p.w;}))continue;
+            float min_x=float(extent.width),min_y=float(extent.height);
+            float max_x=0.f,max_y=0.f;
+            bool projected=false;
+            const auto include=[&](const vec4& p) {
+                if(p.z<0.f || p.w<=.00001f)return;
+                const float x=(p.x/p.w*.5f+.5f)*float(extent.width);
+                const float y=(p.y/p.w*.5f+.5f)*float(extent.height);
+                if(!std::isfinite(x) || !std::isfinite(y))return;
                 min_x=std::min(min_x,x);max_x=std::max(max_x,x);
                 min_y=std::min(min_y,y);max_y=std::max(max_y,y);
-            }
-            if(near_clip)return {full};
-            const int x0=std::clamp(int(std::floor(min_x))-2,0,int(extent.width));
-            const int y0=std::clamp(int(std::floor(min_y))-2,0,int(extent.height));
-            const int x1=std::clamp(int(std::ceil(max_x))+2,0,int(extent.width));
-            const int y1=std::clamp(int(std::ceil(max_y))+2,0,int(extent.height));
+                projected=true;
+            };
+            for(const auto& p:clips)include(p);
+            // The perspective projection is not bounded by corners when
+            // an edge crosses the near plane. Include all twelve clipped
+            // box edges instead of conservatively drawing the whole frame.
+            for(int corner=0;corner<8;++corner)
+                for(int axis=0;axis<3;++axis) {
+                    const int bit=1<<axis;
+                    if(corner&bit)continue;
+                    const auto& a=clips[corner];
+                    const auto& b=clips[corner|bit];
+                    if((a.z>=0.f)==(b.z>=0.f))continue;
+                    const float t=-a.z/(b.z-a.z);
+                    include({a.x+(b.x-a.x)*t,a.y+(b.y-a.y)*t,
+                             a.z+(b.z-a.z)*t,a.w+(b.w-a.w)*t});
+                }
+            if(!projected)continue;
+            // Clamp floating bounds before int conversion: very close
+            // geometry can project far beyond the representable int range.
+            const int x0=int(std::clamp(std::floor(min_x)-2.f,0.f,float(extent.width)));
+            const int y0=int(std::clamp(std::floor(min_y)-2.f,0.f,float(extent.height)));
+            const int x1=int(std::clamp(std::ceil(max_x)+2.f,0.f,float(extent.width)));
+            const int y1=int(std::clamp(std::ceil(max_y)+2.f,0.f,float(extent.height)));
             if(x1<=x0 || y1<=y0)continue;
             vk::Rect2D region{{x0,y0},{std::uint32_t(x1-x0),
                                        std::uint32_t(y1-y0)}};
