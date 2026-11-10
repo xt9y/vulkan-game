@@ -25,7 +25,7 @@ struct state
     ::render::frame_scheduler frames;
     ::render::sequence passes;
     gpu::timestamps timings;
-    std::array<double, 6> gpu_ms{};
+    std::array<double, 7> gpu_ms{};
     std::uint32_t profile_frames = 0;
 
     bool timestamps_supported = false;
@@ -240,7 +240,7 @@ void resize()
     postprocess::synchronize_scene();
     data.passes.resize(vk::swapchain::get()->images.size());
     data.frames.resize(vk::swapchain::get()->size);
-    data.timings.create(static_cast<std::uint32_t>(vk::swapchain::get()->images.size()), 6, data.timestamps_supported);
+    data.timings.create(static_cast<std::uint32_t>(vk::swapchain::get()->images.size()), 7, data.timestamps_supported);
 }
 
 void draw_frame()
@@ -282,7 +282,8 @@ void draw_frame()
                   << " gi=" << data.gpu_ms[2]
                   << " lighting=" << data.gpu_ms[3]
                   << " tonemap=" << data.gpu_ms[4]
-                  << " present=" << data.gpu_ms[5] << '\n';
+                  << " present=" << data.gpu_ms[5]
+                  << " optics=" << data.gpu_ms[6] << '\n';
     }
 
     gpu::upload::retire();
@@ -350,8 +351,8 @@ void draw_frame()
                                                                                                                                                                                                                                                                                                                                                                                                 { pc::lighting(cmd, image, gi_camera); })},
                                                       {"tonemapping", {gpu::access::for_image(target.hdr, range, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead, false), gpu::access::for_image(target.ldr, range, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderWrite, true)}, measure(4, [image = active.image, gi_camera](vk::CommandBuffer cmd)
                                                                                                                                                                                                                                                                                                                                                                                                   { pc::tonemap(cmd, image, gi_camera); })},
-                                                      {"presentation", {gpu::access::for_image(target.ldr, range, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eFragmentShader, vk::AccessFlagBits::eShaderRead, false)}, measure(5, [image = active.image, render_camera](vk::CommandBuffer cmd)
-                                                                                                                                                                                                                                           { postprocess::present(cmd, image, render_camera); })}});
+                                                      {"presentation", {gpu::access::for_image(target.ldr, range, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eFragmentShader, vk::AccessFlagBits::eShaderRead, false)}, measure(5, [image = active.image, render_camera, timings = &data.timings](vk::CommandBuffer cmd)
+                                                                                                                                                                                                                                           { postprocess::present(cmd, image, render_camera, timings); })}});
     try
     {
         auto result = data.frames.submit(active);
