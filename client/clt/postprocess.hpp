@@ -281,10 +281,11 @@ std::shared_ptr<pc::world> prepare_world(const ::scene::state *source)
     return prepared;
 }
 // Convert the authoritative scene into GPU photon-tracing surfaces.
-// The transport-only mapper uses the full software BVH but does not allocate
-// a per-face irradiance atlas or run a fullscreen ray tracer.
+// The transport-only mapper owns the same BVH used by the raster scene.
+// Face UVs and vertex normals retain exact BVH face ordering.
 std::optional<pm::scene> photon_scene(const ::scene::state& world,
-                                       std::vector<optics::face_uv>& faces)
+                                       std::vector<optics::face_uv>& faces,
+                                       std::vector<optics::face_normals>& normals)
 {
     using namespace vk::util::math;
     const auto light=std::find_if(world.lights.begin(),world.lights.end(),
@@ -292,6 +293,7 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
     if(light==world.lights.end())return std::nullopt;
     pm::scene result{};
     faces.clear();
+    normals.clear();
     result.omnidirectional_emitter=true;
     for(const auto& inst:world.instances) {
         const auto it=std::find_if(world.meshes.begin(),world.meshes.end(),
@@ -334,6 +336,26 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
                 surface.roughness=inst.optical_mattness;
             }
             result.surfaces.push_back(surface);
+            // Match the primary mesh vertex shader: inverse transpose
+            // under nonuniform scaling, then rotate into world space.
+            const auto smooth=[&](const ::scene::vertex& vertex) {
+                const auto& scale=inst.pose.scale;
+                vec3 n=rotate(inst.pose.rotation,{
+                    vertex.normal.x/scale.x,
+                    vertex.normal.y/scale.y,
+                    vertex.normal.z/scale.z});
+                if(!std::isfinite(n.x) || !std::isfinite(n.y) ||
+                   !std::isfinite(n.z) || length_squared(n)<1e-8f)
+                    n=surface.normal;
+                else n=normalize(n);
+                if(dot(n,surface.normal)<0.f)n=n*-1.f;
+                return std::array<float,4>{n.x,n.y,n.z,0.f};
+            };
+            normals.push_back({
+                smooth(mesh.vertices[ia]),
+                smooth(mesh.vertices[ib]),
+                smooth(mesh.vertices[ic])
+            });
             optics::face_uv mapping{};
             mapping.a={mesh.vertices[ia].u,mesh.vertices[ia].v};
             mapping.b={mesh.vertices[ib].u,mesh.vertices[ib].v};
@@ -355,6 +377,9 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
     result.emitter=std::uint32_t(result.surfaces.size());
     result.surfaces.push_back(emitter);
     faces.emplace_back(); // The point-light emitter has no texture.
+    normals.push_back({
+        {0.f,-1.f,0.f,0.f},{0.f,-1.f,0.f,0.f},{0.f,-1.f,0.f,0.f}
+    });
     return result;
 }
 
@@ -482,7 +507,8 @@ void synchronize_scene()
     if(source && std::any_of(source->instances.begin(),source->instances.end(),
         [](const auto& inst){return inst.pattern==2u || inst.pattern==3u;})) {
         std::vector<optics::face_uv> face_uvs;
-        auto scene=photon_scene(*source,face_uvs);
+        std::vector<optics::face_normals> face_normals;
+        auto scene=photon_scene(*source,face_uvs,face_normals);
         if(scene) {
             pm::configuration config{};
             config.transport_only=true;
@@ -500,6 +526,7 @@ void synchronize_scene()
                     g.photons,g.offsets,
                     std::uint32_t(scene->surfaces.size())
                 },lights);
+                material_compositor->set_normals(face_normals);
                 if(!reuse_atlas)
                     material_compositor->set_textures(
                         face_uvs,optical_textures(*source,face_uvs));
@@ -529,16 +556,8 @@ void update_photons(vk::CommandBuffer cmd,std::uint32_t,
     if(!transport_pending || !photon_transport ||
        !scene_renderer::has_optics())return;
     photon_transport->record_transport(cmd);
-    // Photon production is a compute pass; finish its buffer writes before
-    // the cached irradiance compute kernel consumes its spatial grid.
-    vk::MemoryBarrier photon_ready{};
-    photon_ready.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
-    photon_ready.dstAccessMask=vk::AccessFlagBits::eShaderRead;
-    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
-                        vk::PipelineStageFlagBits::eComputeShader,{},
-                        {photon_ready},{},{});
-    if(material_compositor)
-        material_compositor->update_radiance(cmd,0);
+    // The reflection shader samples the transport buffers directly,
+    // without reduced-resolution/interpolated surface lighting.
     vk::MemoryBarrier barrier{};
     barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
     barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead;
