@@ -9,6 +9,7 @@
 #include <editor/vulkan.hpp>
 #include <iterator>
 #include <memory>
+#include <gpu/timestamps.hpp>
 #include <pcloud/pcloud.hpp>
 #include <optics/optics.hpp>
 #include <pmap/pmap.hpp>
@@ -28,7 +29,8 @@ bool transport_pending=false;
 void create();
 void synchronize_scene();
 void release();
-void present(vk::CommandBuffer command, std::uint32_t image, const camera::frame &view);
+void present(vk::CommandBuffer command, std::uint32_t image,
+             const camera::frame &view,const gpu::timestamps* timings);
 
 namespace
 {
@@ -546,10 +548,14 @@ void update_photons(vk::CommandBuffer cmd,std::uint32_t,
     transport_pending=false;
 }
 
-void present(vk::CommandBuffer cmd, std::uint32_t image, const camera::frame &view)
+void present(vk::CommandBuffer cmd, std::uint32_t image,
+             const camera::frame &view,const gpu::timestamps* timings)
 {
-    pc::present(cmd, image, [view,image](vk::CommandBuffer command, vk::Extent2D extent)
+    pc::present(cmd, image, [view,image,timings](vk::CommandBuffer command, vk::Extent2D extent)
                 {
+            // A nested interval isolates BVH optics from swapchain
+            // presentation and editor overlay work on the GPU.
+            if(timings)timings->start(command,image,6);
             if(material_compositor && scene_renderer::has_optics()) {
                 using namespace vk::util::math;
                 const float half_tan=std::tan(view.pose.fov*.5f);
@@ -565,6 +571,7 @@ void present(vk::CommandBuffer cmd, std::uint32_t image, const camera::frame &vi
                 const auto regions=scene_renderer::optical_rects(view);
                 material_compositor->record(command,image,params,regions,extent);
             }
+            if(timings)timings->end(command,image,6);
             editor::draw_list commands;
             append_remote_players(commands,view,extent);
             auto ui=editor::instance().paint(int(extent.width),int(extent.height));
