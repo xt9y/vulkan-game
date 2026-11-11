@@ -265,11 +265,27 @@ static void publish_editor_objects()
     if (width <= 0 || height <= 0) return;
 
     const auto world = clt::connection::snapshot();
-
+    static std::shared_ptr<const ::scene::state> registered;
+    static std::vector<std::size_t> editable;
     if (!world) {
+        registered.reset();
+        editable.clear();
         ui.set_labels({});
-
         return;
+    }
+    const bool changed=registered!=world;
+    if(changed) {
+        editable.clear();
+        for(std::size_t i=0;i<world->instances.size();++i) {
+            const auto& cube=world->instances[i];
+            if(cube.editor_group && cube.id!=cube.editor_group)continue;
+            if(cube.mesh_id==::scene::ground_mesh_id ||
+               cube.mesh_id==::scene::unit_cube_mesh_id ||
+               cube.mesh_id==::scene::unit_sphere_mesh_id ||
+               cube.editor_group)
+                editable.push_back(i);
+        }
+        registered=world;
     }
 
     using namespace vk::util::math;
@@ -297,12 +313,8 @@ static void publish_editor_objects()
         labels.push_back({editor_light_ids + std::uint64_t(i) + 1u, "LIGHT", int(std::lround((nx * 0.5f + 0.5f) * float(width))), int(std::lround((ny * 0.5f + 0.5f) * float(height))), true});
     }
 
-    for (const auto &cube : world->instances) {
-        if(cube.editor_group && cube.id!=cube.editor_group)continue;
-        if(cube.mesh_id!=::scene::ground_mesh_id &&
-           cube.mesh_id!=::scene::unit_cube_mesh_id &&
-           cube.mesh_id!=::scene::unit_sphere_mesh_id &&
-           !cube.editor_group)continue;
+    for(const auto index:editable) {
+        const auto& cube=world->instances[index];
         const vec4 clip = vp * vec4{cube.pose.position, 1.f};
         if (!std::isfinite(clip.w) || clip.w <= .0001f || clip.z < 0.f || clip.z > clip.w) continue;
         const float nx = clip.x / clip.w, ny = clip.y / clip.w;
@@ -313,10 +325,8 @@ static void publish_editor_objects()
                           int(std::lround((ny * .5f + .5f) * height)), true});
     }
     ui.set_labels(std::move(labels));
-    static std::shared_ptr<const ::scene::state> registered;
 
-    if (registered == world) return;
-    registered = world;
+    if (!changed) return;
 
     for (std::size_t i = 0; i < world->lights.size(); ++i)
     {
@@ -325,13 +335,10 @@ static void publish_editor_objects()
         if (!light.enabled) continue;
         ui.set_properties(editor_light_ids + std::uint64_t(i) + 1u, light_properties(light));
     }
-    for (const auto &cube : world->instances)
-        if((!cube.editor_group || cube.id==cube.editor_group) &&
-           (cube.mesh_id==::scene::ground_mesh_id ||
-            cube.mesh_id==::scene::unit_cube_mesh_id ||
-            cube.mesh_id==::scene::unit_sphere_mesh_id ||
-            cube.editor_group))
-            ui.set_properties(editor_cube_ids+cube.id,geometry_properties(cube));
+    for(const auto index:editable) {
+        const auto& cube=world->instances[index];
+        ui.set_properties(editor_cube_ids+cube.id,geometry_properties(cube));
+    }
 
 }
 
