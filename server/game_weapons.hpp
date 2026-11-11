@@ -3,8 +3,6 @@
 
 namespace game_weapons
 {
-::weapon::gun make();
-
 ::weapon::gun make()
 {
     using motion = ::weapon::motion;
@@ -15,12 +13,6 @@ namespace game_weapons
     glock.rules.fire_interval = .25;
     glock.rules.range = 200;
     glock.rules.reload = weapon::load_timing("assets/glock/metadata.json", "Glock_Reload", "Glock_ReloadEmpty", 20, 20);
-    glock.input.trigger_button = 0; // left mouse button
-    glock.input.aim_button = 1;     // right mouse button
-    glock.input.reload_key = 'R';
-    glock.input.inspect_key = 'M'; // print magazine/reserve without reloading
-    glock.input.automatic = false; // hold to fire at the server-validated interval
-    glock.input.sensitivity = .0025f;
     glock.input.ads_sensitivity_multiplier = .90f;
     glock.model = "assets/glock/glock.glb";
     glock.casing_model = "assets/props/casing.glb";
@@ -38,13 +30,7 @@ namespace game_weapons
     glock.hip_kick = .015f;
     glock.ads_kick = .009f;
     glock.casing_impulse = {1.6f, 1.5f, .35f};
-    glock.casing_lifetime = 9.f;
-    glock.max_casings = 48;
-    glock.flash_duration = .035f;
-    glock.flash_scale = {.035f, .045f, .035f};
     glock.impact_radius = .009f;
-    glock.impact_lifetime = 120.f;
-    glock.max_impacts = 192;
 
     return glock;
 }
