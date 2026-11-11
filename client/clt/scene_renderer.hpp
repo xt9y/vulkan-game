@@ -463,10 +463,7 @@ std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
                     (corner&1)?mesh.local_max.x:mesh.local_min.x,
                     (corner&2)?mesh.local_max.y:mesh.local_min.y,
                     (corner&4)?mesh.local_max.z:mesh.local_min.z};
-                const auto scale=instance.pose.scale;
-                const auto world=instance.pose.position+
-                    rotate(instance.pose.rotation,{
-                        local.x*scale.x,local.y*scale.y,local.z*scale.z});
+                const auto world=::scene::transform_position(instance.pose,local);
                 clips[corner]=vp*vec4{world,1.f};
             }
             // Homogeneous frustum rejection also handles optical objects
