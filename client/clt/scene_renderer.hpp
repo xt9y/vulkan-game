@@ -532,10 +532,9 @@ std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
     // vertically. Output is non-overlapping and covers exactly the union
     // of the original conservative projections (no image quality change).
     if(regions.size()<2)return regions;
-    if(regions.size()>64) {
-        // Avoid O(n²) band construction when an editor scene contains
-        // hundreds of independent reflective pieces. Bounding fallback
-        // is safe because the optical G-buffer mask rejects empty pixels.
+    // The two complexity fallbacks share the same conservative rectangle.
+    // The material mask continues to reject unused pixels.
+    const auto enclosing=[&]() {
         int left=int(extent.width),top=int(extent.height),right=0,bottom=0;
         for(const auto& r:regions) {
             left=std::min(left,r.offset.x);
@@ -543,9 +542,10 @@ std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
             right=std::max(right,r.offset.x+int(r.extent.width));
             bottom=std::max(bottom,r.offset.y+int(r.extent.height));
         }
-        return {{{left,top},{std::uint32_t(right-left),
-                            std::uint32_t(bottom-top)}}};
-    }
+        return vk::Rect2D{{left,top},
+            {std::uint32_t(right-left),std::uint32_t(bottom-top)}};
+    };
+    if(regions.size()>64)return {enclosing()};
     std::vector<int> y_edges;
     y_edges.reserve(regions.size()*2);
     for(const auto& r:regions) {
@@ -589,17 +589,7 @@ std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
     // Bound CPU/draw overhead on scenes with many separate optical pieces.
     // This fallback still has exact output because the shader mask discards
     // all non-optical fragments inside the larger scissor.
-    if(disjoint.size()>32) {
-        int left=int(extent.width),top=int(extent.height),right=0,bottom=0;
-        for(const auto& r:regions) {
-            left=std::min(left,r.offset.x);
-            top=std::min(top,r.offset.y);
-            right=std::max(right,r.offset.x+int(r.extent.width));
-            bottom=std::max(bottom,r.offset.y+int(r.extent.height));
-        }
-        return {{{left,top},{std::uint32_t(right-left),
-                            std::uint32_t(bottom-top)}}};
-    }
+    if(disjoint.size()>32)return {enclosing()};
     return disjoint;
 }
 
