@@ -1233,13 +1233,14 @@ void draw_reflection(vk::CommandBuffer command,std::uint32_t image,
     vk::RenderPassBeginInfo begin{};
     begin.renderPass=data.render_pass;
     begin.framebuffer=data.reflection_targets.at(image).framebuffer->framebuffer();
-    begin.renderArea={{0,0},extent};
+    begin.renderArea=vk::Rect2D{{0,0},extent};
     begin.clearValueCount=std::uint32_t(clears.size());
     begin.pClearValues=clears.data();
     ::render::renderer graphics(command);
     graphics.begin_pass(begin);
-    graphics.viewport({0,0,float(extent.width),float(extent.height),.1f,1.f},
-                      {{0,0},extent});
+    graphics.viewport(vk::Viewport{0,0,float(extent.width),
+                                   float(extent.height),.1f,1.f},
+                      vk::Rect2D{{0,0},extent});
     for(const auto& mesh:data.meshes) {
         if(mesh.transforms.empty())continue;
         auto params=material_parameters(mesh.surface,vp,mesh.joint_count);
