@@ -12,6 +12,8 @@
 #include <gpu/resource.hpp>
 #include <map>
 #include <memory>
+#include <utility>
+#include <vector>
 #include <pcloud/pcloud.hpp>
 #include <render/attachments.hpp>
 #include <render/geometry.hpp>
