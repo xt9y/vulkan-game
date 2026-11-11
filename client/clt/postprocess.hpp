@@ -37,7 +37,7 @@ std::vector<skinned_face> skinned_faces;
 void create();
 void synchronize_scene();
 void release();
-void update_skinned(std::uint32_t frame);
+void update_skinned(std::uint32_t frame,const camera::frame& view);
 void present(vk::CommandBuffer command, std::uint32_t image,
              const camera::frame &view,const gpu::timestamps* timings);
 
@@ -605,9 +605,10 @@ void release()
 // Refit only skinned faces, using the *same* palette that was uploaded
 // to mesh.vert this frame. CPU skinning happens once per unique vertex,
 // then PMap refits the existing sorted BVH without changing its topology.
-void update_skinned(std::uint32_t image)
+void update_skinned(std::uint32_t image,const camera::frame& view)
 {
-    if(!photon_transport || !material_compositor || skinned_faces.empty())
+    if(!photon_transport || !material_compositor || skinned_faces.empty() ||
+       scene_renderer::optical_rects(view).empty())
         return;
     using namespace vk::util::math;
     std::unordered_map<std::uint32_t,const std::vector<animation::matrix>*> poses;
