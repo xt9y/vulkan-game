@@ -28,6 +28,7 @@
 #include <random>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -825,73 +826,45 @@ void run(const std::string &host, std::uint16_t port)
                 unacknowledged.clear();
             }
 
-            if (data.connected.load(std::memory_order_relaxed) && now >= next_cube_send) {
-                std::optional<net::editor_cube::resource> pending;
+            // Shared reliable resend for both authoritative editor packets.
+            const auto retry_editor = [&](auto &queue, auto &next,
+                                          auto &retry_sequence, auto &attempts,
+                                          auto encode, const char *label) {
+                if (!data.connected.load(std::memory_order_relaxed) || now < next) return;
+                using entry = std::remove_cvref_t<decltype(queue.front())>;
+                std::optional<entry> pending;
                 {
                     std::lock_guard lock(data.editor_mutex);
-                    if (!data.cube_outgoing.empty()) pending = data.cube_outgoing.front();
+                    if (!queue.empty()) pending = queue.front();
                 }
                 if (pending) {
-                    if (pending->sequence != cube_retry_sequence) {
-                        cube_retry_sequence = pending->sequence;
-                        cube_retry_attempts = 0;
+                    if (pending->sequence != retry_sequence) {
+                        retry_sequence = pending->sequence;
+                        attempts = 0;
                     }
-                    if (cube_retry_attempts++ < 100u) {
+                    if (attempts++ < 100u) {
                         pending->token = token;
-                        const auto bytes = net::editor_cube::encode(*pending);
-                        net::secure::send(data.socket, server, bytes.data(), bytes.size());
-                    }
-                    else {
+                        const auto packet = encode(*pending);
+                        net::secure::send(data.socket, server, packet.data(), packet.size());
+                    } else {
                         std::lock_guard lock(data.editor_mutex);
-                        if (!data.cube_outgoing.empty() && data.cube_outgoing.front().sequence == pending->sequence)
-                            data.cube_outgoing.pop_front();
-                        std::clog << "clt: editor cube request not acknowledged (check server editor permissions)\n";
-                        cube_retry_sequence = cube_retry_attempts = 0;
+                        if (!queue.empty() && queue.front().sequence == pending->sequence)
+                            queue.pop_front();
+                        std::clog << "clt: editor " << label
+                                  << " request not acknowledged (check server editor permissions)\n";
+                        retry_sequence = attempts = 0;
                     }
+                } else {
+                    retry_sequence = attempts = 0;
                 }
-                else cube_retry_sequence = cube_retry_attempts = 0;
-                next_cube_send = now + 50ms;
-            }
-
-            if (data.connected.load(std::memory_order_relaxed) && now >= next_editor_send) {
-                std::optional<net::editor_light::resource> pending;
-                {
-                    std::lock_guard<std::mutex> lock(data.editor_mutex);
-
-                    if (!data.editor_outgoing.empty())
-                        pending = data.editor_outgoing.front();
-                }
-
-                if (pending) {
-                    if (pending->sequence != editor_retry_sequence) {
-                        editor_retry_sequence = pending->sequence;
-                        editor_retry_attempts = 0;
-                    }
-
-                    if (editor_retry_attempts++ < 100u) {
-                        pending->token = token;
-
-                        const auto bytes = net::editor_light::encode(*pending);
-                        net::secure::send(data.socket, server, bytes.data(), bytes.size());
-                    }
-                    else {
-                        std::lock_guard<std::mutex> lock(data.editor_mutex);
-
-                        if (!data.editor_outgoing.empty() && data.editor_outgoing.front().sequence == pending->sequence)
-                            data.editor_outgoing.pop_front();
-                        std::clog << "clt: editor light request not acknowledged "
-                                  << "(check server editor permissions)\n";
-                        editor_retry_sequence = 0;
-                        editor_retry_attempts = 0;
-                    }
-                }
-                else {
-                    editor_retry_sequence = 0;
-                    editor_retry_attempts = 0;
-                }
-
-                next_editor_send = now + 50ms;
-            }
+                next = now + 50ms;
+            };
+            retry_editor(data.cube_outgoing, next_cube_send,
+                         cube_retry_sequence, cube_retry_attempts,
+                         net::editor_cube::encode, "cube");
+            retry_editor(data.editor_outgoing, next_editor_send,
+                         editor_retry_sequence, editor_retry_attempts,
+                         net::editor_light::encode, "light");
 
             auto wake = data.connected.load(std::memory_order_relaxed) && !scene_ready
                             ? std::min(next_send, next_scene_send)
