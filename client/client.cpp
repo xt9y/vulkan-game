@@ -152,10 +152,7 @@ static void on_geometry_action(const editor::action &action)
         ::scene::unit_cube_mesh_id;
     if (action.kind == editor::action_kind::insert) {
         const auto frame = clt::camera::capture();
-        const auto yaw = frame.pose.yaw, pitch = frame.pose.pitch;
-        const vk::util::math::vec3 forward{
-            std::sin(yaw) * std::cos(pitch), std::sin(pitch), -std::cos(yaw) * std::cos(pitch)
-        };
+        const auto forward=::weapon::direction(frame.pose.yaw,frame.pose.pitch);
         command.type = kind::create;
         command.index = UINT32_MAX;
         command.cube.pose.position = frame.eye + forward * 2.5f;
@@ -206,11 +203,7 @@ static void on_editor_action(const editor::action &action)
         if (action.type != "light") return;
 
         const auto frame = clt::camera::capture();
-        const float yaw = frame.pose.yaw, pitch = frame.pose.pitch;
-
-        const vk::util::math::vec3 forward{
-            std::sin(yaw) * std::cos(pitch), std::sin(pitch), -std::cos(yaw) * std::cos(pitch)
-        };
+        const auto forward=::weapon::direction(frame.pose.yaw,frame.pose.pitch);
 
         command.type = net::editor_light::kind::create;
         command.index = UINT32_MAX;
