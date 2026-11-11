@@ -136,65 +136,77 @@ void append_remote_players(editor::draw_list &commands, const camera::frame &vie
 
 std::shared_ptr<const ::scene::state> registered;
 constexpr float bounce_reach = 2.6f;
-bool lighting_unchanged(const ::scene::state &previous, const ::scene::state &incoming)
+// Compare only inputs that PCloud actually consumes. Editor tint, procedural
+// texture, mirror reflectivity and presentation metadata do not change its
+// triangle positions, shadow casters or probe positions.
+bool lighting_shape_unchanged(const ::scene::state& previous,
+                              const ::scene::state& incoming)
 {
-    if (!::scene::geometry_prefix_unchanged(previous, incoming, true) || incoming.lights.size() != previous.lights.size() ||
-        incoming.collision_boxes.size() != previous.collision_boxes.size() || incoming.skins.size() != previous.skins.size())
+    if(previous.atlas_revision!=incoming.atlas_revision ||
+       previous.meshes.size()!=incoming.meshes.size() ||
+       previous.skins.size()!=incoming.skins.size() ||
+       previous.lights.size()!=incoming.lights.size() ||
+       previous.collision_boxes.size()!=incoming.collision_boxes.size() ||
+       previous.instances.size()>incoming.instances.size())
         return false;
-
-    for (std::size_t i = 0; i < previous.lights.size(); ++i)
-    {
-        const auto &a = previous.lights[i], &b = incoming.lights[i];
-
-        if (a.position.x != b.position.x || a.position.y != b.position.y || a.position.z != b.position.z || a.radius != b.radius || a.color.x != b.color.x || a.color.y != b.color.y || a.color.z != b.color.z || a.strength != b.strength)
+    const auto active=[](const ::scene::point_light& l) {
+        return l.enabled && l.strength>0.f;
+    };
+    for(std::size_t i=0;i<previous.lights.size();++i) {
+        const auto& a=previous.lights[i];
+        const auto& b=incoming.lights[i];
+        if(a.position.x!=b.position.x || a.position.y!=b.position.y ||
+           a.position.z!=b.position.z || a.radius!=b.radius ||
+           active(a)!=active(b))
             return false;
     }
-
-    for (std::size_t i = 0; i < previous.collision_boxes.size(); ++i)
-    {
-        const auto &a = previous.collision_boxes[i], &b = incoming.collision_boxes[i];
-
-        if (a.minimum.x != b.minimum.x || a.minimum.y != b.minimum.y || a.minimum.z != b.minimum.z || a.maximum.x != b.maximum.x || a.maximum.y != b.maximum.y || a.maximum.z != b.maximum.z)
+    for(std::size_t i=0;i<previous.collision_boxes.size();++i) {
+        const auto& a=previous.collision_boxes[i];
+        const auto& b=incoming.collision_boxes[i];
+        if(a.minimum.x!=b.minimum.x || a.minimum.y!=b.minimum.y ||
+           a.minimum.z!=b.minimum.z || a.maximum.x!=b.maximum.x ||
+           a.maximum.y!=b.maximum.y || a.maximum.z!=b.maximum.z)
             return false;
     }
-
-    using namespace vk::util::math;
-
-    for (std::size_t i = previous.instances.size(); i < incoming.instances.size(); ++i)
-    {
-        const auto &instance = incoming.instances[i];
-
-        const auto found = std::find_if(incoming.meshes.begin(), incoming.meshes.end(), [&](const ::scene::mesh &mesh)
-                                        { return mesh.id == instance.mesh_id; });
-        if (found == incoming.meshes.end()) return false;
-        if (found->surface.alpha_mode == 2 || found->indices.empty()) continue;
-        if (found->skin_id) return false;
-
-        float furthest_squared = 0.f;
-
-        for (const auto &vertex : found->vertices)
-            furthest_squared = std::max(furthest_squared, length_squared(vertex.position));
-
-        const float scale = std::max({std::abs(instance.pose.scale.x), std::abs(instance.pose.scale.y), std::abs(instance.pose.scale.z)});
-
-        const auto &rotation = instance.pose.rotation;
-
-        const float rotation_length_squared = rotation.x * rotation.x + rotation.y * rotation.y + rotation.z * rotation.z + rotation.w * rotation.w;
-
-        if (!std::isfinite(scale) || !std::isfinite(furthest_squared) || !std::isfinite(rotation_length_squared) || std::abs(rotation_length_squared - 1.f) > 0.00001f)
+    std::unordered_map<std::uint32_t,const ::scene::mesh*> meshes;
+    meshes.reserve(incoming.meshes.size());
+    for(const auto& mesh:incoming.meshes)meshes.emplace(mesh.id,&mesh);
+    const auto caster=[&](const ::scene::instance& i) {
+        const auto it=meshes.find(i.mesh_id);
+        return it!=meshes.end() && it->second->surface.alpha_mode!=2 &&
+               i.pattern!=2u && !it->second->indices.empty();
+    };
+    for(std::size_t i=0;i<previous.instances.size();++i) {
+        const auto& a=previous.instances[i];
+        const auto& b=incoming.instances[i];
+        if(a.id!=b.id || a.mesh_id!=b.mesh_id)return false;
+        const bool was=caster(a),is=caster(b);
+        if(was!=is)return false;
+        if(!is)continue;
+        if(!::scene::same_pose(a,b))return false;
+        const auto* mesh=meshes.at(b.mesh_id);
+        if(mesh->skin_id &&
+           (a.animation!=b.animation ||
+            a.overlay_animation!=b.overlay_animation ||
+            a.overlay_root!=b.overlay_root ||
+            a.overlay_weight!=b.overlay_weight))
             return false;
-
-        const float radius = std::sqrt(furthest_squared) * scale + 0.01f;
-
-        for (const auto &light : incoming.lights)
-        {
-            const float reach = radius + light.radius + bounce_reach;
-
-            if (length_squared(instance.pose.position - light.position) <= reach * reach)
-                return false;
-        }
     }
-
+    for(std::size_t i=previous.instances.size();i<incoming.instances.size();++i)
+        if(caster(incoming.instances[i]))return false;
+    return true;
+}
+bool lighting_unchanged(const ::scene::state& previous,
+                        const ::scene::state& incoming)
+{
+    if(!lighting_shape_unchanged(previous,incoming))return false;
+    for(std::size_t i=0;i<previous.lights.size();++i) {
+        const auto& a=previous.lights[i];
+        const auto& b=incoming.lights[i];
+        if(a.color.x!=b.color.x || a.color.y!=b.color.y ||
+           a.color.z!=b.color.z || a.strength!=b.strength)
+            return false;
+    }
     return true;
 }
 
