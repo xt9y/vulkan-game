@@ -748,7 +748,8 @@ void synchronize()
 
     if (retained) {
         animation::synchronize(*source);
-        if (source->textures.size() != data.snapshot->textures.size()) texture::synchronize(*source);
+        if(source->atlas_revision!=data.snapshot->atlas_revision)
+            texture::synchronize(*source);
         std::unordered_map<std::uint32_t, std::vector<::scene::instance>> grouped;
         for (const auto &instance : source->instances) grouped[instance.mesh_id].push_back(instance);
         gpu::upload::batch upload;
