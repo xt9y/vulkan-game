@@ -363,9 +363,6 @@ int main(int argc, char **argv)
         game::options::state settings{};
         settings.host = "127.0.0.1";
         settings.port = 27015;
-        settings.duration = 0;
-        settings.headless = false;
-        settings.help = false;
         settings.graphics.width = 1280;
         settings.graphics.height = 720;
         settings.graphics.title = "vulkan-game";
