@@ -389,6 +389,7 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
             mapping.normal_texture=mesh.surface.normal_texture;
             mapping.occlusion_texture=mesh.surface.occlusion_texture;
             mapping.emissive_texture=mesh.surface.emissive_texture;
+            mapping.base_alpha=mesh.surface.base_color[3];
             mapping.alpha_cutoff=mesh.surface.alpha_mode==1 ?
                 mesh.surface.alpha_cutoff :
                 mesh.surface.alpha_mode==2 ? .42f : 0.f;
