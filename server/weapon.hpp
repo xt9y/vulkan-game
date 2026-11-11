@@ -264,9 +264,7 @@ inline void append(world &data, const std::vector<scene::mesh> &meshes, std::spa
     ::scene::each_mesh_instance(meshes,instances,
                                  [&](const auto& mesh,const auto& instance) {
         const auto transform=[&](vec3 p) {
-            return instance.pose.position+rotate(instance.pose.rotation,
-                {p.x*instance.pose.scale.x,p.y*instance.pose.scale.y,
-                 p.z*instance.pose.scale.z});
+            return ::scene::transform_position(instance.pose,p);
         };
         for(std::size_t i=0;i+2<mesh.indices.size();i+=3) {
             const auto a=mesh.indices[i],b=mesh.indices[i+1],c=mesh.indices[i+2];
