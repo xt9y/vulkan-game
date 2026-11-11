@@ -118,6 +118,14 @@ int run()
 
             static std::array<bool, 10> held{};
             static std::array<clock::time_point,4> repeat_at{};
+            static bool primed=false;
+            if(!primed) {
+                // Prevent a held 0 from restarting the newly exec'd client
+                // repeatedly before the original key is released.
+                held[8]=input::key_down(GLFW_KEY_0);
+                held[9]=input::key_down(GLFW_KEY_KP_0);
+                primed=true;
+            }
 
             const auto pressed = [](int key, std::size_t index)
             {
@@ -144,7 +152,9 @@ int run()
                 }
                 return false;
             };
-            if(pressed(GLFW_KEY_0,8) || pressed(GLFW_KEY_KP_0,9)) {
+            const bool zero=pressed(GLFW_KEY_0,8);
+            const bool keypad_zero=pressed(GLFW_KEY_KP_0,9);
+            if(zero || keypad_zero) {
                 restart_requested=true;
                 break;
             }
