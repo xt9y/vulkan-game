@@ -24,6 +24,7 @@ static void compile_shaders(void)
     const char* shaders[]={"shd/mesh.vert","shd/mesh.frag",
         "shd/optics.frag","shd/cull.comp",
         "third-party/vulkan-systems/optics/optics/shaders/compose.frag",
+        "third-party/vulkan-systems/optics/optics/shaders/compose_mirror.frag",
         "third-party/vulkan-systems/pmap/shaders/photon_clear.comp",
         "third-party/vulkan-systems/pmap/shaders/photon_emit.comp",
         "third-party/vulkan-systems/pmap/shaders/photon_bin.comp",
@@ -45,14 +46,17 @@ static void compile_shaders(void)
         }
         const char* pmap_header="third-party/vulkan-systems/pmap/shaders/photon_scene.glsl";
         const char* optics_header="third-party/vulkan-systems/optics/optics/shaders/raytrace.glsl";
+        const char* composition_header="third-party/vulkan-systems/optics/optics/shaders/compose_core.glsl";
         const char* shared_header="third-party/vulkan-systems/pcloud/pcloud/shaders/lighting_shared.glsl";
         const int pmap=strstr(shaders[i],"/pmap/shaders/")!=NULL;
-        const int optics=strstr(shaders[i],"/optics/optics/shaders/compose.frag")!=NULL;
+        const int optics=strstr(shaders[i],"/optics/optics/shaders/")!=NULL;
         struct stat include;
         if(!stat(output,&binary) && binary.st_mtime>=source.st_mtime &&
            (!pmap || (!stat(pmap_header,&include) &&
                       binary.st_mtime>=include.st_mtime)) &&
            (!optics || (!stat(optics_header,&include) &&
+                        binary.st_mtime>=include.st_mtime)) &&
+           (!optics || (!stat(composition_header,&include) &&
                         binary.st_mtime>=include.st_mtime)) &&
            (!optics || (!stat(shared_header,&include) &&
                         binary.st_mtime>=include.st_mtime)))continue;
