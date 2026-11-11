@@ -35,10 +35,15 @@ The namespace-header layout has not yet been validated by a native build.
 Mirror performance profiling (same camera, resolution and scene each run):
   c build run vulkan-server
   c build run vulkan-client
+  OPTICS_PROFILE_GENERAL=1 c build run vulkan-client
   OPTICS_PROFILE_DISABLE=1 c build run vulkan-client
 
 Compare 'present_p50' and 'present_p95' from at least 120 completed
-frames, not 'optics_inner_stamp'. On tile-based GPUs (especially Apple
+frames, not 'optics_inner_stamp'. The default build selects a smaller
+mirror-only fragment shader for scenes without any glass, eliminating
+the full 16-entry glass-ray work queue. OPTICS_PROFILE_GENERAL forces
+the original generic shader for a same-image A/B benchmark; when the
+scene contains glass the full shader is always used. On tile-based GPUs (especially Apple
 Metal/MoltenVK), timestamps inside the presentation render pass may not
 isolate its fragment shading; 'present' includes the base fullscreen
 draw, optical overlay and editor. The profile-disable option is an
