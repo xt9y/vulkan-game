@@ -372,7 +372,11 @@ static void stop(int)
 
 #include "clt/application.hpp"
 #include <cstdio>
+#ifdef _WIN32
+#include <process.h>
+#else
 #include <unistd.h>
+#endif
 
 int main(int argc, char **argv)
 {
@@ -427,7 +431,11 @@ int main(int argc, char **argv)
             // been released. This exactly matches a freshly launched client:
             // new network session, spawn position, weapon and renderer state.
             std::fflush(nullptr);
+#ifdef _WIN32
+            ::_execvp(argv[0],argv);
+#else
             ::execvp(argv[0],argv);
+#endif
             std::perror("vulkan-client restart");
             return 1;
         }
