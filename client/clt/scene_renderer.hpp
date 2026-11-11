@@ -1199,6 +1199,19 @@ void draw_reflection(vk::CommandBuffer command,std::uint32_t image,
     for(const auto& mesh:data.meshes)
         if(!mesh.transforms.empty())
             indirects.push_back(mesh.frames.at(image).indirect.handle);
+    // The original camera's draws have read the same indirect and
+    // visible-instance buffers. Finish those reads before the reflected
+    // cull overwrites them later in this command buffer.
+    vk::MemoryBarrier reuse{};
+    reuse.srcAccessMask=vk::AccessFlagBits::eIndirectCommandRead |
+                        vk::AccessFlagBits::eVertexAttributeRead;
+    reuse.dstAccessMask=vk::AccessFlagBits::eTransferWrite |
+                        vk::AccessFlagBits::eShaderWrite;
+    command.pipelineBarrier(
+        vk::PipelineStageFlagBits::eDrawIndirect |
+        vk::PipelineStageFlagBits::eVertexInput,
+        vk::PipelineStageFlagBits::eTransfer |
+        vk::PipelineStageFlagBits::eComputeShader,{},{reuse},{},{});
     data.cull.begin(command,indirects);
     const std::array<vec4,6> unbounded{};
     for(const auto& mesh:data.meshes) {
