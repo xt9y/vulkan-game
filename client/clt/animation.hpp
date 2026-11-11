@@ -21,15 +21,6 @@ namespace clt::animation
 {
 using matrix = std::array<float, 16>;
 
-void synchronize(const ::scene::state &scene);
-std::uint32_t joints(std::uint32_t skin_id);
-bool sample(std::uint32_t skin_id, std::uint32_t clip, float seconds, std::vector<matrix> &palette, std::uint32_t overlay = UINT32_MAX, float weight = 0.0f, std::uint32_t mask_root = UINT32_MAX, bool loop = true);
-float duration(std::uint32_t skin_id, std::uint32_t clip);
-std::uint32_t joint(std::uint32_t skin_id, std::string_view name);
-bool joint_transform(std::uint32_t skin_id, std::uint32_t index, matrix &out);
-bool offset_joint(std::uint32_t skin_id, std::uint32_t root, vk::util::math::vec3 model_offset, std::vector<matrix> &palette);
-void reset();
-
 namespace
 {
 struct runtime
@@ -128,7 +119,7 @@ std::uint32_t joints(std::uint32_t skin_id)
     return item ? std::uint32_t(item->skeleton.num_joints()) : 0;
 }
 
-bool sample(std::uint32_t skin_id, std::uint32_t clip, float seconds, std::vector<matrix> &palette, std::uint32_t overlay, float weight, std::uint32_t mask_root, bool loop)
+bool sample(std::uint32_t skin_id, std::uint32_t clip, float seconds, std::vector<matrix> &palette, std::uint32_t overlay = UINT32_MAX, float weight = 0.0f, std::uint32_t mask_root = UINT32_MAX, bool loop = true)
 {
     auto *item = find(skin_id);
     if (!item || !std::isfinite(seconds) || !std::isfinite(weight)) return false;
