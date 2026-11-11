@@ -135,6 +135,7 @@ void append_remote_players(editor::draw_list &commands, const camera::frame &vie
 }
 
 std::shared_ptr<const ::scene::state> registered;
+std::shared_ptr<const ::scene::state> optical_geometry_source;
 constexpr float bounce_reach = 2.6f;
 // Compare only inputs that PCloud actually consumes. Editor tint, procedural
 // texture, mirror reflectivity and presentation metadata do not change its
@@ -533,6 +534,41 @@ bool atlas_unchanged(const ::scene::state& a,const ::scene::state& b)
     return true;
 }
 
+// The optical BVH depends on actual triangles, instance material
+// properties and the first photon emitter, not on unrelated light edits.
+bool optical_geometry_unchanged(const ::scene::state& a,
+                                const ::scene::state& b)
+{
+    if(a.atlas_revision!=b.atlas_revision ||
+       a.meshes.size()!=b.meshes.size() ||
+       a.skins.size()!=b.skins.size() ||
+       a.instances.size()!=b.instances.size())
+        return false;
+    for(std::size_t i=0;i<a.instances.size();++i) {
+        const auto& x=a.instances[i];
+        const auto& y=b.instances[i];
+        if(!::scene::same_geometry(x,y) ||
+           x.animation!=y.animation ||
+           x.animation_tick!=y.animation_tick ||
+           x.overlay_animation!=y.overlay_animation ||
+           x.overlay_root!=y.overlay_root ||
+           x.overlay_weight!=y.overlay_weight)
+            return false;
+    }
+    const auto emitter=[](const ::scene::state& v) {
+        return std::find_if(v.lights.begin(),v.lights.end(),
+            [](const auto& l){return l.enabled && l.strength>0.f;});
+    };
+    const auto x=emitter(a),y=emitter(b);
+    if((x==a.lights.end())!=(y==b.lights.end()))return false;
+    if(x!=a.lights.end() &&
+       (x->position.x!=y->position.x ||
+        x->position.y!=y->position.y ||
+        x->position.z!=y->position.z))
+        return false;
+    return true;
+}
+
 void synchronize_scene()
 {
     const auto source = connection::snapshot();
@@ -540,9 +576,19 @@ void synchronize_scene()
     if (source == registered) return;
     const bool reuse_atlas=source && registered &&
         atlas_unchanged(*registered,*source);
-    if (!(source && registered && lighting_unchanged(*registered, *source))) {
+    const bool same_light_shape=source && registered &&
+        lighting_shape_unchanged(*registered,*source);
+    if(!same_light_shape) {
         pc::set_scene(prepare_world(source.get()));
         pc::synchronize_scene();
+    } else if(!lighting_unchanged(*registered,*source)) {
+        // The same shadow rays and probe positions, with new radiance.
+        std::vector<pc::light> values;
+        values.reserve(source->lights.size());
+        for(const auto& l:source->lights)
+            values.push_back({l.position,l.radius,l.color,
+                              l.enabled?l.strength:0.f});
+        pc::update_lights(values);
     }
     std::vector<optics::light> lights;
     if(source)
@@ -562,10 +608,31 @@ void synchronize_scene()
         material_compositor->set_probe_views(probes);
         material_compositor->set_probe_space(pc::probe_space());
     }
-    // Drop old descriptor references before releasing the mapper's GPU
-    // buffers. synchronize_scene is called only when the renderer is idle.
+    const bool same_optical_geometry=source && registered &&
+        photon_transport && optical_geometry_unchanged(*registered,*source);
+    if(same_optical_geometry) {
+        // No face, atlas, BVH, skin index, or emitted-ray origin changed.
+        // Update light colors/intensity without allocating a second BVH.
+        if(material_compositor)material_compositor->set_lights(lights);
+        const auto first=std::find_if(source->lights.begin(),source->lights.end(),
+            [](const auto& l){return l.enabled && l.strength>0.f;});
+        const auto emission=first==source->lights.end() ?
+            vk::util::math::vec3{} :
+            first->color*std::max(first->strength,0.f)*6.f;
+        const auto& world=photon_transport->current_scene();
+        const auto old=world.surfaces[world.emitter].emission;
+        if(old.x!=emission.x || old.y!=emission.y || old.z!=emission.z) {
+            photon_transport->set_emission(world.emitter,emission);
+            transport_pending=true;
+        }
+        registered=source;
+        return;
+    }
+    // Prior GPU submissions have completed. New *geometry* requires new
+    // photon traversal buffers; lighting-only changes never enter here.
     if(material_compositor)material_compositor->set_scene({},lights);
     photon_transport.reset();
+    optical_geometry_source.reset();
     skinned_faces.clear();
     transport_pending=false;
     if(source && std::any_of(source->instances.begin(),source->instances.end(),
@@ -574,6 +641,8 @@ void synchronize_scene()
         std::vector<optics::face_normals> face_normals;
         auto scene=photon_scene(*source,face_uvs,face_normals);
         if(scene) {
+            // skinned_faces stores pointers into this immutable state.
+            optical_geometry_source=source;
             pm::configuration config{};
             config.transport_only=true;
             config.photons=8192; // Invisible indirect-lighting cache; no projected splats.
@@ -609,6 +678,7 @@ void release()
 {
     material_compositor.reset();
     photon_transport.reset();
+    optical_geometry_source.reset();
     skinned_faces.clear();
     transport_pending=false;
     pc::release();
