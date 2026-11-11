@@ -355,15 +355,19 @@ void init(const char *vertex_path, const char *fragment_path)
     data.cull.create(game::options::get()->graphics.culling_shader, data.instance_layout);
 }
 
+pc::gbuffer target_outputs(const std::vector<state::target>& targets,
+                           std::uint32_t image)
+{
+    const auto& images=targets.at(image).images;
+    return {images.color(0),images.color(1),images.color(2),images.depth()};
+}
 pc::gbuffer optical_outputs(std::uint32_t image)
 {
-    const auto &images = get().optical_targets.at(image).images;
-    return {images.color(0), images.color(1), images.color(2), images.depth()};
+    return target_outputs(get().optical_targets,image);
 }
 pc::gbuffer reflection_outputs(std::uint32_t image)
 {
-    const auto &images=get().reflection_targets.at(image).images;
-    return {images.color(0),images.color(1),images.color(2),images.depth()};
+    return target_outputs(get().reflection_targets,image);
 }
 
 bool has_optics()
@@ -595,9 +599,7 @@ std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
 
 pc::gbuffer outputs(std::uint32_t image)
 {
-    const auto &images = get().targets.at(image).images;
-
-    return {images.color(0), images.color(1), images.color(2), images.depth()};
+    return target_outputs(get().targets,image);
 }
 
 void release_local_frames()
