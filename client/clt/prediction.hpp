@@ -18,6 +18,7 @@ using clock = std::chrono::steady_clock;
 using vec3 = vk::util::math::vec3;
 
 std::atomic<bool> stop{false};
+std::atomic<bool> reset_requested{false};
 std::atomic<std::uint32_t> buttons{0};
 std::atomic<float> yaw{0};
 std::atomic<std::uint64_t> tick_count{0};
@@ -40,6 +41,18 @@ void run()
     constexpr auto dt = std::chrono::nanoseconds(1'000'000'000 / net::limits::tick_hz);
     while (!stop.load(std::memory_order_relaxed))
     {
+        if(reset_requested.exchange(false,std::memory_order_acq_rel)) {
+            // Only player state is discarded; the scene and Vulkan resources
+            // remain untouched. The server respawns the same authenticated
+            // session and acknowledges the current input watermark.
+            connection::request_respawn(sequence);
+            const auto params=connection::movement_parameters();
+            avatar={};
+            if(params)avatar.position=params->spawn;
+            pending.clear();
+            correction={};
+            ready=false;
+        }
         const auto scene = connection::snapshot();
         const auto connected = connection::get()->connected.load(std::memory_order_relaxed);
         const auto params = connection::movement_parameters();
@@ -73,8 +86,13 @@ void run()
                 }
                 previous_scene = scene;
             }
-            if (const auto update = connection::take_authority();
-                update && (!ready || net::message::newer(update->tick, server_tick)))
+            if(connection::respawning()) {
+                // Old authoritative poses belong to the pre-reset player.
+                connection::take_authority();
+                ready=false;
+            }
+            else if (const auto update = connection::take_authority();
+                     update && (!ready || net::message::newer(update->tick, server_tick)))
             {
                 const auto before = avatar.position;
                 const bool was_ready = ready;
@@ -120,11 +138,16 @@ void init()
     buttons.store(0, std::memory_order_relaxed);
     yaw.store(0, std::memory_order_relaxed);
     tick_count.store(0, std::memory_order_relaxed);
+    reset_requested.store(false,std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock(pose_mutex);
         pose = {};
     }
     worker = std::thread(run);
+}
+void request_reset()
+{
+    reset_requested.store(true,std::memory_order_release);
 }
 void controls(std::uint32_t b, float y)
 {
