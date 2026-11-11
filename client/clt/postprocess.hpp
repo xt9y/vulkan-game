@@ -670,7 +670,7 @@ void synchronize_scene()
                 material_compositor->set_scene({
                     g.faces,g.nodes,g.triangles,g.scene_info,
                     g.photons,g.offsets,
-                    std::uint32_t(scene->surfaces.size())
+                    std::uint32_t(scene->surfaces.size()),g.face_ids
                 },lights);
                 material_compositor->set_normals(face_normals);
                 if(!reuse_atlas)
@@ -794,7 +794,7 @@ void update_skinned(std::uint32_t image,const camera::frame& view)
     const auto g=photon_transport->refit_geometry(image,surfaces);
     material_compositor->set_geometry_frame(image,{
         g.faces,g.nodes,g.triangles,g.scene_info,g.photons,g.offsets,
-        std::uint32_t(base.size())
+        std::uint32_t(base.size()),g.face_ids
     });
     material_compositor->update_normals(image,normals);
     // GPU timestamps do not include the CPU vertex skin/refit work.
