@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <editor/vulkan.hpp>
 #include <iterator>
 #include <memory>
@@ -831,12 +832,21 @@ void update_photons(vk::CommandBuffer cmd,std::uint32_t,
 void present(vk::CommandBuffer cmd, std::uint32_t image,
              const camera::frame &view,const gpu::timestamps* timings)
 {
-    pc::present(cmd, image, [view,image,timings](vk::CommandBuffer command, vk::Extent2D extent)
+    // Diagnostic only: an exact same-scene A/B baseline for the expensive
+    // optical draw, required on tile-based GPUs where timestamps inside a
+    // render pass can measure command encoding rather than fragment work.
+    static const bool without_optics=std::getenv("OPTICS_PROFILE_DISABLE")!=nullptr;
+    static bool announced=false;
+    if(without_optics && !announced) {
+        std::clog<<"optics: benchmark baseline active (optical draw disabled)\n";
+        announced=true;
+    }
+    pc::present(cmd, image, [view,image,timings,without_optics](vk::CommandBuffer command, vk::Extent2D extent)
                 {
             // A nested interval isolates BVH optics from swapchain
             // presentation and editor overlay work on the GPU.
             if(timings)timings->start(command,image,6);
-            if(material_compositor && scene_renderer::has_optics()) {
+            if(!without_optics && material_compositor && scene_renderer::has_optics()) {
                 using namespace vk::util::math;
                 const float half_tan=std::tan(view.pose.fov*.5f);
                 const auto& v=view.view;
