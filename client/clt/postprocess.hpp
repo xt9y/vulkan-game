@@ -515,6 +515,11 @@ void create()
     shaders.fullscreen_shader = configured.fullscreen_shader;
     shaders.presentation_shader = configured.presentation_shader;
     pc::create(gbuffers, shaders);
+    std::vector<pc::gbuffer> reflection_gbuffers;
+    reflection_gbuffers.reserve(count);
+    for(std::uint32_t i=0;i<count;++i)
+        reflection_gbuffers.push_back(scene_renderer::reflection_outputs(i));
+    pc::create_reflection(reflection_gbuffers);
     pc::set_exposure(configured.exposure);
     std::vector<optics::input> material_frames;
     material_frames.reserve(count);
@@ -523,7 +528,8 @@ void create()
         const auto optical=scene_renderer::optical_outputs(i);
         material_frames.push_back({
             pc::ldr_view(i),ordinary[3],optical[0],optical[1],
-            optical[2],optical[3],pc::probe_view(i),pc::hdr_view(i)
+            optical[2],optical[3],pc::probe_view(i),pc::hdr_view(i),
+            pc::reflection_ldr_view(i)
         });
     }
     auto compositor=std::make_unique<optics::compositor>();
