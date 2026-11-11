@@ -371,12 +371,69 @@ pc::gbuffer optical_outputs(std::uint32_t image)
     const auto &images = get().optical_targets.at(image).images;
     return {images.color(0), images.color(1), images.color(2), images.depth()};
 }
+pc::gbuffer reflection_outputs(std::uint32_t image)
+{
+    const auto &images=get().reflection_targets.at(image).images;
+    return {images.color(0),images.color(1),images.color(2),images.depth()};
+}
 
 bool has_optics()
 {
     const auto& scene=get().snapshot;
     return scene && std::any_of(scene->instances.begin(),scene->instances.end(),
         [](const auto& i){return i.pattern==2u || i.pattern==3u;});
+}
+
+// Exact planar mirror is a reflected-camera raster pass, not millions of
+// independent software-BVH rays. Restrict this fast path to one thin
+// non-skinned box and no glass/nested mirrors; all other materials retain
+// the original ray tracer and its multi-bounce behavior.
+std::optional<planar_view> planar_reflection(const camera::frame& camera)
+{
+    const auto& scene=get().snapshot;
+    if(!scene)return std::nullopt;
+    const ::scene::instance* mirror=nullptr;
+    for(const auto& instance:scene->instances) {
+        if(instance.pattern==2u)return std::nullopt;
+        if(instance.pattern!=3u)continue;
+        if(mirror)return std::nullopt;
+        mirror=&instance;
+    }
+    if(!mirror || mirror->mesh_id!=::scene::unit_cube_mesh_id ||
+       std::abs(mirror->pose.scale.x)>.5f ||
+       std::abs(mirror->pose.scale.x)<.001f ||
+       std::abs(mirror->pose.scale.y)<1.f ||
+       std::abs(mirror->pose.scale.z)<1.f)
+        return std::nullopt;
+    const auto found=std::find_if(scene->meshes.begin(),scene->meshes.end(),
+        [&](const auto& mesh){return mesh.id==mirror->mesh_id;});
+    if(found==scene->meshes.end() || found->skin_id || found->vertices.empty())
+        return std::nullopt;
+    float lo=found->vertices.front().position.x;
+    float hi=lo;
+    for(const auto& vertex:found->vertices) {
+        lo=std::min(lo,vertex.position.x);
+        hi=std::max(hi,vertex.position.x);
+    }
+    const vec3 axis=normalize(rotate(mirror->pose.rotation,{1,0,0}));
+    const float side=dot(camera.eye-mirror->pose.position,axis);
+    const vec3 N=side>=0.f?axis:axis*-1.f;
+    const float face=side>=0.f?hi:lo;
+    const vec3 point=mirror->pose.position+
+                     axis*(face*mirror->pose.scale.x);
+    const float distance=dot(camera.eye-point,N);
+    if(distance<.02f)return std::nullopt;
+    const auto reflect=[&](vec3 v){return v-N*(2.f*dot(v,N));};
+    const vec3 virtual_eye=camera.eye-N*(2.f*distance);
+    const vec3 forward{-camera.view(2,0),-camera.view(2,1),-camera.view(2,2)};
+    const vec3 up{camera.view(1,0),camera.view(1,1),camera.view(1,2)};
+    const vec3 reflected_forward=reflect(forward);
+    const mat4 reflected_view=look_at(virtual_eye,
+        virtual_eye+reflected_forward,reflect(up));
+    return planar_view{
+        {camera.pose,reflected_view,virtual_eye},
+        {N.x,N.y,N.z,-dot(N,point)+.0002f}
+    };
 }
 
 // Conservative screen-space bounds for all visible glass/mirror instances.
