@@ -671,63 +671,46 @@ void run(const std::string &host, std::uint16_t port)
                     continue;
                 }
 
-                if (const auto state = net::animation::decode(buffer.data(), *size)) {
-                    if (state->token == token && data.connected.load(std::memory_order_relaxed)) {
-                        std::lock_guard<std::mutex> lock(data.animation_mutex);
-
-                        const auto old = data.animations.find(state->instance_id);
-
-                        if (old == data.animations.end() || net::message::newer(state->server_tick, old->second.server_tick))
-                            data.animations[state->instance_id] = *state;
-                        last_received = now;
+                // Shared parse/authentication/keepalive gate for state packets.
+                // Each handler owns only the state-specific update and mutex.
+                const auto dispatch=[&](auto decode,auto handle) {
+                    const auto value=decode(buffer.data(),*size);
+                    if(!value)return false;
+                    if(value->token==token &&
+                       data.connected.load(std::memory_order_relaxed)) {
+                        handle(*value);
+                        last_received=now;
                     }
-
-                    continue;
-                }
-
-                if (const auto settings = net::movement::decode_parameters(buffer.data(), *size)) {
-                    if (settings->token == token && data.connected.load(std::memory_order_relaxed)) {
-                        std::lock_guard<std::mutex> lock(data.player_mutex);
-                        data.server_parameters = settings->values;
-                        last_received = now;
+                    return true;
+                };
+                if(dispatch(net::animation::decode,[&](const auto& v) {
+                    std::lock_guard lock(data.animation_mutex);
+                    const auto previous=data.animations.find(v.instance_id);
+                    if(previous==data.animations.end() ||
+                       net::message::newer(v.server_tick,previous->second.server_tick))
+                        data.animations[v.instance_id]=v;
+                }))continue;
+                if(dispatch(net::movement::decode_parameters,[&](const auto& v) {
+                    std::lock_guard lock(data.player_mutex);
+                    data.server_parameters=v.values;
+                }))continue;
+                if(dispatch(net::movement::decode_peers,[&](const auto& v) {
+                    std::lock_guard lock(data.peers_mutex);
+                    if(data.peers_received==clock::time_point{} ||
+                       net::message::newer(v.tick,data.peers.tick)) {
+                        data.peers=v;
+                        data.peers_received=now;
                     }
-
-                    continue;
-                }
-
-                if (const auto peers = net::movement::decode_peers(buffer.data(), *size)) {
-                    if (peers->token == token && data.connected.load(std::memory_order_relaxed)) {
-                        std::lock_guard lock(data.peers_mutex);
-
-                        if (data.peers_received == clock::time_point{} ||
-                            net::message::newer(peers->tick, data.peers.tick))
-                        {
-                            data.peers = *peers;
-                            data.peers_received = now;
-                        }
-
-                        last_received = now;
-                    }
-
-                    continue;
-                }
-
-                if (const auto update = net::movement::decode_snapshot(buffer.data(), *size)) {
-                    if (update->token == token && data.connected.load(std::memory_order_relaxed)) {
-                        last_received = now;
-
-                        if (!net::message::newer(update->tick, last_player_tick))
-                            continue;
-                        last_player_tick = update->tick;
-
-                        while (!unacknowledged.empty() && !net::message::newer(unacknowledged.front().sequence, update->sequence))
-                            unacknowledged.pop_front();
-                        std::lock_guard<std::mutex> lock(data.player_mutex);
-                        data.authority = *update;
-                    }
-
-                    continue;
-                }
+                }))continue;
+                if(dispatch(net::movement::decode_snapshot,[&](const auto& v) {
+                    if(!net::message::newer(v.tick,last_player_tick))return;
+                    last_player_tick=v.tick;
+                    while(!unacknowledged.empty() &&
+                          !net::message::newer(unacknowledged.front().sequence,v.sequence))
+                        unacknowledged.pop_front();
+                    std::lock_guard lock(data.player_mutex);
+                    data.authority=v;
+                }))continue;
 
                 const auto message = net::message::decode(buffer.data(), *size);
                 if(message && message->type==net::message::type::respawned &&
