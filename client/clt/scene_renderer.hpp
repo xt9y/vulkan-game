@@ -89,6 +89,11 @@ struct state
     vk::DescriptorSetLayout instance_layout{};
     std::unique_ptr<gpu::descriptors> instance_sets;
     gpu::culler cull;
+    struct skinned_instance {
+        std::uint32_t id=0;
+        std::vector<animation::matrix> palette;
+    };
+    std::vector<skinned_instance> skinned;
     std::uint32_t last_animation_tick = UINT32_MAX;
     std::chrono::steady_clock::time_point animation_received{};
     vk::RenderPass render_pass{};
@@ -111,6 +116,11 @@ state &get()
     static state data;
 
     return data;
+}
+
+const std::vector<state::skinned_instance>& skinning_poses()
+{
+    return get().skinned;
 }
 
 std::array<vk::DescriptorSetLayoutBinding, 10> instance_bindings()
@@ -913,6 +923,8 @@ void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame &c
         const auto elapsed = std::chrono::duration<float>(now - data.animation_received).count();
         const float smooth_tick = float(server_tick) + std::clamp(elapsed, 0.f, 0.2f) * float(net::limits::tick_hz);
 
+        data.skinned.clear();
+        const bool needs_mirror_skin=has_optics();
         for (auto &mesh : data.meshes)
         {
             if (!mesh.joint_count || mesh.transforms.empty()) continue;
@@ -950,6 +962,12 @@ void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame &c
             }
 
             vk::buffer::write(mesh.frames.at(image).skin_palette, matrices.data(), matrices.size() * sizeof(matrices[0]));
+            if(needs_mirror_skin)
+                for(std::size_t k=0;k<mesh.instances.size();++k) {
+                    const auto first=matrices.begin()+k*mesh.joint_count;
+                    data.skinned.push_back({mesh.instances[k].id,
+                        std::vector<animation::matrix>(first,first+mesh.joint_count)});
+                }
         }
     }
 
