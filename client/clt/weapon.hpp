@@ -508,6 +508,28 @@ const std::vector<draw> &update(const mat4 &view)
     if (!data.settings.rules.id) return data.draws;
 
     const auto now = seconds();
+    static std::uint32_t seen_reset=0;
+    const auto reset=connection::get()->reset_generation.load(std::memory_order_acquire);
+    if(reset!=seen_reset) {
+        seen_reset=reset;
+        // Execute on the render/weapon thread; the window, model assets
+        // and GPU resources are not recreated.
+        data.authority=data.predicted=::weapon::make_state(data.settings.rules);
+        data.pending.clear();
+        data.confirmed.clear();
+        data.casings.clear();
+        data.holes.clear();
+        data.flash_until=data.next_fire=0;
+        data.last_fired_sequence=data.shot_variant=0;
+        {
+            std::lock_guard lock(input_mutex);
+            intents.clear();
+            trigger_held=reload_held=aim=magazine_check_requested=false;
+            movement=0;
+        }
+        next_automatic_fire={};
+        reset_presentation(now);
+    }
     const auto frame_time = clock::now();
     const float dt = std::clamp(std::chrono::duration<float>(frame_time - data.previous).count(), 0.f, .05f);
     data.previous = frame_time;
