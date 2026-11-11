@@ -56,3 +56,21 @@ precomputed reciprocal directions. Perfect mirrors use an exact
 serial mirror path and retain the full tracer when glass is reached.
 No resolution scaling or denoising is used. Native GPU timings are
 necessary to quantify any improvement.
+
+Planar reflection acceleration (full-resolution, no ray denoising):
+  c build run vulkan-client
+  OPTICS_PLANAR_DISABLE=1 c build run vulkan-client
+
+When exactly one thin non-skinned cube mirror is present, and there is
+no glass or second mirror, the client renders the actual world from a
+geometrically reflected camera using the original skinned glTF raster
+materials. PCloud shades its separate full-resolution G-buffer with the
+same GI probes, shadows and tone mapping, and the mirror samples the
+result. The fragment compositor performs no software-BVH traversal.
+The virtual camera uses the front/back face nearest the player and a
+world-space reflection-plane clip to exclude geometry behind the mirror.
+Other scenes keep the exact original BVH/optical path. The environment
+variable above forces the original traversal for identical-scene A/B
+profiling. New GPU diagnostics report mirror_light and mirror_tonemap
+separately; the presentation pass no longer includes the large primary
+reflection traversal for a supported planar scene.
