@@ -16,6 +16,7 @@ struct resource
     net::endpoint::resource endpoint;
     std::uint32_t token = 0;
     std::uint32_t last_sequence = 0;
+    std::uint32_t last_respawn_sequence = 0;
 
     bool has_sequence = false;
     bool active = false;
