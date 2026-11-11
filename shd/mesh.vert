@@ -34,8 +34,8 @@ layout(push_constant) uniform Draw
     mat4 view_projection;
     vec4 base_color;
     vec4 surface;  // metallic, roughness, occlusion, alpha cutoff
-    vec4 emissive; // RGB, material flags
-    uint joints_per_instance;
+    vec4 emissive; // RGB, 8-bit material flags + skin joint count
+    vec4 clip_plane;
 } pc;
 
 void main()
@@ -43,9 +43,10 @@ void main()
     Instance instance = instances[instance_index];
     instance_tint = instance.tint;
     mat4 deform = mat4(1.0);
-    if (pc.joints_per_instance != 0u)
+    uint joints_per_instance=uint(pc.emissive.w+0.5)>>8u;
+    if (joints_per_instance != 0u)
     {
-        uint first = instance_index * pc.joints_per_instance;
+        uint first = instance_index * joints_per_instance;
         deform = in_weights.x * bones[first + in_joints.x] +
                  in_weights.y * bones[first + in_joints.y] +
                  in_weights.z * bones[first + in_joints.z] +
