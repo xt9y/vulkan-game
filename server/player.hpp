@@ -39,7 +39,6 @@ struct parameters_t
     float walk_speed, sprint_speed, gravity, radius, height;
 };
 
-void configure(parameters_t values);
 const parameters_t &parameters();
 struct state
 {
@@ -56,10 +55,7 @@ struct box
 };
 
 using collision_world = std::vector<box>;
-spatial::index build_index(const collision_world &world);
-collision_world build_colliders(const ::scene::state &scene);
 collision_world build_colliders(const std::vector<::scene::mesh> &meshes, std::span<const ::scene::instance> instances);
-void step(state &player, const input &input, const collision_world &world, const spatial::index *broadphase = nullptr);
 namespace
 {
 using namespace vk::util::math;
@@ -152,7 +148,7 @@ spatial::index build_index(const collision_world &boxes)
     return index;
 }
 
-void step(state &p, const input &keys, const collision_world &world, const spatial::index *broadphase)
+void step(state &p, const input &keys, const collision_world &world, const spatial::index *broadphase = nullptr)
 {
     using namespace vk::util::math;
     const auto &settings = parameters();
