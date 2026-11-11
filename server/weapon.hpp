@@ -171,14 +171,6 @@ struct gun
     std::uint32_t max_impacts = 192;
 };
 
-inline void validate(const definition &);
-inline state make_state(const definition &);
-inline void advance(state &, double, const definition &);
-inline result apply(state &, std::uint32_t, action, double, const definition &);
-inline vec3 direction(float, float);
-inline void append(world &, const std::vector<scene::mesh> &, std::span<const scene::instance>);
-inline hit trace(const world &, vec3, vec3, float);
-inline timing load_timing(const std::filesystem::path &, const std::string &, const std::string &, float, float);
 inline void validate(const definition &value)
 {
     const auto &t = value.reload;
