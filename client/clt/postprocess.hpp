@@ -861,7 +861,11 @@ void present(vk::CommandBuffer cmd, std::uint32_t image,
                 optics::camera params{};
                 params.view_projection=perspective(view.pose.fov,
                     float(extent.width)/float(extent.height),.1f,1000.f)*v;
-                params.eye={view.eye.x,view.eye.y,view.eye.z,1.f};
+                // 2 selects the exact rasterized planar mirror shader.
+                // Other scenes retain the original multi-bounce BVH tracer.
+                const bool planar=scene_renderer::planar_reflection(view).has_value();
+                params.eye={view.eye.x,view.eye.y,view.eye.z,
+                            planar?2.f:1.f};
                 params.right={v(0,0),v(0,1),v(0,2),
                               half_tan*float(extent.width)/float(extent.height)};
                 params.up={v(1,0),v(1,1),v(1,2),half_tan};
