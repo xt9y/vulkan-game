@@ -174,8 +174,15 @@ bool lighting_shape_unchanged(const ::scene::state& previous,
     for(const auto& mesh:incoming.meshes)meshes.emplace(mesh.id,&mesh);
     const auto caster=[&](const ::scene::instance& i) {
         const auto it=meshes.find(i.mesh_id);
-        return it!=meshes.end() && it->second->surface.alpha_mode!=2 &&
-               i.pattern!=2u && !it->second->indices.empty();
+        if(it==meshes.end() || it->second->surface.alpha_mode==2 ||
+           i.pattern==2u)return false;
+        const auto& mesh=*it->second;
+        // PCloud also derives ground collision bounds and cube probe faces
+        // from raw vertices, even if their index lists are empty.
+        return !mesh.indices.empty() ||
+               (i.mesh_id==::scene::ground_mesh_id && !mesh.vertices.empty()) ||
+               (i.mesh_id==::scene::unit_cube_mesh_id &&
+                mesh.vertices.size()>=4);
     };
     for(std::size_t i=0;i<previous.instances.size();++i) {
         const auto& a=previous.instances[i];
