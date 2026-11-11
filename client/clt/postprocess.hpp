@@ -671,7 +671,9 @@ void synchronize_scene()
                     g.faces,g.nodes,g.triangles,g.scene_info,
                     g.photons,g.offsets,
                     std::uint32_t(scene->surfaces.size()),g.face_ids
-                },lights);
+                },lights,std::any_of(source->instances.begin(),
+                    source->instances.end(),
+                    [](const auto& inst){return inst.pattern==2u;}));
                 material_compositor->set_normals(face_normals);
                 if(!reuse_atlas)
                     material_compositor->set_textures(
