@@ -268,53 +268,53 @@ vk::Format depth_format()
 
 void create_render_pass()
 {
-    auto &data = get();
-    std::array<vk::AttachmentDescription, 4> attachments{};
-    std::array<vk::AttachmentReference, 3> colors{};
-
-    for (std::uint32_t i = 0; i < colors.size(); ++i)
-    {
-        attachments[i].format = color_formats()[i];
-        attachments[i].samples = vk::SampleCountFlagBits::e1;
-        attachments[i].loadOp = vk::AttachmentLoadOp::eClear;
-        attachments[i].storeOp = vk::AttachmentStoreOp::eStore;
-        attachments[i].initialLayout = vk::ImageLayout::eUndefined;
-        attachments[i].finalLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-        colors[i] = {i, vk::ImageLayout::eColorAttachmentOptimal};
+    auto& data=get();
+    std::array<vk::AttachmentDescription,4> attachments{};
+    std::array<vk::AttachmentReference,3> colors{};
+    const auto formats=color_formats();
+    for(std::uint32_t i=0;i<attachments.size();++i) {
+        auto& desc=attachments[i];
+        desc.format=i<3?formats[i]:depth_format();
+        desc.samples=vk::SampleCountFlagBits::e1;
+        desc.loadOp=vk::AttachmentLoadOp::eClear;
+        desc.storeOp=vk::AttachmentStoreOp::eStore;
+        desc.initialLayout=vk::ImageLayout::eUndefined;
+        desc.finalLayout=i<3?vk::ImageLayout::eShaderReadOnlyOptimal:
+                             vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+        if(i<3)colors[i]={i,vk::ImageLayout::eColorAttachmentOptimal};
     }
-
-    attachments[3].format = depth_format();
-    attachments[3].samples = vk::SampleCountFlagBits::e1;
-    attachments[3].loadOp = vk::AttachmentLoadOp::eClear;
-    attachments[3].storeOp = vk::AttachmentStoreOp::eStore;
-    attachments[3].initialLayout = vk::ImageLayout::eUndefined;
-    attachments[3].finalLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
-    vk::AttachmentReference depth{3, vk::ImageLayout::eDepthStencilAttachmentOptimal};
+    vk::AttachmentReference depth{3,vk::ImageLayout::eDepthStencilAttachmentOptimal};
     vk::SubpassDescription subpass{};
-    subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
-    subpass.colorAttachmentCount = colors.size();
-    subpass.pColorAttachments = colors.data();
-    subpass.pDepthStencilAttachment = &depth;
-    std::array<vk::SubpassDependency, 2> barriers{};
-    barriers[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-    barriers[0].dstSubpass = 0;
-    barriers[0].srcStageMask = vk::PipelineStageFlagBits::eTopOfPipe;
-    barriers[0].dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
-    barriers[0].dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
-    barriers[1].srcSubpass = 0;
-    barriers[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-    barriers[1].srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests;
-    barriers[1].dstStageMask = vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eFragmentShader;
-    barriers[1].srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
-    barriers[1].dstAccessMask = vk::AccessFlagBits::eShaderRead;
+    subpass.pipelineBindPoint=vk::PipelineBindPoint::eGraphics;
+    subpass.colorAttachmentCount=std::uint32_t(colors.size());
+    subpass.pColorAttachments=colors.data();
+    subpass.pDepthStencilAttachment=&depth;
+    std::array<vk::SubpassDependency,2> barriers{};
+    barriers[0].srcSubpass=VK_SUBPASS_EXTERNAL;
+    barriers[0].dstSubpass=0;
+    barriers[0].srcStageMask=vk::PipelineStageFlagBits::eTopOfPipe;
+    barriers[0].dstStageMask=vk::PipelineStageFlagBits::eColorAttachmentOutput|
+                             vk::PipelineStageFlagBits::eEarlyFragmentTests;
+    barriers[0].dstAccessMask=vk::AccessFlagBits::eColorAttachmentWrite|
+                              vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+    barriers[1].srcSubpass=0;
+    barriers[1].dstSubpass=VK_SUBPASS_EXTERNAL;
+    barriers[1].srcStageMask=vk::PipelineStageFlagBits::eColorAttachmentOutput|
+                             vk::PipelineStageFlagBits::eEarlyFragmentTests|
+                             vk::PipelineStageFlagBits::eLateFragmentTests;
+    barriers[1].dstStageMask=vk::PipelineStageFlagBits::eComputeShader|
+                             vk::PipelineStageFlagBits::eFragmentShader;
+    barriers[1].srcAccessMask=vk::AccessFlagBits::eColorAttachmentWrite|
+                              vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+    barriers[1].dstAccessMask=vk::AccessFlagBits::eShaderRead;
     vk::RenderPassCreateInfo info{};
-    info.attachmentCount = attachments.size();
-    info.pAttachments = attachments.data();
-    info.subpassCount = 1;
-    info.pSubpasses = &subpass;
-    info.dependencyCount = barriers.size();
-    info.pDependencies = barriers.data();
-    data.render_pass = vk::render_pass::create(info);
+    info.attachmentCount=std::uint32_t(attachments.size());
+    info.pAttachments=attachments.data();
+    info.subpassCount=1;
+    info.pSubpasses=&subpass;
+    info.dependencyCount=std::uint32_t(barriers.size());
+    info.pDependencies=barriers.data();
+    data.render_pass=vk::render_pass::create(info);
 }
 
 void create_target(bool optical=false,bool reflected=false)
