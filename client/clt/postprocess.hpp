@@ -194,6 +194,33 @@ bool lighting_unchanged(const ::scene::state& previous,
     return true;
 }
 
+// One weighted skinning implementation for PCloud and optical BVH refits.
+struct skinned_vertex {
+    vk::util::math::vec3 position{},normal{};
+};
+skinned_vertex skin_vertex(const ::scene::vertex& v,
+                           const std::vector<animation::matrix>& bones)
+{
+    using namespace vk::util::math;
+    if(bones.empty())return {v.position,v.normal};
+    vec3 p{},n{};float total=0.f;
+    for(std::size_t k=0;k<4;++k) {
+        const auto w=v.weights[k];
+        if(w<=0.f)continue;
+        if(v.joints[k]>=bones.size())throw std::runtime_error("Invalid skin joint");
+        const auto& m=bones[v.joints[k]];
+        const auto apply=[&](vec3 x,float t) {
+            return vec3{m[0]*x.x+m[4]*x.y+m[8]*x.z+m[12]*t,
+                        m[1]*x.x+m[5]*x.y+m[9]*x.z+m[13]*t,
+                        m[2]*x.x+m[6]*x.y+m[10]*x.z+m[14]*t};
+        };
+        p=p+apply(v.position,1.f)*w;
+        n=n+apply(v.normal,0.f)*w;
+        total+=w;
+    }
+    return total>0.f?skinned_vertex{p,n}:skinned_vertex{v.position,v.normal};
+}
+
 std::shared_ptr<pc::world> prepare_world(const ::scene::state *source)
 {
     auto prepared = std::make_shared<pc::world>();
@@ -230,31 +257,11 @@ std::shared_ptr<pc::world> prepare_world(const ::scene::state *source)
         if (mesh->skin_id && !animation::sample(mesh->skin_id, instance.animation, 0.0f, palette, instance.overlay_animation, instance.overlay_weight, instance.overlay_root))
             throw std::runtime_error("Cannot sample imported shadow caster skin");
 
-        const auto transformed = [&](const ::scene::vertex &v)
-        {
-            vec3 local = v.position;
-
-            if (!palette.empty()) {
-                local = {};
-
-                for (std::size_t j = 0; j < 4; ++j)
-                {
-                    if (v.weights[j] <= 0.0f) continue;
-                    if (v.joints[j] >= palette.size())
-                        throw std::runtime_error("Shadow caster joint index invalid");
-                    const auto &m = palette[v.joints[j]];
-
-                    const vec3 p = v.position;
-
-                    local = local + vec3{
-                                        m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12], m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13], m[2] * p.x + m[6] * p.y + m[10] * p.z + m[14]
-                                    } * v.weights[j];
-                }
-            }
-
-            const auto &scale = instance.pose.scale;
-
-            return instance.pose.position + rotate(instance.pose.rotation, {local.x * scale.x, local.y * scale.y, local.z * scale.z});
+        const auto transformed=[&](const ::scene::vertex& vertex) {
+            const vec3 p=palette.empty()?vertex.position:skin_vertex(vertex,palette).position;
+            const auto scale=instance.pose.scale;
+            return instance.pose.position+rotate(instance.pose.rotation,
+                {p.x*scale.x,p.y*scale.y,p.z*scale.z});
         };
 
         std::vector<vec3> positions;
@@ -711,45 +718,17 @@ void update_skinned(std::uint32_t image,const camera::frame& view)
             const auto& instance=*face.instance;
             cache->second.reserve(face.mesh->vertices.size());
             for(const auto& vertex:face.mesh->vertices) {
-                vec3 local{},normal{};
-                float weight_sum=0.f;
-                for(std::size_t k=0;k<4;++k) {
-                    const float weight=vertex.weights[k];
-                    if(weight<=0.f)continue;
-                    if(vertex.joints[k]>=bones.size())
-                        throw std::runtime_error("optics: skinned joint out of bounds");
-                    const auto& m=bones[vertex.joints[k]];
-                    const vec3 p=vertex.position,n=vertex.normal;
-                    local=local+vec3{
-                        m[0]*p.x+m[4]*p.y+m[8]*p.z+m[12],
-                        m[1]*p.x+m[5]*p.y+m[9]*p.z+m[13],
-                        m[2]*p.x+m[6]*p.y+m[10]*p.z+m[14]
-                    }*weight;
-                    normal=normal+vec3{
-                        m[0]*n.x+m[4]*n.y+m[8]*n.z,
-                        m[1]*n.x+m[5]*n.y+m[9]*n.z,
-                        m[2]*n.x+m[6]*n.y+m[10]*n.z
-                    }*weight;
-                    weight_sum+=weight;
-                }
-                if(weight_sum<=0.f) {
-                    local=vertex.position;
-                    normal=vertex.normal;
-                }
+                const auto local=skin_vertex(vertex,bones);
                 const auto scale=instance.pose.scale;
-                const auto position=instance.pose.position+
-                    rotate(instance.pose.rotation,{
-                        local.x*scale.x,local.y*scale.y,local.z*scale.z
-                    });
+                const auto position=instance.pose.position+rotate(instance.pose.rotation,{
+                    local.position.x*scale.x,local.position.y*scale.y,local.position.z*scale.z});
                 const vec3 n=rotate(instance.pose.rotation,{
-                    normal.x/scale.x,normal.y/scale.y,normal.z/scale.z
-                });
-                cache->second.push_back({
-                    position,length_squared(n)>1e-8f?
-                    normalize(n):vec3{0.f,1.f,0.f}
-                });
+                    local.normal.x/scale.x,local.normal.y/scale.y,local.normal.z/scale.z});
+                cache->second.push_back({position,length_squared(n)>1e-8f?
+                    normalize(n):vec3{0.f,1.f,0.f}});
             }
         }
+
         const auto& v=cache->second;
         const auto ia=face.indices[0],ib=face.indices[1],ic=face.indices[2];
         if(ia>=v.size() || ib>=v.size() || ic>=v.size())continue;
