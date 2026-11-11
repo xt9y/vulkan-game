@@ -342,7 +342,7 @@ void draw_frame()
 
     data.passes.record(active.command, active.image, {{"geometry", {}, measure(0, [image = active.image, render_camera](vk::CommandBuffer cmd)
                                                                                { scene_renderer::draw(cmd, image, render_camera);
-                                                                                 postprocess::update_skinned(image);
+                                                                                 postprocess::update_skinned(image,render_camera);
                                                                                  postprocess::update_photons(cmd,image,render_camera); })},
                                                       {"point-cloud", {gpu::access::for_buffer(target.points, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderWrite, true)}, measure(1, [image = active.image](vk::CommandBuffer cmd)
                                                                                                                                                                                                            { pc::cloud(cmd, image); })},
