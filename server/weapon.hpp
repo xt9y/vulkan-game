@@ -261,28 +261,31 @@ inline void append(world &data, const std::vector<scene::mesh> &meshes, std::spa
     using namespace vk::util::math;
     std::vector<spatial::bounds> boxes;
 
-    for (const auto &instance : instances)
-    {
-        const auto mesh = std::find_if(meshes.begin(), meshes.end(), [&](const scene::mesh &m)
-                                       { return m.id == instance.mesh_id; });
-        if (mesh == meshes.end()) continue;
-
-        const auto transform = [&](vec3 p)
-        {
-            return instance.pose.position + rotate(instance.pose.rotation,
-                                                   {p.x * instance.pose.scale.x, p.y * instance.pose.scale.y, p.z * instance.pose.scale.z});
+    ::scene::each_mesh_instance(meshes,instances,
+                                 [&](const auto& mesh,const auto& instance) {
+        const auto transform=[&](vec3 p) {
+            return instance.pose.position+rotate(instance.pose.rotation,
+                {p.x*instance.pose.scale.x,p.y*instance.pose.scale.y,
+                 p.z*instance.pose.scale.z});
         };
-
-        for (std::size_t i = 0; i + 2 < mesh->indices.size(); i += 3)
-        {
-            const auto a = mesh->indices[i], b = mesh->indices[i + 1], c = mesh->indices[i + 2];
-
-            if (a >= mesh->vertices.size() || b >= mesh->vertices.size() || c >= mesh->vertices.size()) continue;
-            triangle t{transform(mesh->vertices[a].position), transform(mesh->vertices[b].position), transform(mesh->vertices[c].position), instance.id, std::uint32_t(i / 3)};
+        for(std::size_t i=0;i+2<mesh.indices.size();i+=3) {
+            const auto a=mesh.indices[i],b=mesh.indices[i+1],c=mesh.indices[i+2];
+            if(a>=mesh.vertices.size()||b>=mesh.vertices.size()||
+               c>=mesh.vertices.size())continue;
+            triangle t{transform(mesh.vertices[a].position),
+                       transform(mesh.vertices[b].position),
+                       transform(mesh.vertices[c].position),
+                       instance.id,std::uint32_t(i/3)};
             data.triangles.push_back(t);
-            boxes.push_back({{std::min({t.a.x, t.b.x, t.c.x}), std::min({t.a.y, t.b.y, t.c.y}), std::min({t.a.z, t.b.z, t.c.z})}, {std::max({t.a.x, t.b.x, t.c.x}), std::max({t.a.y, t.b.y, t.c.y}), std::max({t.a.z, t.b.z, t.c.z})}});
+            boxes.push_back({{
+                std::min({t.a.x,t.b.x,t.c.x}),std::min({t.a.y,t.b.y,t.c.y}),
+                std::min({t.a.z,t.b.z,t.c.z})
+            },{
+                std::max({t.a.x,t.b.x,t.c.x}),std::max({t.a.y,t.b.y,t.c.y}),
+                std::max({t.a.z,t.b.z,t.c.z})
+            }});
         }
-    }
+    });
 
     data.index.append(boxes);
 }
