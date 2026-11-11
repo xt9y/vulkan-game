@@ -361,14 +361,8 @@ pc::gbuffer target_outputs(const std::vector<state::target>& targets,
     const auto& images=targets.at(image).images;
     return {images.color(0),images.color(1),images.color(2),images.depth()};
 }
-pc::gbuffer optical_outputs(std::uint32_t image)
-{
-    return target_outputs(get().optical_targets,image);
-}
-pc::gbuffer reflection_outputs(std::uint32_t image)
-{
-    return target_outputs(get().reflection_targets,image);
-}
+pc::gbuffer optical_outputs(std::uint32_t image) {return target_outputs(get().optical_targets,image);}
+pc::gbuffer reflection_outputs(std::uint32_t image) {return target_outputs(get().reflection_targets,image);}
 
 bool has_optics()
 {
@@ -597,10 +591,7 @@ std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
     return disjoint;
 }
 
-pc::gbuffer outputs(std::uint32_t image)
-{
-    return target_outputs(get().targets,image);
-}
+pc::gbuffer outputs(std::uint32_t image) {return target_outputs(get().targets,image);}
 
 void release_local_frames()
 {
