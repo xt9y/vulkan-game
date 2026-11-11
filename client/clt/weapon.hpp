@@ -375,6 +375,27 @@ void reset_presentation(double now)
     camera::set_ads_fraction(0);
     play(motion::draw, now);
 }
+// Keep client reconciliation resets identical for respawn and reconnection.
+void reset_reconciliation(double now,bool reconnect)
+{
+    data.authority=data.predicted=::weapon::make_state(data.settings.rules);
+    data.pending.clear();
+    data.confirmed.clear();
+    data.casings.clear();
+    data.holes.clear();
+    data.next_fire=data.last_fired_sequence=0;
+    if(reconnect)data.sequence=0;
+    else {
+        data.flash_until=0;
+        data.shot_variant=0;
+        std::lock_guard lock(input_mutex);
+        intents.clear();
+        trigger_held=reload_held=aim=magazine_check_requested=false;
+        movement=0;
+        next_automatic_fire={};
+    }
+    reset_presentation(now);
+}
 } // namespace
 bindings active_bindings()
 {
@@ -495,21 +516,7 @@ const std::vector<draw> &update(const mat4 &view)
         seen_reset=reset;
         // Execute on the render/weapon thread; the window, model assets
         // and GPU resources are not recreated.
-        data.authority=data.predicted=::weapon::make_state(data.settings.rules);
-        data.pending.clear();
-        data.confirmed.clear();
-        data.casings.clear();
-        data.holes.clear();
-        data.flash_until=data.next_fire=0;
-        data.last_fired_sequence=data.shot_variant=0;
-        {
-            std::lock_guard lock(input_mutex);
-            intents.clear();
-            trigger_held=reload_held=aim=magazine_check_requested=false;
-            movement=0;
-        }
-        next_automatic_fire={};
-        reset_presentation(now);
+        reset_reconciliation(now,false);
     }
     const auto frame_time = clock::now();
     const float dt = std::clamp(std::chrono::duration<float>(frame_time - data.previous).count(), 0.f, .05f);
@@ -532,15 +539,8 @@ const std::vector<draw> &update(const mat4 &view)
     const bool connected = connection::get()->connected.load(std::memory_order_relaxed);
 
     if (connected != data.connected) {
-        data.authority = data.predicted = ::weapon::make_state(data.settings.rules);
-        data.next_fire = 0;
-        data.pending.clear();
-        data.confirmed.clear();
-        data.sequence = data.last_fired_sequence = 0;
-        data.casings.clear();
-        data.holes.clear();
-        data.connected = connected;
-        reset_presentation(now);
+        data.connected=connected;
+        reset_reconciliation(now,true);
     }
 
     for (const auto &update : connection::take_weapon_updates())
