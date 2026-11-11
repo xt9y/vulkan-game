@@ -983,6 +983,41 @@ void cull_world(vk::CommandBuffer command,std::uint32_t image,
     data.cull.end(command);
 }
 
+
+// Both primary and reflected views rasterize the same scene mesh set;
+// the optical pass selects optical instances but shares all draw setup.
+void draw_world(::render::renderer& graphics,std::uint32_t image,
+                const mat4& vp,bool optical=false,const vec4* clip=nullptr)
+{
+    for(const auto& mesh:get().meshes) {
+        if(mesh.transforms.empty())continue;
+        if(optical && std::none_of(mesh.instances.begin(),mesh.instances.end(),
+            [](const auto& i){return i.pattern==2u || i.pattern==3u;}))
+            continue;
+        auto params=material_parameters(mesh.surface,vp,mesh.joint_count);
+        if(clip)params.clip_plane={clip->x,clip->y,clip->z,clip->w};
+        draw_mesh(graphics,mesh,mesh.frames.at(image),params,true,1,optical);
+    }
+}
+void begin_target(::render::renderer& graphics,
+                  const state::target& target,vk::Extent2D extent)
+{
+    std::array<vk::ClearValue,4> clear{};
+    for(std::size_t i=0;i<3;++i)
+        clear[i].color=vk::ClearColorValue(std::array<float,4>{0,0,0,0});
+    clear[3].depthStencil=vk::ClearDepthStencilValue(1.f,0);
+    vk::RenderPassBeginInfo begin{};
+    begin.renderPass=get().render_pass;
+    begin.framebuffer=target.framebuffer->framebuffer();
+    begin.renderArea=vk::Rect2D{{0,0},extent};
+    begin.clearValueCount=std::uint32_t(clear.size());
+    begin.pClearValues=clear.data();
+    graphics.begin_pass(begin);
+    graphics.viewport(vk::Viewport{0,0,float(extent.width),
+                                   float(extent.height),.1f,1.f},
+                      vk::Rect2D{{0,0},extent});
+}
+
 void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame &camera)
 {
     auto &data = get();
@@ -992,21 +1027,6 @@ void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame &c
     const float aspect = float(extent.width) / float(extent.height);
     const auto view_projection = perspective(camera.pose.fov, aspect, 0.1f, 1000.0f) * camera.view;
     const auto weapon_view_projection = weapon::view_projection(aspect, camera.view);
-
-    std::array<vk::ClearValue, 4> clear{};
-
-    for (std::size_t i = 0; i < 3; ++i)
-    {
-        clear[i].color = vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f});
-    }
-
-    clear[3].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
-    vk::RenderPassBeginInfo begin{};
-    begin.renderPass = data.render_pass;
-    begin.framebuffer = data.targets.at(image).framebuffer->framebuffer();
-    begin.renderArea = vk::Rect2D{vk::Offset2D{0, 0}, extent};
-    begin.clearValueCount = clear.size();
-    begin.pClearValues = clear.data();
 
     cull_world(command,image,view_projection);
     if (data.snapshot) {
@@ -1091,20 +1111,8 @@ void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame &c
             vk::buffer::write(frame.skin_palette, item.palette.data(), item.palette.size() * sizeof(animation::matrix));
     }
     ::render::renderer graphics(command);
-    graphics.begin_pass(begin);
-    graphics.viewport(vk::Viewport{0.0f, 0.0f, float(extent.width), float(extent.height), 0.1f, 1.0f}, vk::Rect2D{{0, 0}, extent});
-
-    if (data.snapshot) {
-        for (const auto &mesh : data.meshes)
-        {
-            if (mesh.transforms.empty())
-                continue;
-            const auto &m = mesh.surface;
-
-            const auto params = material_parameters(m, view_projection, mesh.joint_count);
-            draw_mesh(graphics, mesh, mesh.frames.at(image), params, true, 1);
-        }
-    }
+    begin_target(graphics,data.targets.at(image),extent);
+    if(data.snapshot)draw_world(graphics,image,view_projection);
 
     for (bool viewmodel : {false, true})
     {
@@ -1135,21 +1143,9 @@ void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame &c
     // A second G-buffer contains only glass/reflective faces. Opaque depth
     // excludes glass, so transmitted rays can see the scene behind it.
     if(has_optics()) {
-        vk::RenderPassBeginInfo optical_begin=begin;
-        optical_begin.framebuffer=data.optical_targets.at(image).framebuffer->framebuffer();
         ::render::renderer optical_graphics(command);
-        optical_graphics.begin_pass(optical_begin);
-        optical_graphics.viewport(vk::Viewport{0,0,float(extent.width),float(extent.height),0.1f,1.f},
-                                  vk::Rect2D{{0,0},extent});
-        for(const auto& mesh:data.meshes) {
-            if(mesh.transforms.empty() ||
-               std::none_of(mesh.instances.begin(),mesh.instances.end(),
-                   [](const auto& instance) {
-                       return instance.pattern==2u || instance.pattern==3u;
-                   }))continue;
-            const auto params=material_parameters(mesh.surface,view_projection,mesh.joint_count);
-            draw_mesh(optical_graphics,mesh,mesh.frames.at(image),params,true,1,true);
-        }
+        begin_target(optical_graphics,data.optical_targets.at(image),extent);
+        draw_world(optical_graphics,image,view_projection,true);
         optical_graphics.end_pass();
     }
 }
@@ -1167,30 +1163,9 @@ void draw_reflection(vk::CommandBuffer command,std::uint32_t image,
     const mat4 vp=perspective(planar.reflected.pose.fov,aspect,.1f,1000.f)*
                   planar.reflected.view;
     cull_world(command,image,vp,true);
-    std::array<vk::ClearValue,4> clears{};
-    for(int i=0;i<3;++i)
-        clears[i].color=vk::ClearColorValue(std::array<float,4>{0,0,0,0});
-    clears[3].depthStencil=vk::ClearDepthStencilValue(1.f,0);
-    vk::RenderPassBeginInfo begin{};
-    begin.renderPass=data.render_pass;
-    begin.framebuffer=data.reflection_targets.at(image).framebuffer->framebuffer();
-    begin.renderArea=vk::Rect2D{{0,0},extent};
-    begin.clearValueCount=std::uint32_t(clears.size());
-    begin.pClearValues=clears.data();
     ::render::renderer graphics(command);
-    graphics.begin_pass(begin);
-    graphics.viewport(vk::Viewport{0,0,float(extent.width),
-                                   float(extent.height),.1f,1.f},
-                      vk::Rect2D{{0,0},extent});
-    for(const auto& mesh:data.meshes) {
-        if(mesh.transforms.empty())continue;
-        auto params=material_parameters(mesh.surface,vp,mesh.joint_count);
-        params.clip_plane={planar.clip.x,planar.clip.y,
-                           planar.clip.z,planar.clip.w};
-        // mesh.frag excludes glass/mirrors, leaving opaque, masked and
-        // animated geometry in the reflected PCloud G-buffer.
-        draw_mesh(graphics,mesh,mesh.frames.at(image),params,true,1);
-    }
+    begin_target(graphics,data.reflection_targets.at(image),extent);
+    draw_world(graphics,image,vp,false,&planar.clip);
     graphics.end_pass();
 }
 
