@@ -269,19 +269,14 @@ std::optional<net::animation::resource> animation(std::uint32_t instance_id)
     return it->second;
 }
 
-bool send_editor_light(net::editor_light::resource command)
+// One in-order editor command queue for both cube and light packets.
+// The in-flight front is never overwritten, and coalescing keeps its sequence.
+template<class Command>
+bool queue_editor(Command command,std::deque<Command>& outgoing,
+                  std::uint32_t& sequence)
 {
-    if ((command.type != net::editor_light::kind::create && command.type != net::editor_light::kind::edit && command.type != net::editor_light::kind::remove) || !net::editor_light::valid(command.light) ||
-        !get()->connected.load(std::memory_order_relaxed))
-        return false;
-    auto &data = *get();
-    std::lock_guard<std::mutex> lock(data.editor_mutex);
-
-    // Replace only unsent consecutive edits to the same property.
-    // Never mutate the in-flight front packet or skip a sequence number.
-    if(data.editor_outgoing.size()>1 &&
-       command.type==net::editor_light::kind::edit) {
-        auto& last=data.editor_outgoing.back();
+    if(outgoing.size()>1 && command.type==net::editor_light::kind::edit) {
+        auto& last=outgoing.back();
         if(last.type==command.type && last.index==command.index &&
            last.revision==command.revision) {
             command.sequence=last.sequence;
@@ -289,38 +284,33 @@ bool send_editor_light(net::editor_light::resource command)
             return true;
         }
     }
-    if (data.editor_outgoing.size() >= 64) return false;
-    command.sequence = ++data.editor_sequence;
-
-    if (!command.sequence) command.sequence = ++data.editor_sequence;
-    command.index = command.type == net::editor_light::kind::create ? UINT32_MAX : command.index;
-    data.editor_outgoing.push_back(command);
-
+    if(outgoing.size()>=64)return false;
+    command.sequence=++sequence;
+    if(!command.sequence)command.sequence=++sequence;
+    if(command.type==net::editor_light::kind::create)command.index=UINT32_MAX;
+    outgoing.push_back(command);
     return true;
 }
-
+bool send_editor_light(net::editor_light::resource command)
+{
+    if((command.type!=net::editor_light::kind::create &&
+        command.type!=net::editor_light::kind::edit &&
+        command.type!=net::editor_light::kind::remove) ||
+       !net::editor_light::valid(command.light) ||
+       !get()->connected.load(std::memory_order_relaxed))return false;
+    auto& data=*get();
+    std::lock_guard lock(data.editor_mutex);
+    return queue_editor(command,data.editor_outgoing,data.editor_sequence);
+}
 bool send_editor_cube(net::editor_cube::resource command)
 {
     using namespace net::editor_cube;
-    if ((command.type != kind::create && command.type != kind::edit && command.type != kind::remove) ||
-        !valid(command.cube) || !get()->connected.load(std::memory_order_relaxed)) return false;
-    auto &data = *get();
+    if((command.type!=kind::create && command.type!=kind::edit &&
+        command.type!=kind::remove) || !valid(command.cube) ||
+       !get()->connected.load(std::memory_order_relaxed))return false;
+    auto& data=*get();
     std::lock_guard lock(data.editor_mutex);
-    if(data.cube_outgoing.size()>1 && command.type==kind::edit) {
-        auto& last=data.cube_outgoing.back();
-        if(last.type==command.type && last.index==command.index &&
-           last.revision==command.revision) {
-            command.sequence=last.sequence;
-            last=command;
-            return true;
-        }
-    }
-    if (data.cube_outgoing.size() >= 64) return false;
-    command.sequence = ++data.cube_sequence;
-    if (!command.sequence) command.sequence = ++data.cube_sequence;
-    command.index = command.type == kind::create ? UINT32_MAX : command.index;
-    data.cube_outgoing.push_back(command);
-    return true;
+    return queue_editor(command,data.cube_outgoing,data.cube_sequence);
 }
 
 bool send_weapon(net::weapon::command command)
