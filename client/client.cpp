@@ -363,12 +363,6 @@ static void stop(int)
 }
 
 #include "clt/application.hpp"
-#include <cstdio>
-#ifdef _WIN32
-#include <process.h>
-#else
-#include <unistd.h>
-#endif
 
 int main(int argc, char **argv)
 {
@@ -412,25 +406,9 @@ int main(int argc, char **argv)
         clt::application::init();
 
         const int result = clt::application::run();
-        const bool restart=result==clt::application::restart_code;
-
         clt::application::shutdown();
         net::socket::shutdown();
         game::options::shutdown();
-
-        if(restart) {
-            // Replace the process only after GPU, threads and sockets have
-            // been released. This exactly matches a freshly launched client:
-            // new network session, spawn position, weapon and renderer state.
-            std::fflush(nullptr);
-#ifdef _WIN32
-            ::_execvp(argv[0],argv);
-#else
-            ::execvp(argv[0],argv);
-#endif
-            std::perror("vulkan-client restart");
-            return 1;
-        }
         return result;
     }
 
