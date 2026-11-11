@@ -517,8 +517,18 @@ void synchronize_scene()
             if(light.enabled && light.strength>0.f)
                 lights.push_back({light.position,light.radius,
                                   light.color,light.strength});
-    if(material_compositor)
+    if(material_compositor) {
+        // PCloud can recreate its 3D GI images when scene bounds change.
+        // Refresh these descriptors after synchronization, not just at
+        // compositor creation, or mirrors may sample a destroyed image.
+        std::vector<vk::ImageView> probes;
+        const auto frames=std::uint32_t(vk::swapchain::get()->images.size());
+        probes.reserve(frames);
+        for(std::uint32_t i=0;i<frames;++i)
+            probes.push_back(pc::probe_view(i));
+        material_compositor->set_probe_views(probes);
         material_compositor->set_probe_space(pc::probe_space());
+    }
     // Drop old descriptor references before releasing the mapper's GPU
     // buffers. synchronize_scene is called only when the renderer is idle.
     if(material_compositor)material_compositor->set_scene({},lights);
