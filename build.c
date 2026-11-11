@@ -25,6 +25,7 @@ static void compile_shaders(void)
         "shd/optics.frag","shd/cull.comp",
         "third-party/vulkan-systems/optics/optics/shaders/compose.frag",
         "third-party/vulkan-systems/optics/optics/shaders/compose_mirror.frag",
+        "third-party/vulkan-systems/optics/optics/shaders/compose_planar.frag",
         "third-party/vulkan-systems/pmap/shaders/photon_clear.comp",
         "third-party/vulkan-systems/pmap/shaders/photon_emit.comp",
         "third-party/vulkan-systems/pmap/shaders/photon_bin.comp",
