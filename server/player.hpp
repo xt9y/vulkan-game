@@ -101,9 +101,7 @@ collision_world build_colliders(const std::vector<::scene::mesh> &meshes, std::s
         box b{{limit,limit,limit},{-limit,-limit,-limit}};
         const auto& pose=instance.pose;
         for(const auto& v:mesh.vertices) {
-            const vec3 scaled{v.position.x*pose.scale.x,v.position.y*pose.scale.y,
-                              v.position.z*pose.scale.z};
-            const vec3 p=pose.position+rotate(pose.rotation,scaled);
+            const vec3 p=::scene::transform_position(pose,v.position);
             b.min={std::min(b.min.x,p.x),std::min(b.min.y,p.y),std::min(b.min.z,p.z)};
             b.max={std::max(b.max.x,p.x),std::max(b.max.y,p.y),std::max(b.max.z,p.z)};
         }
