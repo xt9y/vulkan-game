@@ -133,9 +133,8 @@ static std::vector<editor::property> geometry_properties(const ::scene::instance
                           0,100,1,{}});
     properties.push_back({"color_b","Color B",kind::integer,cube.tint.z*100,
                           0,100,1,{}});
-    if(cube.pattern==2u || cube.pattern==3u) {
-        properties.push_back({"optical_strength",
-            cube.pattern==2u ? "Pass through" : "Reflectivity",
+    if(cube.pattern==2u) {
+        properties.push_back({"optical_strength","Pass through",
             kind::real,cube.optical_strength,0,1,.01,{}});
         properties.push_back({"optical_mattness","Mattness",
             kind::real,cube.optical_mattness,0,1,.01,{}});
