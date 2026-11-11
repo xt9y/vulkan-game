@@ -227,6 +227,7 @@ void shutdown() noexcept
 {
     prediction::shutdown();
     renderer::shutdown();
+    editor::instance().reset();
     input::shutdown();
     window::shutdown();
     vulkan_loader::shutdown();
