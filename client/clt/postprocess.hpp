@@ -841,7 +841,7 @@ void present(vk::CommandBuffer cmd, std::uint32_t image,
         std::clog<<"optics: benchmark baseline active (optical draw disabled)\n";
         announced=true;
     }
-    pc::present(cmd, image, [view,image,timings,without_optics](vk::CommandBuffer command, vk::Extent2D extent)
+    pc::present(cmd, image, [view,image,timings](vk::CommandBuffer command, vk::Extent2D extent)
                 {
             // A nested interval isolates BVH optics from swapchain
             // presentation and editor overlay work on the GPU.
