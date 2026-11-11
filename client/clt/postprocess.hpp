@@ -235,23 +235,13 @@ std::shared_ptr<pc::world> prepare_world(const ::scene::state *source)
 
     for (const auto &box : source->collision_boxes)
         prepared->collision_boxes.push_back({box.minimum, box.maximum});
-    std::unordered_map<std::uint32_t, const ::scene::mesh *> mesh_lookup;
-    mesh_lookup.reserve(source->meshes.size());
-
-    for (const auto &mesh : source->meshes)
-        mesh_lookup.emplace(mesh.id, &mesh);
-
-    for (const auto &instance : source->instances)
-    {
-        const auto found = mesh_lookup.find(instance.mesh_id);
-
-        if (found == mesh_lookup.end()) continue;
-
-        const auto *mesh = found->second;
+    ::scene::each_mesh_instance(source->meshes,source->instances,
+                                 [&](const auto& selected,const auto& instance) {
+        const auto* mesh=&selected;
 
         // Transparent glass is handled by photonic transmission, not
         // opaque point-cloud shadow blocking.
-        if (mesh->surface.alpha_mode == 2 || instance.pattern == 2u) continue;
+        if (mesh->surface.alpha_mode == 2 || instance.pattern == 2u) return;
         std::vector<animation::matrix> palette;
 
         if (mesh->skin_id && !animation::sample(mesh->skin_id, instance.animation, 0.0f, palette, instance.overlay_animation, instance.overlay_weight, instance.overlay_root))
@@ -302,7 +292,7 @@ std::shared_ptr<pc::world> prepare_world(const ::scene::state *source)
                 continue;
             prepared->triangles.push_back({a, b, c});
         }
-    }
+    });
 
     return prepared;
 }
@@ -323,16 +313,11 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
     normals.clear();
     skinned_faces.clear();
     result.omnidirectional_emitter=true;
-    std::unordered_map<std::uint32_t,const ::scene::mesh*> meshes;
-    meshes.reserve(world.meshes.size());
-    for(const auto& mesh:world.meshes)meshes.emplace(mesh.id,&mesh);
-    for(const auto& inst:world.instances) {
-        const auto it=meshes.find(inst.mesh_id);
-        if(it==meshes.end())continue;
-        const auto& mesh=*it->second;
+    ::scene::each_mesh_instance(world.meshes,world.instances,
+                                 [&](const auto& mesh,const auto& inst) {
         // Match the raster pass's stable clip rule for blended hair cards.
         if(mesh.surface.alpha_mode==2 && !mesh.surface.base_color_texture &&
-           mesh.surface.base_color[3]<.42f)continue;
+           mesh.surface.base_color[3]<.42f)return;
         const auto transform=[&](vec3 p) {
             const auto& scale=inst.pose.scale;
             return inst.pose.position+rotate(inst.pose.rotation,
@@ -422,7 +407,7 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
                 mesh.surface.alpha_mode==2 ? .42f : 0.f;
             faces.push_back(mapping);
         }
-    }
+    });
     pm::surface emitter{};
     emitter.origin=light==world.lights.end()?vec3{}:light->position;
     emitter.u={.4f,0.f,0.f};
