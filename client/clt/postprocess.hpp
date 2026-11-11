@@ -4,6 +4,7 @@
 #include "scene_renderer.hpp"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <editor/vulkan.hpp>
@@ -610,6 +611,7 @@ void update_skinned(std::uint32_t image,const camera::frame& view)
     if(!photon_transport || !material_compositor || skinned_faces.empty() ||
        scene_renderer::optical_rects(view).empty())
         return;
+    const auto refit_start=std::chrono::steady_clock::now();
     using namespace vk::util::math;
     std::unordered_map<std::uint32_t,const std::vector<animation::matrix>*> poses;
     for(const auto& state:scene_renderer::skinning_poses())
@@ -700,6 +702,19 @@ void update_skinned(std::uint32_t image,const camera::frame& view)
         std::uint32_t(base.size())
     });
     material_compositor->update_normals(image,normals);
+    // GPU timestamps do not include the CPU vertex skin/refit work.
+    static std::uint32_t refits=0;
+    static double total_ms=0.0,worst_ms=0.0;
+    const double ms=std::chrono::duration<double,std::milli>(
+        std::chrono::steady_clock::now()-refit_start).count();
+    total_ms+=ms;
+    worst_ms=std::max(worst_ms,ms);
+    if(++refits==120u) {
+        std::clog<<"optics: skinned BVH refit CPU avg="
+                 <<total_ms/120.0<<" ms max="<<worst_ms<<" ms\n";
+        refits=0;
+        total_ms=worst_ms=0.0;
+    }
 }
 
 void update_photons(vk::CommandBuffer cmd,std::uint32_t,
