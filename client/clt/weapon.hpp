@@ -164,48 +164,29 @@ mat4 inverse_affine(mat4 m)
 
 quat orientation(mat4 matrix)
 {
-    const vec3 x = normalize(vec3{matrix(0, 0), matrix(1, 0), matrix(2, 0)});
-    const vec3 y = normalize(vec3{matrix(0, 1), matrix(1, 1), matrix(2, 1)});
-    const vec3 z = normalize(cross(x, y));
-    mat4 m = mat4::identity();
-
-    for (int r = 0; r < 3; ++r)
-    {
-        m(r, 0) = (&x.x)[r];
-        m(r, 1) = (&y.x)[r];
-        m(r, 2) = (&z.x)[r];
-    }
-
-    const float trace = m(0, 0) + m(1, 1) + m(2, 2);
-    quat q;
-
-    if (trace > 0) {
-        const float k = 2 * std::sqrt(trace + 1);
-
-        q = {
-            (m(2, 1) - m(1, 2)) / k, (m(0, 2) - m(2, 0)) / k, (m(1, 0) - m(0, 1)) / k, k * .25f
-        };
-    }
-    else {
-        int a = 0;
-
-        if (m(1, 1) > m(a, a))
-            a = 1;
-
-        if (m(2, 2) > m(a, a))
-            a = 2;
-
-        const int b = (a + 1) % 3, c = (a + 2) % 3;
-        const float k = 2 * std::sqrt(1 + m(a, a) - m(b, b) - m(c, c));
-
+    const vec3 x=normalize(vec3{matrix(0,0),matrix(1,0),matrix(2,0)});
+    const vec3 y=normalize(vec3{matrix(0,1),matrix(1,1),matrix(2,1)});
+    const vec3 z=normalize(cross(x,y));
+    const std::array<vec3,3> axis{x,y,z};
+    const auto m=[&](int row,int col){return (&axis[col].x)[row];};
+    const float trace=m(0,0)+m(1,1)+m(2,2);
+    quat q{};
+    if(trace>0) {
+        const float k=2*std::sqrt(trace+1);
+        q={(m(2,1)-m(1,2))/k,(m(0,2)-m(2,0))/k,
+           (m(1,0)-m(0,1))/k,k*.25f};
+    } else {
+        int a=m(1,1)>m(0,0)?1:0;
+        if(m(2,2)>m(a,a))a=2;
+        const int b=(a+1)%3,c=(a+2)%3;
+        const float k=2*std::sqrt(1+m(a,a)-m(b,b)-m(c,c));
         float v[4]{};
-        v[a] = k * .25f;
-        v[b] = (m(b, a) + m(a, b)) / k;
-        v[c] = (m(c, a) + m(a, c)) / k;
-        v[3] = (m(c, b) - m(b, c)) / k;
-        q = {v[0], v[1], v[2], v[3]};
+        v[a]=k*.25f;
+        v[b]=(m(b,a)+m(a,b))/k;
+        v[c]=(m(c,a)+m(a,c))/k;
+        v[3]=(m(c,b)-m(b,c))/k;
+        q={v[0],v[1],v[2],v[3]};
     }
-
     return normalize(q);
 }
 
