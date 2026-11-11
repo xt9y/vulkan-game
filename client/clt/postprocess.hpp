@@ -469,6 +469,7 @@ void create()
     shaders.fullscreen_shader = configured.fullscreen_shader;
     shaders.presentation_shader = configured.presentation_shader;
     pc::create(gbuffers, shaders);
+    pc::set_exposure(configured.exposure);
     std::vector<optics::input> material_frames;
     material_frames.reserve(count);
     for(std::uint32_t i=0;i<count;++i) {
@@ -476,7 +477,7 @@ void create()
         const auto optical=scene_renderer::optical_outputs(i);
         material_frames.push_back({
             pc::ldr_view(i),ordinary[3],optical[0],optical[1],
-            optical[2],optical[3],pc::probe_view(i)
+            optical[2],optical[3],pc::probe_view(i),pc::hdr_view(i)
         });
     }
     auto compositor=std::make_unique<optics::compositor>();
