@@ -38,6 +38,7 @@ struct planar_view {
     vk::util::math::vec4 clip;
 };
 std::optional<planar_view> planar_reflection(const camera::frame&);
+bool single_glass();
 pc::gbuffer reflection_outputs(std::uint32_t);
 void draw_reflection(vk::CommandBuffer,std::uint32_t,
                      const camera::frame&,const planar_view&);
@@ -385,10 +386,23 @@ bool has_optics()
         [](const auto& i){return i.pattern==2u || i.pattern==3u;});
 }
 
-// Exact planar mirror is a reflected-camera raster pass, not millions of
-// independent software-BVH rays. Restrict this fast path to one thin
-// non-skinned box and no glass/nested mirrors; all other materials retain
-// the original ray tracer and its multi-bounce behavior.
+// One isolated glass object can transmit the already shaded HDR world
+// without BVH traversal; nested glass/mirrors continue using full optics.
+bool single_glass()
+{
+    const auto& scene=get().snapshot;
+    if(!scene)return false;
+    bool found=false;
+    for(const auto& instance:scene->instances) {
+        if(instance.pattern!=2u && instance.pattern!=3u)continue;
+        if(instance.pattern!=2u || found)return false;
+        found=true;
+    }
+    return found;
+}
+
+// A single thin planar glass or mirror uses rasterized reflection. Other
+// optical scenes retain the BVH fallback and multi-bounce behavior.
 std::optional<planar_view> planar_reflection(const camera::frame& camera)
 {
     // Compare exact rasterized planar mirrors with the original per-pixel
@@ -397,21 +411,20 @@ std::optional<planar_view> planar_reflection(const camera::frame& camera)
     if(disabled)return std::nullopt;
     const auto& scene=get().snapshot;
     if(!scene)return std::nullopt;
-    const ::scene::instance* mirror=nullptr;
+    const ::scene::instance* optical=nullptr;
     for(const auto& instance:scene->instances) {
-        if(instance.pattern==2u)return std::nullopt;
-        if(instance.pattern!=3u)continue;
-        if(mirror)return std::nullopt;
-        mirror=&instance;
+        if(instance.pattern!=2u && instance.pattern!=3u)continue;
+        if(optical)return std::nullopt;
+        optical=&instance;
     }
-    if(!mirror || mirror->mesh_id!=::scene::unit_cube_mesh_id ||
-       std::abs(mirror->pose.scale.x)>.5f ||
-       std::abs(mirror->pose.scale.x)<.001f ||
-       std::abs(mirror->pose.scale.y)<1.f ||
-       std::abs(mirror->pose.scale.z)<1.f)
+    if(!optical || optical->mesh_id!=::scene::unit_cube_mesh_id ||
+       std::abs(optical->pose.scale.x)>.5f ||
+       std::abs(optical->pose.scale.x)<.001f ||
+       std::abs(optical->pose.scale.y)<1.f ||
+       std::abs(optical->pose.scale.z)<1.f)
         return std::nullopt;
     const auto found=std::find_if(scene->meshes.begin(),scene->meshes.end(),
-        [&](const auto& mesh){return mesh.id==mirror->mesh_id;});
+        [&](const auto& mesh){return mesh.id==optical->mesh_id;});
     if(found==scene->meshes.end() || found->skin_id || found->vertices.empty())
         return std::nullopt;
     float lo=found->vertices.front().position.x;
@@ -420,12 +433,12 @@ std::optional<planar_view> planar_reflection(const camera::frame& camera)
         lo=std::min(lo,vertex.position.x);
         hi=std::max(hi,vertex.position.x);
     }
-    const vec3 axis=normalize(rotate(mirror->pose.rotation,{1,0,0}));
-    const float side=dot(camera.eye-mirror->pose.position,axis);
+    const vec3 axis=normalize(rotate(optical->pose.rotation,{1,0,0}));
+    const float side=dot(camera.eye-optical->pose.position,axis);
     const vec3 N=side>=0.f?axis:axis*-1.f;
     const float face=side>=0.f?hi:lo;
-    const vec3 point=mirror->pose.position+
-                     axis*(face*mirror->pose.scale.x);
+    const vec3 point=optical->pose.position+
+                     axis*(face*optical->pose.scale.x);
     const float distance=dot(camera.eye-point,N);
     if(distance<.02f)return std::nullopt;
     const auto reflect=[&](vec3 v){return v-N*(2.f*dot(v,N));};
@@ -1246,9 +1259,8 @@ void draw_reflection(vk::CommandBuffer command,std::uint32_t image,
         auto params=material_parameters(mesh.surface,vp,mesh.joint_count);
         params.clip_plane={planar.clip.x,planar.clip.y,
                            planar.clip.z,planar.clip.w};
-        // The unchanged mesh.frag ignores optical materials. Since the
-        // planar mode requires a single mirror and no glass, the reflected
-        // pass contains exactly the opaque, masked and animated real world.
+        // mesh.frag excludes glass/mirrors, leaving opaque, masked and
+        // animated geometry in the reflected PCloud G-buffer.
         draw_mesh(graphics,mesh,mesh.frames.at(image),params,true,1);
     }
     graphics.end_pass();
