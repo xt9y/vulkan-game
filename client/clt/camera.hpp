@@ -26,6 +26,7 @@ struct frame
 
 state *get();
 void init();
+void reset_view();
 void look(float dx, float dy);
 void set_look_sensitivity(float base, float ads_multiplier);
 void set_ads_fraction(float fraction);
@@ -63,6 +64,13 @@ void init()
     recoil_time = clock::now();
 }
 
+void reset_view()
+{
+    std::lock_guard lock(guard);
+    data.yaw=data.pitch=0;
+    recoil=zoom=ads=0;
+    recoil_time=clock::now();
+}
 void set_look_sensitivity(float base, float multiplier)
 {
     std::lock_guard lock(guard);
