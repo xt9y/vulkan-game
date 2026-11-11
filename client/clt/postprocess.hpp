@@ -465,12 +465,14 @@ std::vector<optics::texture_rgba> optical_textures(
         } else {
             if(image.encoded.size()>INT_MAX || image.encoded.empty())
                 throw std::runtime_error("optics: missing encoded texture");
-            auto decoded=net::scene_stream::decode_rgba(
-                image.encoded.data(),image.encoded.size(),
-                int(image.width),int(image.height));
-            if(!decoded)
+            int w=0,h=0,channels=0;
+            std::unique_ptr<stbi_uc,decltype(&stbi_image_free)> decoded(
+                stbi_load_from_memory(image.encoded.data(),
+                                      int(image.encoded.size()),
+                                      &w,&h,&channels,4),stbi_image_free);
+            if(!decoded || w!=int(image.width) || h!=int(image.height))
                 throw std::runtime_error("optics: failed decoding reflected texture");
-            entry.pixels.assign(decoded.pixels.get(),decoded.pixels.get()+bytes);
+            entry.pixels.assign(decoded.get(),decoded.get()+bytes);
         }
         atlas.push_back(std::move(entry));
     }
