@@ -20,7 +20,7 @@ layout(push_constant) uniform Draw
     vec4 base_color;
     vec4 surface;
     vec4 emissive;
-    uint joints_per_instance;
+    vec4 clip_plane;
 } pc;
 
 
@@ -31,7 +31,9 @@ vec3 linear_color(vec3 srgb)
 
 void main()
 {
-    int flags = int(pc.emissive.w + 0.5);
+    if(dot(pc.clip_plane.xyz,world_position)+pc.clip_plane.w<0.0)
+        discard;
+    int flags = int(pc.emissive.w + 0.5) & 255;
     vec4 base = pc.base_color;
     base.rgb *= instance_tint.rgb;
     if ((flags & 1) != 0)
