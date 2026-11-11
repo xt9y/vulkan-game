@@ -489,6 +489,7 @@ void run(const std::string &host, std::uint16_t port)
 
         std::uint32_t last_player_tick = 0;
         std::uint32_t reset_message_sequence=0;
+        std::uint32_t respawn_server_tick=0;
         clock::time_point next_reset_send{};
         std::deque<::player::input> unacknowledged;
         std::uint32_t scene_batch = 0;
@@ -633,6 +634,10 @@ void run(const std::string &host, std::uint16_t port)
 
                 auto accept_weapon = [&](const net::weapon::snapshot &update)
                 {
+                    if(data.respawn_pending.load(std::memory_order_acquire) ||
+                       (respawn_server_tick &&
+                        !net::message::newer(update.tick,respawn_server_tick)))
+                        return false;
                     std::lock_guard<std::mutex> lock(data.weapon_mutex);
 
                     if (data.weapon_seen_id == update.weapon_id &&
@@ -660,7 +665,10 @@ void run(const std::string &host, std::uint16_t port)
                 };
 
                 if (const auto shot = net::weapon::decode_shot(buffer.data(), *size)) {
-                    if (shot->state.token == token && data.connected.load(std::memory_order_relaxed)) {
+                    if (shot->state.token == token && data.connected.load(std::memory_order_relaxed) &&
+                        !data.respawn_pending.load(std::memory_order_acquire) &&
+                        (!respawn_server_tick ||
+                         net::message::newer(shot->state.tick,respawn_server_tick))) {
                         accept_weapon(shot->state);
                         std::lock_guard<std::mutex> lock(data.weapon_mutex);
 
@@ -742,8 +750,14 @@ void run(const std::string &host, std::uint16_t port)
                    message->token==token &&
                    message->sequence==reset_message_sequence &&
                    data.respawn_pending.load(std::memory_order_acquire)) {
-                    last_player_tick=message->value;
+                    last_player_tick=respawn_server_tick=message->value;
                     unacknowledged.clear();
+                    {
+                        std::lock_guard lock(data.weapon_mutex);
+                        data.weapon_updates.clear();
+                        data.weapon_shots.clear();
+                        data.weapon_seen_id=data.weapon_seen_sequence=data.weapon_seen_tick=0;
+                    }
                     {
                         std::lock_guard lock(data.player_mutex);
                         data.authority.reset();
@@ -824,6 +838,7 @@ void run(const std::string &host, std::uint16_t port)
                 data.respawn_pending.store(false,std::memory_order_relaxed);
                 data.respawn_requested.store(false,std::memory_order_relaxed);
                 reset_message_sequence=0;
+                respawn_server_tick=0;
                 clear_scene();
                 net::secure::connect(data.socket, server);
 
