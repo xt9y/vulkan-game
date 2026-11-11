@@ -838,6 +838,22 @@ void present(vk::CommandBuffer cmd, std::uint32_t image,
                 params.forward={-v(2,0),-v(2,1),-v(2,2),
                                 game::options::get()->graphics.exposure};
                 const auto regions=scene_renderer::optical_rects(view);
+                // The nested optics timestamp can be near-zero when the
+                // mirror is outside the view. Record how much screen space
+                // actually enters the BVH shader, separately from present.
+                static std::uint32_t observations=0,active=0;
+                static std::uint64_t submitted_pixels=0;
+                if(!regions.empty())++active;
+                for(const auto& region:regions)
+                    submitted_pixels+=std::uint64_t(region.extent.width)*
+                                      region.extent.height;
+                if(++observations==120) {
+                    std::clog<<"optics: active_frames="<<active
+                             <<"/120 scissor_pixels_per_frame="
+                             <<submitted_pixels/120<<"\n";
+                    observations=active=0;
+                    submitted_pixels=0;
+                }
                 material_compositor->record(command,image,params,regions,extent);
             }
             if(timings)timings->end(command,image,6);
