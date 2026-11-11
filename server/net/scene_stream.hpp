@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <climits>
 #include <stb_image.h>
 #include <stdexcept>
 #include <type_traits>
@@ -23,6 +25,29 @@ struct batch_payload {
     bool final=false;
     bytes scene;
 };
+
+// One ownership-safe stb decode for network textures, glTF imports and
+// optical/ordinary GPU uploads. Expected dimensions are optional for glTF.
+struct decoded_rgba {
+    std::unique_ptr<stbi_uc,decltype(&stbi_image_free)> pixels{nullptr,stbi_image_free};
+    int width=0,height=0;
+    explicit operator bool() const noexcept {return bool(pixels);}
+};
+inline decoded_rgba decode_rgba(const std::uint8_t* src,std::size_t size,
+                                int expected_width=0,int expected_height=0)
+{
+    decoded_rgba result;
+    if(!src || !size || size>INT_MAX ||
+       expected_width<0 || expected_height<0)return result;
+    int channels=0;
+    result.pixels.reset(stbi_load_from_memory(src,int(size),
+        &result.width,&result.height,&channels,4));
+    if(!result.pixels || result.width<=0 || result.height<=0 ||
+       (expected_width && result.width!=expected_width) ||
+       (expected_height && result.height!=expected_height))
+        result.pixels.reset();
+    return result;
+}
 
 namespace {
 template<bool Read>
@@ -180,15 +205,11 @@ bool transcode(wire<Read>& c,Scene& scene) {
             }
             if(length>INT_MAX || t.width>INT_MAX || t.height>INT_MAX)
                 return false;
-            int w=0,h=0,channels=0;
-            auto* decoded=stbi_load_from_memory(c.buffer.data()+c.pos,
-                int(length),&w,&h,&channels,4);
-            if(!decoded||w!=int(t.width)||h!=int(t.height)) {
-                stbi_image_free(decoded);
-                return false;
-            }
-            t.pixels.assign(decoded,decoded+std::size_t(w)*h*4u);
-            stbi_image_free(decoded);
+            auto decoded=decode_rgba(c.buffer.data()+c.pos,length,
+                                     int(t.width),int(t.height));
+            if(!decoded)return false;
+            t.pixels.assign(decoded.pixels.get(),
+                decoded.pixels.get()+std::size_t(t.width)*t.height*4u);
             c.pos+=length;
             return true;
         } else {
