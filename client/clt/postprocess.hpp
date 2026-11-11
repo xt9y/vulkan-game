@@ -180,16 +180,15 @@ bool lighting_shape_unchanged(const ::scene::state& previous,
         if(caster(incoming.instances[i]))return false;
     return true;
 }
-bool lighting_unchanged(const ::scene::state& previous,
-                        const ::scene::state& incoming)
+// Called only after lighting_shape_unchanged succeeds; never rewalk
+// the mesh and instance topology just to compare light radiance.
+bool light_radiance_unchanged(const ::scene::state& a,
+                              const ::scene::state& b)
 {
-    if(!lighting_shape_unchanged(previous,incoming))return false;
-    for(std::size_t i=0;i<previous.lights.size();++i) {
-        const auto& a=previous.lights[i];
-        const auto& b=incoming.lights[i];
-        if(a.color.x!=b.color.x || a.color.y!=b.color.y ||
-           a.color.z!=b.color.z || a.strength!=b.strength)
-            return false;
+    for(std::size_t i=0;i<a.lights.size();++i) {
+        const auto& x=a.lights[i],&y=b.lights[i];
+        if(x.color.x!=y.color.x || x.color.y!=y.color.y ||
+           x.color.z!=y.color.z || x.strength!=y.strength)return false;
     }
     return true;
 }
@@ -563,7 +562,7 @@ void synchronize_scene()
     if(!same_light_shape) {
         pc::set_scene(prepare_world(source.get()));
         pc::synchronize_scene();
-    } else if(!lighting_unchanged(*registered,*source)) {
+    } else if(!light_radiance_unchanged(*registered,*source)) {
         // The same shadow rays and probe positions, with new radiance.
         std::vector<pc::light> values;
         values.reserve(source->lights.size());
