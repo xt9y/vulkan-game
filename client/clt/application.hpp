@@ -8,6 +8,10 @@
 #include "window.hpp"
 #include <GLFW/glfw3.h>
 #include <atomic>
+#include <algorithm>
+#include <array>
+#include <exception>
+#include <thread>
 #include <chrono>
 #include <editor/editor.hpp>
 #include <iostream>
@@ -110,7 +114,9 @@ int run()
             connection::check_error();
             window::poll_events();
             const auto frame=input::poll();
-            if(pressed(GLFW_KEY_0,8) || pressed(GLFW_KEY_KP_0,9)) {
+            const bool zero=pressed(GLFW_KEY_0,8);
+            const bool keypad_zero=pressed(GLFW_KEY_KP_0,9);
+            if(zero || keypad_zero) {
                 camera::reset_view();
                 prediction::request_reset();
             }
