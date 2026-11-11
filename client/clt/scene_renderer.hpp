@@ -12,6 +12,7 @@
 #include <gpu/resource.hpp>
 #include <map>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 #include <pcloud/pcloud.hpp>
@@ -31,6 +32,14 @@ void release_frame_resources();
 void init(const char *vertex_path, const char *fragment_path);
 void synchronize();
 void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame &camera);
+struct planar_view {
+    camera::frame reflected;
+    vk::util::math::vec4 clip;
+};
+std::optional<planar_view> planar_reflection(const camera::frame&);
+pc::gbuffer reflection_outputs(std::uint32_t);
+void draw_reflection(vk::CommandBuffer,std::uint32_t,
+                     const camera::frame&,const planar_view&);
 void shutdown();
 
 namespace
@@ -110,6 +119,7 @@ struct state
 
     std::vector<target> targets;
     std::vector<target> optical_targets;
+    std::vector<target> reflection_targets;
     std::array<std::string, 2> shaders;
 };
 
@@ -318,7 +328,7 @@ void create_render_pass()
     data.render_pass = vk::render_pass::create(info);
 }
 
-void create_target(bool optical=false)
+void create_target(bool optical=false,bool reflected=false)
 {
     auto &data = get();
 
@@ -330,7 +340,8 @@ void create_target(bool optical=false)
     target.framebuffer = std::make_unique<::render::target>();
     target.framebuffer->create_framebuffer(data.render_pass,
                                            {target.images.color(0), target.images.color(1), target.images.color(2), target.images.depth()}, extent);
-    if(optical)data.optical_targets.push_back(std::move(target));
+    if(reflected)data.reflection_targets.push_back(std::move(target));
+    else if(optical)data.optical_targets.push_back(std::move(target));
     else data.targets.push_back(std::move(target));
 }
 } // namespace
@@ -651,6 +662,7 @@ void release_frame_resources()
     data.layout = nullptr;
     data.targets.clear();
     data.optical_targets.clear();
+    data.reflection_targets.clear();
     vk::render_pass::destroy(data.render_pass);
     data.render_pass = nullptr;
 }
@@ -666,6 +678,7 @@ void create_frame_resources()
         {
             create_target();
             create_target(true);
+            create_target(false,true);
         }
         create_pipeline();
         create_local_frames();
