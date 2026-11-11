@@ -44,58 +44,47 @@ inline vk::util::math::vec3 angles(const ::scene::instance &cube)
     return {pitch * degrees, yaw * degrees, roll * degrees};
 }
 
-inline bool set_property(::scene::instance &cube, std::uint32_t property, float value)
+inline bool set_property(::scene::instance& cube,std::uint32_t property,float value)
 {
-    if (!std::isfinite(value) || property >= property_keys.size()) return false;
-    if (property < 3) {
-        if (std::abs(value) > 500.f) return false;
-        std::array fields{&cube.pose.position.x, &cube.pose.position.y, &cube.pose.position.z};
-        *fields[property] = value;
-    }
-    else if (property < 6) {
-        if (std::abs(value) > 180.f) return false;
-        auto a = angles(cube);
-        std::array fields{&a.x, &a.y, &a.z};
-        *fields[property - 3] = value;
-        constexpr float radians = .017453292519943295f;
-        cube.pose.rotation = vk::util::math::euler(a.x * radians, a.y * radians, a.z * radians);
-        cube.rotation_reference = a;
-    }
-    else if (property < 9) {
-        if (cube.editor_group || value < .01f || value > 100.f) return false;
-        std::array fields{&cube.pose.scale.x, &cube.pose.scale.y, &cube.pose.scale.z};
-        const float base=cube.mesh_id==::scene::ground_mesh_id ?
-            (property==7u?.2f:20.f):1.f;
-        *fields[property - 6] = value/base;
-    }
-    else if (property < 12) {
-        if (value < 0.f || value > 100.f) return false;
-        std::array fields{&cube.tint.x, &cube.tint.y, &cube.tint.z};
-        *fields[property - 9] = value / 100.f;
-    }
-    else if (property == 12) {
-        if (value < 0.f || value > 3.f || value != std::floor(value)) return false;
+    if(!std::isfinite(value) || property>=property_keys.size())return false;
+    if(property<3 || (property>=6 && property<12) ||
+       (property>=13 && property<15)) {
+        if(property>=6 && property<9 && cube.editor_group)return false;
+        const float lo=property<3?-500.f:property<9?.01f:0.f;
+        const float hi=property<3?500.f:property>=13?1.f:100.f;
+        if(value<lo || value>hi)return false;
+        std::array<float*,15> fields{
+            &cube.pose.position.x,&cube.pose.position.y,&cube.pose.position.z,
+            nullptr,nullptr,nullptr,
+            &cube.pose.scale.x,&cube.pose.scale.y,&cube.pose.scale.z,
+            &cube.tint.x,&cube.tint.y,&cube.tint.z,
+            nullptr,&cube.optical_strength,&cube.optical_mattness};
+        const float divisor=property>=9 && property<12?100.f:
+            property>=6 && property<9 &&
+            cube.mesh_id==::scene::ground_mesh_id ?
+                (property==7?.2f:20.f):1.f;
+        *fields[property]=value/divisor;
+    } else if(property<6) {
+        if(std::abs(value)>180.f)return false;
+        auto a=angles(cube);
+        std::array fields{&a.x,&a.y,&a.z};
+        *fields[property-3]=value;
+        constexpr float radians=.017453292519943295f;
+        cube.pose.rotation=vk::util::math::euler(a.x*radians,a.y*radians,a.z*radians);
+        cube.rotation_reference=a;
+    } else if(property==12) {
+        if(value<0.f || value>3.f || value!=std::floor(value))return false;
         const auto selected=std::uint32_t(value);
-        if(cube.pattern!=selected) {
-            if(selected==2u) {
-                cube.tint={.10f,.50f,.70f};
-                cube.optical_strength=.98f;
-                cube.optical_mattness=.35f;
-            } else if(selected==3u) {
-                cube.tint={.70f,.90f,1.f};
-                cube.optical_strength=1.f;
-                cube.optical_mattness=.35f;
-            }
+        if(cube.pattern!=selected && (selected==2u || selected==3u)) {
+            cube.tint=selected==2u?vk::util::math::vec3{.10f,.50f,.70f}:
+                                   vk::util::math::vec3{.70f,.90f,1.f};
+            cube.optical_strength=selected==2u?.98f:1.f;
+            cube.optical_mattness=.35f;
         }
         cube.pattern=selected;
-    }
-    else if(property==15) {
-        if(!cube.editor_group || value < .01f || value > 100.f)return false;
+    } else {
+        if(!cube.editor_group || value<.01f || value>100.f)return false;
         cube.pose.scale={value,value,value};
-    }
-    else {
-        if (value < 0.f || value > 1.f) return false;
-        (property == 13 ? cube.optical_strength : cube.optical_mattness) = value;
     }
     return true;
 }
