@@ -371,6 +371,12 @@ void draw_frame()
     const auto planar=scene_renderer::planar_reflection(render_camera);
     const bool planar_visible=planar &&
         !scene_renderer::optical_rects(render_camera).empty();
+    static bool announced_planar=false;
+    if(planar_visible && !announced_planar) {
+        std::clog<<"optics: full-resolution planar raster reflection "
+                    "(PCloud PBR + shadows + probes; no primary BVH rays)\n";
+        announced_planar=true;
+    }
     const auto reflected=pc::reflection_images(active.image);
     data.passes.record(active.command,active.image,{
         {"geometry",{},measure(0,[image=active.image,render_camera,
