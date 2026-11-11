@@ -363,8 +363,13 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
             const vec3 u=transform(mesh.vertices[ib].position)-a;
             const vec3 v=transform(mesh.vertices[ic].position)-a;
             const auto n=cross(u,v);
+            // Use PMap's actual triangle metric threshold. A second,
+            // larger cross-product cutoff was discarding many small but
+            // valid scaled Mermaid triangles before the reflection BVH.
+            const float dot_uv=dot(u,v);
+            const float metric=dot(u,u)*dot(v,v)-dot_uv*dot_uv;
             if(!std::isfinite(n.x) || !std::isfinite(n.y) ||
-               !std::isfinite(n.z) || length_squared(n)<=1e-8f)continue;
+               !std::isfinite(n.z) || !(metric>1e-9f))continue;
             pm::surface surface{};
             surface.origin=a;surface.u=u;surface.v=v;
             surface.normal=normalize(n);
