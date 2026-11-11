@@ -14,7 +14,9 @@ enum class type : std::uint8_t
     ping,
     state,
     goodbye,
-    scene_request
+    scene_request,
+    respawn,
+    respawned
 };
 
 struct resource
@@ -38,7 +40,7 @@ packet encode(const resource &message)
 
 std::optional<resource> decode(const std::uint8_t *p, std::size_t size)
 {
-    if (!p || size != packet_size || p[0] != 'V' || p[1] != 'G' || p[2] != 'A' || p[3] != 'M' || p[4] != 1 || p[5] < 1 || p[5] > 6 || p[6] || p[7])
+    if (!p || size != packet_size || p[0] != 'V' || p[1] != 'G' || p[2] != 'A' || p[3] != 'M' || p[4] != 1 || p[5] < 1 || p[5] > 8 || p[6] || p[7])
         return std::nullopt;
     resource v{};
     v.type = type(p[5]);
