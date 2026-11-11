@@ -448,6 +448,13 @@ void shutdown() noexcept
 }
 namespace
 {
+template<class Packet>
+void send_editor(const session::resource& client,Packet packet)
+{
+    packet.token=client.token;
+    const auto bytes=encode(packet);
+    net::secure::send(get()->socket,client.endpoint,bytes.data(),bytes.size());
+}
 bool editor_local(const net::endpoint::resource &peer)
 {
     if (peer.address.ss_family == AF_INET) {
@@ -511,13 +518,11 @@ void handle_editor_light(const net::endpoint::resource &peer, const net::editor_
                 if (!recipient.active) continue;
                 net::editor_light::resource changed{};
                 changed.type = net::editor_light::kind::state;
-                changed.token = recipient.token;
                 changed.index = index;
                 changed.sequence = get()->editor_light_versions[index];
                 changed.revision = changed.sequence;
                 changed.light = get()->scene.lights[index];
-                const auto bytes = net::editor_light::encode(changed);
-                net::secure::send(get()->socket, recipient.endpoint, bytes.data(), bytes.size());
+                send_editor(recipient,changed);
             }
             std::clog << "srv: editor light " << index
                       << (command.type == net::editor_light::kind::create ? " placed" : command.type == net::editor_light::kind::remove ? " deleted"
@@ -528,13 +533,11 @@ void handle_editor_light(const net::endpoint::resource &peer, const net::editor_
             return;
         net::editor_light::resource ack{};
         ack.type = net::editor_light::kind::ack;
-        ack.token = client.token;
         ack.sequence = client.editor_light_sequence;
         ack.index = client.editor_light_index;
         ack.revision = get()->editor_light_versions[ack.index];
         ack.light = get()->scene.lights[ack.index];
-        const auto bytes = net::editor_light::encode(ack);
-        net::secure::send(get()->socket, peer, bytes.data(), bytes.size());
+        send_editor(client,ack);
         client.last_seen = clock::now();
         return;
     }
@@ -651,22 +654,15 @@ void handle_editor_cube(const net::endpoint::resource &peer, const net::editor_c
             client.editor_cube_index=changed.index;
             for(const auto& recipient:session::get()->clients) {
                 if(!recipient.active)continue;
-                for(auto update:updates) {
-                    update.token=recipient.token;
-                    const auto bytes=encode(update);
-                    net::secure::send(data.socket,recipient.endpoint,
-                                      bytes.data(),bytes.size());
-                }
+                for(const auto& update:updates)send_editor(recipient,update);
             }
         }
         const auto found = data.editor_cubes.find(client.editor_cube_index);
         if (found == data.editor_cubes.end()) return;
         auto ack = found->second;
         ack.type = kind::ack;
-        ack.token = client.token;
         ack.sequence = client.editor_cube_sequence;
-        const auto bytes = encode(ack);
-        net::secure::send(data.socket, peer, bytes.data(), bytes.size());
+        send_editor(client,ack);
         client.last_seen = clock::now();
         return;
     }
@@ -686,10 +682,7 @@ void send_editor_cubes()
     for (std::size_t i = 0; i < std::min(per_tick, get()->editor_cubes.size() - start); ++i, ++it) {
         for (const auto &client : session::get()->clients) {
             if (!client.active) continue;
-            auto update = it->second;
-            update.token = client.token;
-            const auto bytes = net::editor_cube::encode(update);
-            net::secure::send(get()->socket, client.endpoint, bytes.data(), bytes.size());
+            send_editor(client,it->second);
         }
     }
 }
@@ -704,13 +697,11 @@ void send_editor_lights()
         {
             net::editor_light::resource update{};
             update.type = net::editor_light::kind::state;
-            update.token = client.token;
             update.index = static_cast<std::uint32_t>(i);
             update.sequence = i < get()->editor_light_versions.size() ? get()->editor_light_versions[i] : 1;
             update.revision = update.sequence;
             update.light = get()->scene.lights[i];
-            const auto bytes = net::editor_light::encode(update);
-            net::secure::send(get()->socket, client.endpoint, bytes.data(), bytes.size());
+            send_editor(client,update);
         }
     }
 }
