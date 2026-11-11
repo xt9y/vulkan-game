@@ -15,8 +15,6 @@
 
 namespace clt::application
 {
-inline constexpr int restart_code = 80;
-
 struct state
 {
     bool initialized = false;
@@ -90,7 +88,6 @@ int run()
     prediction::init();
     pc::set_exposure(game::options::get()->graphics.exposure);
     renderer::init(game::options::get()->graphics.vertex_shader.c_str(), game::options::get()->graphics.fragment_shader.c_str());
-    bool restart_requested=false;
     std::atomic<bool> render_stop{false};
     std::exception_ptr render_error;
     std::thread render_thread([&]
@@ -120,8 +117,7 @@ int run()
             static std::array<clock::time_point,4> repeat_at{};
             static bool primed=false;
             if(!primed) {
-                // Prevent a held 0 from restarting the newly exec'd client
-                // repeatedly before the original key is released.
+                // An already-held key on startup is not a new reset press.
                 held[8]=input::key_down(GLFW_KEY_0);
                 held[9]=input::key_down(GLFW_KEY_KP_0);
                 primed=true;
@@ -155,8 +151,10 @@ int run()
             const bool zero=pressed(GLFW_KEY_0,8);
             const bool keypad_zero=pressed(GLFW_KEY_KP_0,9);
             if(zero || keypad_zero) {
-                restart_requested=true;
-                break;
+                camera::reset_view();
+                prediction::request_reset();
+                // Do not close the window, rebuild the Vulkan renderer,
+                // reload the world, or reconnect the network session.
             }
 
             editor::input events{};
@@ -230,7 +228,7 @@ int run()
     if (render_error)
         std::rethrow_exception(render_error);
 
-    return restart_requested?restart_code:0;
+    return 0;
 }
 
 void shutdown() noexcept
