@@ -598,6 +598,105 @@ void release()
     registered.reset();
 }
 
+// Refit only skinned faces, using the *same* palette that was uploaded
+// to mesh.vert this frame. CPU skinning happens once per unique vertex,
+// then PMap refits the existing sorted BVH without changing its topology.
+void update_skinned(std::uint32_t image)
+{
+    if(!photon_transport || !material_compositor || skinned_faces.empty())
+        return;
+    using namespace vk::util::math;
+    std::unordered_map<std::uint32_t,const std::vector<animation::matrix>*> poses;
+    for(const auto& state:scene_renderer::skinning_poses())
+        poses.emplace(state.id,&state.palette);
+    if(poses.empty())return;
+    struct transformed_vertex {vec3 position{},normal{};};
+    std::unordered_map<std::uint32_t,std::vector<transformed_vertex>> vertices;
+    std::vector<pm::geometry_update> surfaces;
+    std::vector<optics::face_normal_update> normals;
+    surfaces.reserve(skinned_faces.size());
+    normals.reserve(skinned_faces.size());
+    const auto& base=photon_transport->current_scene().surfaces;
+    for(const auto& face:skinned_faces) {
+        const auto pose=poses.find(face.instance->id);
+        if(pose==poses.end() || face.face>=base.size())continue;
+        auto [cache,created]=vertices.try_emplace(face.instance->id);
+        if(created) {
+            const auto& bones=*pose->second;
+            const auto& instance=*face.instance;
+            cache->second.reserve(face.mesh->vertices.size());
+            for(const auto& vertex:face.mesh->vertices) {
+                vec3 local{},normal{};
+                float weight_sum=0.f;
+                for(std::size_t k=0;k<4;++k) {
+                    const float weight=vertex.weights[k];
+                    if(weight<=0.f)continue;
+                    if(vertex.joints[k]>=bones.size())
+                        throw std::runtime_error("optics: skinned joint out of bounds");
+                    const auto& m=bones[vertex.joints[k]];
+                    const vec3 p=vertex.position,n=vertex.normal;
+                    local=local+vec3{
+                        m[0]*p.x+m[4]*p.y+m[8]*p.z+m[12],
+                        m[1]*p.x+m[5]*p.y+m[9]*p.z+m[13],
+                        m[2]*p.x+m[6]*p.y+m[10]*p.z+m[14]
+                    }*weight;
+                    normal=normal+vec3{
+                        m[0]*n.x+m[4]*n.y+m[8]*n.z,
+                        m[1]*n.x+m[5]*n.y+m[9]*n.z,
+                        m[2]*n.x+m[6]*n.y+m[10]*n.z
+                    }*weight;
+                    weight_sum+=weight;
+                }
+                if(weight_sum<=0.f) {
+                    local=vertex.position;
+                    normal=vertex.normal;
+                }
+                const auto scale=instance.pose.scale;
+                const auto position=instance.pose.position+
+                    rotate(instance.pose.rotation,{
+                        local.x*scale.x,local.y*scale.y,local.z*scale.z
+                    });
+                const vec3 n=rotate(instance.pose.rotation,{
+                    normal.x/scale.x,normal.y/scale.y,normal.z/scale.z
+                });
+                cache->second.push_back({
+                    position,length_squared(n)>1e-8f?
+                    normalize(n):vec3{0.f,1.f,0.f}
+                });
+            }
+        }
+        const auto& v=cache->second;
+        const auto ia=face.indices[0],ib=face.indices[1],ic=face.indices[2];
+        if(ia>=v.size() || ib>=v.size() || ic>=v.size())continue;
+        const vec3 a=v[ia].position,u=v[ib].position-a,
+                   w=v[ic].position-a;
+        const vec3 geometric=cross(u,w);
+        if(length_squared(geometric)<=1e-10f)continue;
+        auto surface=base[face.face];
+        surface.origin=a;
+        surface.u=u;
+        surface.v=w;
+        surface.normal=normalize(geometric);
+        surfaces.push_back({face.face,surface});
+        optics::face_normals shaded{};
+        const auto encode=[&](vec3 normal,float material) {
+            if(dot(normal,surface.normal)<0.f)normal=normal*-1.f;
+            return std::array<float,4>{normal.x,normal.y,normal.z,material};
+        };
+        shaded.a=encode(v[ia].normal,face.mesh->surface.metallic);
+        shaded.b=encode(v[ib].normal,face.mesh->surface.roughness);
+        shaded.c=encode(v[ic].normal,face.mesh->surface.occlusion);
+        normals.push_back({face.face,shaded});
+    }
+    if(surfaces.empty())return;
+    const auto g=photon_transport->refit_geometry(image,surfaces);
+    material_compositor->set_geometry_frame(image,{
+        g.faces,g.nodes,g.triangles,g.scene_info,g.photons,g.offsets,
+        std::uint32_t(base.size())
+    });
+    material_compositor->update_normals(image,normals);
+}
+
 void update_photons(vk::CommandBuffer cmd,std::uint32_t,
                     const camera::frame&)
 {
