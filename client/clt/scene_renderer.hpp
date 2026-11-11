@@ -46,10 +46,10 @@ struct draw_parameters
     std::array<float, 4> base_color;
     std::array<float, 4> surface;
     std::array<float, 4> emissive;
-    std::uint32_t joint_count = 0;
+    std::array<float, 4> clip_plane{0,0,0,1};
 };
 
-static_assert(sizeof(draw_parameters) <= 128);
+static_assert(sizeof(draw_parameters)==128);
 struct gpu_mesh
 {
     std::uint32_t id = 0;
@@ -168,7 +168,9 @@ draw_parameters material_parameters(const ::scene::material &m, const mat4 &view
                        (m.procedural_pattern == 1u ? 128u : 0u);
 
     return {
-        view_projection, m.base_color, {m.metallic, m.roughness, m.occlusion, m.alpha_cutoff}, {m.emissive[0], m.emissive[1], m.emissive[2], float(flags)}, joints
+        view_projection, m.base_color, {m.metallic, m.roughness, m.occlusion, m.alpha_cutoff},
+        {m.emissive[0], m.emissive[1], m.emissive[2],
+         float(flags+(joints<<8))}, {0,0,0,1}
     };
 }
 
