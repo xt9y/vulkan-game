@@ -360,8 +360,12 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
                  mesh.surface.procedural_pattern==1u?1u:0u);
             if(inst.pattern==2u || inst.pattern==3u) {
                 surface.optical_type=inst.pattern==2u?1u:2u;
-                surface.optical_strength=inst.optical_strength;
-                surface.roughness=inst.optical_mattness;
+                // A mirror is perfectly reflective. Editor tint, strength
+                // and mattness never reduce reflected world radiance.
+                surface.optical_strength=inst.pattern==3u?
+                    1.f:inst.optical_strength;
+                surface.roughness=inst.pattern==3u?
+                    0.f:inst.optical_mattness;
             }
             if(mesh.skin_id)
                 skinned_faces.push_back({
