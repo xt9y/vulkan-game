@@ -448,18 +448,21 @@ void shutdown() noexcept
 }
 namespace
 {
-void handle_editor_light(const net::endpoint::resource &peer, const net::editor_light::resource &command)
+bool editor_local(const net::endpoint::resource &peer)
 {
-    bool local = false;
     if (peer.address.ss_family == AF_INET) {
         const auto *addr = reinterpret_cast<const sockaddr_in *>(&peer.address);
-        local = reinterpret_cast<const unsigned char *>(&addr->sin_addr)[0] == 127;
+        return reinterpret_cast<const unsigned char *>(&addr->sin_addr)[0] == 127;
     }
-    else if (peer.address.ss_family == AF_INET6) {
+    if (peer.address.ss_family == AF_INET6) {
         const auto *addr = reinterpret_cast<const sockaddr_in6 *>(&peer.address);
-        local = IN6_IS_ADDR_LOOPBACK(&addr->sin6_addr) != 0;
+        return IN6_IS_ADDR_LOOPBACK(&addr->sin6_addr) != 0;
     }
-    if (!local) return;
+    return false;
+}
+void handle_editor_light(const net::endpoint::resource &peer, const net::editor_light::resource &command)
+{
+    if (!editor_local(peer)) return;
     for (auto &client : session::get()->clients)
     {
         if (!client.active || client.token != command.token || !net::endpoint::equal(client.endpoint, peer))
@@ -539,17 +542,9 @@ void handle_editor_light(const net::endpoint::resource &peer, const net::editor_
 void handle_editor_cube(const net::endpoint::resource &peer, const net::editor_cube::resource &command)
 {
     using namespace net::editor_cube;
-    // Match the existing light editor's loopback-only permissions.
-    bool local = false;
-    if (peer.address.ss_family == AF_INET) {
-        const auto *addr = reinterpret_cast<const sockaddr_in *>(&peer.address);
-        local = reinterpret_cast<const unsigned char *>(&addr->sin_addr)[0] == 127;
-    }
-    else if (peer.address.ss_family == AF_INET6) {
-        const auto *addr = reinterpret_cast<const sockaddr_in6 *>(&peer.address);
-        local = IN6_IS_ADDR_LOOPBACK(&addr->sin6_addr) != 0;
-    }
-    if (!local || (command.type != kind::create && command.type != kind::edit && command.type != kind::remove)) return;
+    if (!editor_local(peer) ||
+        (command.type != kind::create && command.type != kind::edit &&
+         command.type != kind::remove)) return;
     auto &data = *get();
     for (auto &client : session::get()->clients) {
         if (!client.active || client.token != command.token || !net::endpoint::equal(client.endpoint, peer)) continue;
