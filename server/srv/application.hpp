@@ -875,6 +875,27 @@ void handle(const net::endpoint::resource &peer, const net::message::resource &m
     }
     if (!existing || existing->token != message.token)
         return;
+    if(message.type==net::message::type::respawn) {
+        // Keep the connection, scene and renderer alive. Drop only this
+        // player's authoritative simulation and weapon effects. The input
+        // watermark discards movement sent before the respawn request.
+        if(!existing->last_respawn_sequence ||
+           net::message::newer(message.sequence,existing->last_respawn_sequence)) {
+            existing->last_respawn_sequence=message.sequence;
+            existing->avatar={};
+            existing->avatar.position=player::parameters().spawn;
+            existing->inputs.clear();
+            existing->processed_input=message.value;
+            existing->weapon_commands.clear();
+            existing->weapon=get()->weapon.id ?
+                ::weapon::make_state(get()->weapon): ::weapon::state{};
+            existing->shots.clear();
+            existing->last_shot.reset();
+        }
+        existing->last_seen=clock::now();
+        reply(peer,net::message::type::respawned,message);
+        return;
+    }
     if (message.type == net::message::type::goodbye) {
         existing->active = false;
         get()->scene_transport->close(peer);
