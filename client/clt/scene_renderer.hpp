@@ -1173,6 +1173,67 @@ void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame &c
     }
 }
 
+// Rasterize the virtual reflected camera into the same material G-buffer
+// used by PCloud. The full-resolution shader samples the mirror image
+// horizontally flipped to compensate for the reflection handedness.
+void draw_reflection(vk::CommandBuffer command,std::uint32_t image,
+                     const camera::frame& original,const planar_view& planar)
+{
+    auto& data=get();
+    if(!data.snapshot || optical_rects(original).empty())return;
+    const auto extent=vk::swapchain::get()->extent;
+    const float aspect=float(extent.width)/float(extent.height);
+    const mat4 vp=perspective(planar.reflected.pose.fov,aspect,.1f,1000.f)*
+                  planar.reflected.view;
+    const auto camera_planes=frustum(vp);
+    std::array<vec4,6> planes{};
+    for(std::size_t i=0;i<planes.size();++i) {
+        const auto& p=camera_planes[i];
+        const float inv=1.f/std::max(p.magnitude,1e-6f);
+        planes[i]={p.normal.x*inv,p.normal.y*inv,p.normal.z*inv,
+                   p.offset*inv};
+    }
+    std::vector<vk::Buffer> indirects;
+    indirects.reserve(data.meshes.size());
+    for(const auto& mesh:data.meshes)
+        if(!mesh.transforms.empty())
+            indirects.push_back(mesh.frames.at(image).indirect.handle);
+    data.cull.begin(command,indirects);
+    const std::array<vec4,6> unbounded{};
+    for(const auto& mesh:data.meshes) {
+        if(mesh.transforms.empty())continue;
+        data.cull.dispatch(command,mesh.frames.at(image).set,
+            mesh.joint_count?unbounded:planes,
+            std::uint32_t(mesh.transforms.size()),mesh.index_count);
+    }
+    data.cull.end(command);
+    std::array<vk::ClearValue,4> clears{};
+    for(int i=0;i<3;++i)
+        clears[i].color=vk::ClearColorValue(std::array<float,4>{0,0,0,0});
+    clears[3].depthStencil=vk::ClearDepthStencilValue(1.f,0);
+    vk::RenderPassBeginInfo begin{};
+    begin.renderPass=data.render_pass;
+    begin.framebuffer=data.reflection_targets.at(image).framebuffer->framebuffer();
+    begin.renderArea={{0,0},extent};
+    begin.clearValueCount=std::uint32_t(clears.size());
+    begin.pClearValues=clears.data();
+    ::render::renderer graphics(command);
+    graphics.begin_pass(begin);
+    graphics.viewport({0,0,float(extent.width),float(extent.height),.1f,1.f},
+                      {{0,0},extent});
+    for(const auto& mesh:data.meshes) {
+        if(mesh.transforms.empty())continue;
+        auto params=material_parameters(mesh.surface,vp,mesh.joint_count);
+        params.clip_plane={planar.clip.x,planar.clip.y,
+                           planar.clip.z,planar.clip.w};
+        // The unchanged mesh.frag ignores optical materials. Since the
+        // planar mode requires a single mirror and no glass, the reflected
+        // pass contains exactly the opaque, masked and animated real world.
+        draw_mesh(graphics,mesh,mesh.frames.at(image),params,true,1);
+    }
+    graphics.end_pass();
+}
+
 void shutdown()
 {
     auto &data = get();
