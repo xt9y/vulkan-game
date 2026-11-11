@@ -154,7 +154,19 @@ static ::scene::state make_level()
     place(1, 1, {0, -.1f, 0});
     // Static room probe surface; editable cubes supply transformed probe faces.
     // PCloud derives the floor's occlusion box from its live mesh pose.
-    place(2, 2, {-2, .5f, 0});
+    // Left wall: thin, full-height perfect mirror facing into the room.
+    // Unit cube geometry makes these the exact inspector dimensions.
+    {
+        ::scene::instance mirror{};
+        mirror.id=2;
+        mirror.mesh_id=::scene::unit_cube_mesh_id;
+        mirror.pose.position={-2.f,3.f,0.f};
+        mirror.pose.scale={.10f,6.f,5.f};
+        mirror.pattern=3u;
+        mirror.optical_strength=1.f;
+        mirror.optical_mattness=0.f;
+        world.instances.push_back(mirror);
+    }
     place(3, 2, {0, .5f, 0});
     place(4, 2, {2, .5f, 0});
     ::scene::transform mermaid{};
