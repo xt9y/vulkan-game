@@ -44,6 +44,8 @@ struct state
     std::atomic<bool> connected{false};
     std::atomic<std::uint32_t> server_tick{0};
     std::atomic<bool> scene_complete{false};
+    std::atomic<bool> respawn_requested{false},respawn_pending{false};
+    std::atomic<std::uint32_t> respawn_input{0},reset_generation{0};
     std::mutex animation_mutex;
     std::unordered_map<std::uint32_t, net::animation::resource> animations;
     std::mutex scene_mutex;
@@ -89,6 +91,8 @@ std::deque<net::weapon::snapshot> take_weapon_updates();
 std::deque<net::weapon::shot> take_weapon_shots();
 void check_error();
 void send_input(const ::player::input &input);
+void request_respawn(std::uint32_t last_input);
+bool respawning();
 std::optional<net::movement::snapshot> take_authority();
 std::optional<::player::parameters_t> movement_parameters();
 std::vector<net::movement::peer> remote_players();
@@ -351,6 +355,30 @@ void check_error()
         std::rethrow_exception(error);
 }
 
+void request_respawn(std::uint32_t last_input)
+{
+    auto& data=*get();
+    if(!data.connected.load(std::memory_order_relaxed))return;
+    {
+        std::lock_guard lock(data.player_mutex);
+        data.outgoing.clear();
+        data.authority.reset();
+    }
+    {
+        std::lock_guard lock(data.weapon_mutex);
+        data.weapon_outgoing.clear();
+        data.weapon_updates.clear();
+        data.weapon_shots.clear();
+    }
+    data.respawn_input.store(last_input,std::memory_order_relaxed);
+    data.respawn_pending.store(true,std::memory_order_release);
+    data.respawn_requested.store(true,std::memory_order_release);
+    data.reset_generation.fetch_add(1,std::memory_order_relaxed);
+}
+bool respawning()
+{
+    return get()->respawn_pending.load(std::memory_order_acquire);
+}
 void send_input(const ::player::input &input)
 {
     auto &data = *get();
@@ -401,6 +429,8 @@ void init()
     get()->connected.store(false, std::memory_order_relaxed);
     get()->server_tick.store(0, std::memory_order_relaxed);
     get()->scene_complete.store(false, std::memory_order_relaxed);
+    get()->respawn_pending.store(false,std::memory_order_relaxed);
+    get()->respawn_requested.store(false,std::memory_order_relaxed);
     get()->worker = std::thread(run, get()->host, get()->port);
     get()->initialized = true;
 }
@@ -451,6 +481,8 @@ void run(const std::string &host, std::uint16_t port)
         bool waiting = false;
 
         std::uint32_t last_player_tick = 0;
+        std::uint32_t reset_message_sequence=0;
+        clock::time_point next_reset_send{};
         std::deque<::player::input> unacknowledged;
         std::uint32_t scene_batch = 0;
         clock::time_point stream_started{};
@@ -519,6 +551,20 @@ void run(const std::string &host, std::uint16_t port)
         while (!data.stop.load(std::memory_order_relaxed))
         {
             const auto now = clock::now();
+            if(data.respawn_requested.exchange(false,std::memory_order_acq_rel)) {
+                reset_message_sequence=++sequence;
+                next_reset_send=now;
+                unacknowledged.clear();
+            }
+            if(data.respawn_pending.load(std::memory_order_acquire) &&
+               reset_message_sequence && now>=next_reset_send &&
+               data.connected.load(std::memory_order_relaxed)) {
+                const auto packet=net::message::encode({
+                    net::message::type::respawn,reset_message_sequence,token,
+                    data.respawn_input.load(std::memory_order_relaxed)});
+                net::secure::send(data.socket,server,packet.data(),packet.size());
+                next_reset_send=now+100ms;
+            }
 
             for (int budget = 0; budget < 512; ++budget)
             {
@@ -685,6 +731,22 @@ void run(const std::string &host, std::uint16_t port)
                 }
 
                 const auto message = net::message::decode(buffer.data(), *size);
+                if(message && message->type==net::message::type::respawned &&
+                   message->token==token &&
+                   message->sequence==reset_message_sequence &&
+                   data.respawn_pending.load(std::memory_order_acquire)) {
+                    last_player_tick=message->value;
+                    unacknowledged.clear();
+                    {
+                        std::lock_guard lock(data.player_mutex);
+                        data.authority.reset();
+                        data.outgoing.clear();
+                    }
+                    data.respawn_pending.store(false,std::memory_order_release);
+                    last_received=now;
+                    next_move_send=now;
+                    continue;
+                }
 
                 if (transport.accept(peer, buffer.data(), *size, now))
                     continue;
@@ -752,6 +814,9 @@ void run(const std::string &host, std::uint16_t port)
 
             if (data.connected.load(std::memory_order_relaxed) && now - last_received > std::chrono::milliseconds(net::limits::connection_timeout_ms)) {
                 data.connected.store(false, std::memory_order_relaxed);
+                data.respawn_pending.store(false,std::memory_order_relaxed);
+                data.respawn_requested.store(false,std::memory_order_relaxed);
+                reset_message_sequence=0;
                 clear_scene();
                 net::secure::connect(data.socket, server);
 
@@ -824,7 +889,8 @@ void run(const std::string &host, std::uint16_t port)
                 }
             }
 
-            if (data.connected.load(std::memory_order_relaxed)) {
+            if (data.connected.load(std::memory_order_relaxed) &&
+                !data.respawn_pending.load(std::memory_order_acquire)) {
                 for (const auto &input : inputs)
                     unacknowledged.push_back(input);
 
