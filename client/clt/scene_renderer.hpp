@@ -550,36 +550,36 @@ std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
     std::sort(y_edges.begin(),y_edges.end());
     y_edges.erase(std::unique(y_edges.begin(),y_edges.end()),y_edges.end());
     std::vector<vk::Rect2D> disjoint;
+    // The previous band is the only one eligible for vertical merging.
+    // Index intervals directly instead of scanning every emitted rectangle.
+    std::map<std::pair<int,int>,std::size_t> active;
     for(std::size_t band=1;band<y_edges.size();++band) {
         const int top=y_edges[band-1],bottom=y_edges[band];
         if(top==bottom)continue;
         std::vector<std::pair<int,int>> intervals;
-        intervals.reserve(regions.size());
         for(const auto& r:regions)
             if(r.offset.y<=top && r.offset.y+int(r.extent.height)>=bottom)
-                intervals.emplace_back(r.offset.x,
-                                       r.offset.x+int(r.extent.width));
+                intervals.emplace_back(r.offset.x,r.offset.x+int(r.extent.width));
         std::sort(intervals.begin(),intervals.end());
-        for(std::size_t k=0;k<intervals.size();) {
-            const int left=intervals[k].first;
-            int right=intervals[k++].second;
-            while(k<intervals.size() && intervals[k].first<=right) {
-                right=std::max(right,intervals[k].second);
-                ++k;
-            }
+        std::map<std::pair<int,int>,std::size_t> next;
+        for(std::size_t i=0;i<intervals.size();) {
+            const int left=intervals[i].first;
+            int right=intervals[i++].second;
+            while(i<intervals.size() && intervals[i].first<=right)
+                right=std::max(right,intervals[i++].second);
             if(right<=left)continue;
-            auto previous=std::find_if(disjoint.rbegin(),disjoint.rend(),
-                [&](const vk::Rect2D& r) {
-                    return r.offset.x==left &&
-                        r.extent.width==std::uint32_t(right-left) &&
-                        r.offset.y+int(r.extent.height)==top;
-                });
-            if(previous!=disjoint.rend())
-                previous->extent.height+=std::uint32_t(bottom-top);
-            else
+            const auto key=std::pair{left,right};
+            const auto it=active.find(key);
+            if(it!=active.end()) {
+                disjoint[it->second].extent.height+=std::uint32_t(bottom-top);
+                next.emplace(key,it->second);
+            } else {
+                next.emplace(key,disjoint.size());
                 disjoint.push_back({{left,top},
                     {std::uint32_t(right-left),std::uint32_t(bottom-top)}});
+            }
         }
+        active.swap(next);
     }
     // Bound CPU/draw overhead on scenes with many separate optical pieces.
     // This fallback still has exact output because the shader mask discards
