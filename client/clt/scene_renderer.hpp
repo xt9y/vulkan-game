@@ -982,6 +982,49 @@ void synchronize()
             texture::bind(frame.set, mesh.surface);
 }
 
+// Shared frustum cull for the camera and its reflected raster view.
+// The reflected pass reuses the same indirect/instance buffers only after
+// the original draw's vertex and indirect reads have completed.
+void cull_world(vk::CommandBuffer command,std::uint32_t image,
+                const mat4& vp,bool reflected=false)
+{
+    auto& data=get();
+    if(!data.snapshot)return;
+    if(reflected) {
+        vk::MemoryBarrier reuse{};
+        reuse.srcAccessMask=vk::AccessFlagBits::eIndirectCommandRead |
+                            vk::AccessFlagBits::eVertexAttributeRead;
+        reuse.dstAccessMask=vk::AccessFlagBits::eTransferWrite |
+                            vk::AccessFlagBits::eShaderWrite;
+        command.pipelineBarrier(
+            vk::PipelineStageFlagBits::eDrawIndirect |
+            vk::PipelineStageFlagBits::eVertexInput,
+            vk::PipelineStageFlagBits::eTransfer |
+            vk::PipelineStageFlagBits::eComputeShader,{},{reuse},{},{});
+    }
+    const auto frustum_planes=frustum(vp);
+    std::array<vec4,6> planes{};
+    for(std::size_t i=0;i<planes.size();++i) {
+        const auto& p=frustum_planes[i];
+        const float inv=1.f/std::max(p.magnitude,1e-6f);
+        planes[i]={p.normal.x*inv,p.normal.y*inv,p.normal.z*inv,p.offset*inv};
+    }
+    std::vector<vk::Buffer> indirects;
+    indirects.reserve(data.meshes.size());
+    for(const auto& mesh:data.meshes)
+        if(!mesh.transforms.empty())
+            indirects.push_back(mesh.frames.at(image).indirect.handle);
+    data.cull.begin(command,indirects);
+    const std::array<vec4,6> unbounded{};
+    for(const auto& mesh:data.meshes) {
+        if(mesh.transforms.empty())continue;
+        data.cull.dispatch(command,mesh.frames.at(image).set,
+            mesh.joint_count?unbounded:planes,
+            std::uint32_t(mesh.transforms.size()),mesh.index_count);
+    }
+    data.cull.end(command);
+}
+
 void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame &camera)
 {
     auto &data = get();
@@ -1007,46 +1050,7 @@ void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame &c
     begin.clearValueCount = clear.size();
     begin.pClearValues = clear.data();
 
-    if (data.snapshot) {
-        const auto camera_planes = frustum(view_projection);
-
-        std::array<vec4, 6> planes{};
-
-        for (std::size_t i = 0; i < planes.size(); ++i)
-        {
-            const auto &plane = camera_planes[i];
-
-            const float inverse = 1.0f / std::max(plane.magnitude, 1e-6f);
-
-            planes[i] = {
-                plane.normal.x * inverse, plane.normal.y * inverse, plane.normal.z * inverse, plane.offset * inverse
-            };
-        }
-
-        std::vector<vk::Buffer> indirects;
-        indirects.reserve(data.meshes.size());
-
-        for (const auto &mesh : data.meshes)
-            if (!mesh.transforms.empty())
-                indirects.push_back(mesh.frames.at(image).indirect.handle);
-        data.cull.begin(command, indirects);
-
-        // Static bind-pose bounds do not contain skinned animation. Keep
-        // skinned instances GPU-visible; the viewport still clips their
-        // rasterization. Static meshes retain exact frustum culling.
-        const std::array<vec4,6> unbounded_planes{};
-        for (const auto &mesh : data.meshes)
-        {
-            if(mesh.transforms.empty())continue;
-            data.cull.dispatch(command,mesh.frames.at(image).set,
-                mesh.joint_count?unbounded_planes:planes,
-                static_cast<std::uint32_t>(mesh.transforms.size()),
-                mesh.index_count);
-        }
-
-        data.cull.end(command);
-    }
-
+    cull_world(command,image,view_projection);
     if (data.snapshot) {
         const auto server_tick = connection::get()->server_tick.load(std::memory_order_relaxed);
         const auto now = std::chrono::steady_clock::now();
@@ -1204,41 +1208,7 @@ void draw_reflection(vk::CommandBuffer command,std::uint32_t image,
     const float aspect=float(extent.width)/float(extent.height);
     const mat4 vp=perspective(planar.reflected.pose.fov,aspect,.1f,1000.f)*
                   planar.reflected.view;
-    const auto camera_planes=frustum(vp);
-    std::array<vec4,6> planes{};
-    for(std::size_t i=0;i<planes.size();++i) {
-        const auto& p=camera_planes[i];
-        const float inv=1.f/std::max(p.magnitude,1e-6f);
-        planes[i]={p.normal.x*inv,p.normal.y*inv,p.normal.z*inv,
-                   p.offset*inv};
-    }
-    std::vector<vk::Buffer> indirects;
-    indirects.reserve(data.meshes.size());
-    for(const auto& mesh:data.meshes)
-        if(!mesh.transforms.empty())
-            indirects.push_back(mesh.frames.at(image).indirect.handle);
-    // The original camera's draws have read the same indirect and
-    // visible-instance buffers. Finish those reads before the reflected
-    // cull overwrites them later in this command buffer.
-    vk::MemoryBarrier reuse{};
-    reuse.srcAccessMask=vk::AccessFlagBits::eIndirectCommandRead |
-                        vk::AccessFlagBits::eVertexAttributeRead;
-    reuse.dstAccessMask=vk::AccessFlagBits::eTransferWrite |
-                        vk::AccessFlagBits::eShaderWrite;
-    command.pipelineBarrier(
-        vk::PipelineStageFlagBits::eDrawIndirect |
-        vk::PipelineStageFlagBits::eVertexInput,
-        vk::PipelineStageFlagBits::eTransfer |
-        vk::PipelineStageFlagBits::eComputeShader,{},{reuse},{},{});
-    data.cull.begin(command,indirects);
-    const std::array<vec4,6> unbounded{};
-    for(const auto& mesh:data.meshes) {
-        if(mesh.transforms.empty())continue;
-        data.cull.dispatch(command,mesh.frames.at(image).set,
-            mesh.joint_count?unbounded:planes,
-            std::uint32_t(mesh.transforms.size()),mesh.index_count);
-    }
-    data.cull.end(command);
+    cull_world(command,image,vp,true);
     std::array<vk::ClearValue,4> clears{};
     for(int i=0;i<3;++i)
         clears[i].color=vk::ClearColorValue(std::array<float,4>{0,0,0,0});
