@@ -26,23 +26,10 @@
 
 namespace clt::scene_renderer
 {
-pc::gbuffer outputs(std::uint32_t image);
-bool needs_sync();
-void create_frame_resources();
-void release_frame_resources();
-void init(const char *vertex_path, const char *fragment_path);
-void synchronize();
-void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame &camera);
 struct planar_view {
     camera::frame reflected;
     vk::util::math::vec4 clip;
 };
-std::optional<planar_view> planar_reflection(const camera::frame&);
-bool single_glass();
-pc::gbuffer reflection_outputs(std::uint32_t);
-void draw_reflection(vk::CommandBuffer,std::uint32_t,
-                     const camera::frame&,const planar_view&);
-void shutdown();
 
 namespace
 {
