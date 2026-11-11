@@ -445,6 +445,16 @@ void send_editor(const session::resource& client,Packet packet)
     const auto bytes=encode(packet);
     net::secure::send(get()->socket,client.endpoint,bytes.data(),bytes.size());
 }
+template<class F>
+void with_client(const net::endpoint::resource& peer,std::uint32_t token,F&& action)
+{
+    for(auto& client:session::get()->clients)
+        if(client.active && client.token==token &&
+           net::endpoint::equal(client.endpoint,peer)) {
+            action(client);
+            return;
+        }
+}
 bool editor_local(const net::endpoint::resource &peer)
 {
     if (peer.address.ss_family == AF_INET) {
@@ -460,10 +470,7 @@ bool editor_local(const net::endpoint::resource &peer)
 void handle_editor_light(const net::endpoint::resource &peer, const net::editor_light::resource &command)
 {
     if (!editor_local(peer)) return;
-    for (auto &client : session::get()->clients)
-    {
-        if (!client.active || client.token != command.token || !net::endpoint::equal(client.endpoint, peer))
-            continue;
+    with_client(peer,command.token,[&](session::resource& client) {
         const bool duplicate = command.sequence == client.editor_light_sequence;
         if (!duplicate && (!net::message::newer(command.sequence, client.editor_light_sequence) || (client.editor_light_sequence && command.sequence - client.editor_light_sequence > 256u)))
             return;
@@ -530,7 +537,7 @@ void handle_editor_light(const net::endpoint::resource &peer, const net::editor_
         send_editor(client,ack);
         client.last_seen = clock::now();
         return;
-    }
+    });
 }
 void handle_editor_cube(const net::endpoint::resource &peer, const net::editor_cube::resource &command)
 {
@@ -539,8 +546,7 @@ void handle_editor_cube(const net::endpoint::resource &peer, const net::editor_c
         (command.type != kind::create && command.type != kind::edit &&
          command.type != kind::remove)) return;
     auto &data = *get();
-    for (auto &client : session::get()->clients) {
-        if (!client.active || client.token != command.token || !net::endpoint::equal(client.endpoint, peer)) continue;
+    with_client(peer,command.token,[&](session::resource& client) {
         const bool duplicate = command.sequence == client.editor_cube_sequence;
         if (!duplicate && (!net::message::newer(command.sequence, client.editor_cube_sequence) ||
             (client.editor_cube_sequence && command.sequence - client.editor_cube_sequence > 256u))) return;
@@ -655,7 +661,7 @@ void handle_editor_cube(const net::endpoint::resource &peer, const net::editor_c
         send_editor(client,ack);
         client.last_seen = clock::now();
         return;
-    }
+    });
 }
 
 void send_editor_cubes()
@@ -723,14 +729,10 @@ void receive_messages()
             continue;
         }
         if (const auto command = net::movement::decode_input(buffer.data(), *size)) {
-            for (auto &client : session::get()->clients)
-            {
-                if (!client.active || client.token != command->token || !net::endpoint::equal(client.endpoint, peer))
-                    continue;
-                if (!queue_input(client.inputs, command->input, client.processed_input, 128)) break;
-                client.last_seen = clock::now();
-                break;
-            }
+            with_client(peer,command->token,[&](session::resource& client) {
+                if(queue_input(client.inputs,command->input,client.processed_input,128))
+                    client.last_seen=clock::now();
+            });
             continue;
         }
         if (const auto message = net::message::decode(buffer.data(), *size))
@@ -759,9 +761,7 @@ net::weapon::snapshot weapon_snapshot(const session::resource &client, double no
 }
 void handle_weapon(const net::endpoint::resource &peer, const net::weapon::command &command)
 {
-    for (auto &client : session::get()->clients)
-    {
-        if (!client.active || client.token != command.token || !net::endpoint::equal(client.endpoint, peer)) continue;
+    with_client(peer,command.token,[&](session::resource& client) {
         const auto now = clock::now();
         client.last_seen = now;
         if (!net::message::newer(command.sequence, client.weapon_sequence)) {
@@ -801,7 +801,7 @@ void handle_weapon(const net::endpoint::resource &peer, const net::weapon::comma
             }
         }
         return;
-    }
+    });
 }
 void tick_weapons()
 {
