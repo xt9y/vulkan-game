@@ -75,7 +75,7 @@ struct wire {
                 return value.alpha_mode<=2 && value.procedural_pattern<=1;
             return true;
         } else if constexpr(std::is_same_v<V,::scene::instance>) {
-            const auto& pose=value.pose;
+            auto& pose=value.pose;
             // Both packet directions use precisely the same 108-byte schema.
             if(!fields(value.id,value.mesh_id,value.animation,value.animation_tick,
                 value.overlay_animation,value.overlay_root,value.overlay_weight,
