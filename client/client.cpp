@@ -293,36 +293,28 @@ static void publish_editor_objects()
     const mat4 vp = clt::camera::view_projection(float(width) / float(height));
 
     std::vector<editor::screen_label> labels;
-    labels.reserve(world->lights.size());
-
-    for (std::size_t i = 0; i < world->lights.size(); ++i)
-    {
-        const auto &light = world->lights[i];
-
-        if (!light.enabled) continue;
-
-        const vec4 clip = vp * vec4{light.position, 1.0f};
-
-        if (!std::isfinite(clip.w) || clip.w <= 0.0001f || clip.z < 0.0f || clip.z > clip.w)
-            continue;
-
-        const float nx = clip.x / clip.w, ny = clip.y / clip.w;
-
-        if (!std::isfinite(nx) || !std::isfinite(ny) || nx < -1.0f || nx > 1.0f || ny < -1.0f || ny > 1.0f)
-            continue;
-        labels.push_back({editor_light_ids + std::uint64_t(i) + 1u, "LIGHT", int(std::lround((nx * 0.5f + 0.5f) * float(width))), int(std::lround((ny * 0.5f + 0.5f) * float(height))), true});
-    }
-
+    labels.reserve(world->lights.size()+editable.size());
+    const auto add_label=[&](std::uint64_t id,const char* text,vec3 position) {
+        const vec4 clip=vp*vec4{position,1.f};
+        if(!std::isfinite(clip.w) || clip.w<=.0001f ||
+           clip.z<0.f || clip.z>clip.w)return;
+        const float nx=clip.x/clip.w,ny=clip.y/clip.w;
+        if(!std::isfinite(nx) || !std::isfinite(ny) ||
+           std::abs(nx)>1.f || std::abs(ny)>1.f)return;
+        labels.push_back({id,text,
+            int(std::lround((nx*.5f+.5f)*width)),
+            int(std::lround((ny*.5f+.5f)*height)),true});
+    };
+    for(std::size_t i=0;i<world->lights.size();++i)
+        if(world->lights[i].enabled)
+            add_label(editor_light_ids+std::uint64_t(i)+1u,
+                      "LIGHT",world->lights[i].position);
     for(const auto index:editable) {
         const auto& cube=world->instances[index];
-        const vec4 clip = vp * vec4{cube.pose.position, 1.f};
-        if (!std::isfinite(clip.w) || clip.w <= .0001f || clip.z < 0.f || clip.z > clip.w) continue;
-        const float nx = clip.x / clip.w, ny = clip.y / clip.w;
-        if (!std::isfinite(nx) || !std::isfinite(ny) || std::abs(nx) > 1.f || std::abs(ny) > 1.f) continue;
-        const char* label=cube.editor_group?"MERMAID":
-            cube.mesh_id==::scene::unit_sphere_mesh_id?"SPHERE":"CUBE";
-        labels.push_back({editor_cube_ids + cube.id, label, int(std::lround((nx * .5f + .5f) * width)),
-                          int(std::lround((ny * .5f + .5f) * height)), true});
+        add_label(editor_cube_ids+cube.id,
+            cube.editor_group?"MERMAID":
+            cube.mesh_id==::scene::unit_sphere_mesh_id?"SPHERE":"CUBE",
+            cube.pose.position);
     }
     ui.set_labels(std::move(labels));
 
