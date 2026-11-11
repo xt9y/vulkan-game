@@ -73,6 +73,7 @@ struct gpu_mesh
 
     vec3 center;
     float radius = 0;
+    vec3 local_min{},local_max{};
 
     std::uint32_t index_count = 0;
 };
@@ -93,6 +94,7 @@ struct state
     vk::RenderPass render_pass{};
     vk::PipelineLayout layout{};
     ::render::pipeline pipeline;
+    ::render::pipeline optical_pipeline;
     struct target
     {
         ::render::attachments images;
@@ -100,6 +102,7 @@ struct state
     };
 
     std::vector<target> targets;
+    std::vector<target> optical_targets;
     std::array<std::string, 2> shaders;
 };
 
@@ -129,12 +132,12 @@ std::array<vk::DescriptorSetLayoutBinding, 10> instance_bindings()
     return bindings;
 }
 
-void draw_mesh(::render::renderer &graphics, const gpu_mesh &mesh, const gpu_mesh::per_image &frame, const draw_parameters &params, bool indirect, std::uint32_t instances)
+void draw_mesh(::render::renderer &graphics, const gpu_mesh &mesh, const gpu_mesh::per_image &frame, const draw_parameters &params, bool indirect, std::uint32_t instances, bool optical=false)
 {
     ::render::mesh geometry = mesh.geometry.view();
     geometry.streams.push_back({1, frame.visible.handle, 0});
     ::render::material surface{};
-    surface.pipeline = get().pipeline.handle();
+    surface.pipeline = optical ? get().optical_pipeline.handle() : get().pipeline.handle();
     surface.layout = get().layout;
     surface.sets = {frame.set};
     surface.push_data = &params;
@@ -224,6 +227,10 @@ void create_pipeline()
         blend.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
     data.pipeline.create(raster, {{vk::ShaderStageFlagBits::eVertex, data.shaders[0]},
                                   {vk::ShaderStageFlagBits::eFragment, data.shaders[1]}});
+    data.optical_pipeline.create(raster, {
+        {vk::ShaderStageFlagBits::eVertex, data.shaders[0]},
+        {vk::ShaderStageFlagBits::eFragment, "build/shaders/optics.frag.spv"}
+    });
 }
 
 std::array<vk::Format, 3> color_formats()
@@ -284,7 +291,7 @@ void create_render_pass()
     barriers[1].srcSubpass = 0;
     barriers[1].dstSubpass = VK_SUBPASS_EXTERNAL;
     barriers[1].srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests;
-    barriers[1].dstStageMask = vk::PipelineStageFlagBits::eComputeShader;
+    barriers[1].dstStageMask = vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eFragmentShader;
     barriers[1].srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
     barriers[1].dstAccessMask = vk::AccessFlagBits::eShaderRead;
     vk::RenderPassCreateInfo info{};
@@ -297,7 +304,7 @@ void create_render_pass()
     data.render_pass = vk::render_pass::create(info);
 }
 
-void create_target()
+void create_target(bool optical=false)
 {
     auto &data = get();
 
@@ -309,7 +316,8 @@ void create_target()
     target.framebuffer = std::make_unique<::render::target>();
     target.framebuffer->create_framebuffer(data.render_pass,
                                            {target.images.color(0), target.images.color(1), target.images.color(2), target.images.depth()}, extent);
-    data.targets.push_back(std::move(target));
+    if(optical)data.optical_targets.push_back(std::move(target));
+    else data.targets.push_back(std::move(target));
 }
 } // namespace
 void init(const char *vertex_path, const char *fragment_path)
@@ -331,6 +339,137 @@ void init(const char *vertex_path, const char *fragment_path)
     texture::pin(weapon::assets());
     texture::synchronize(::scene::state{});
     data.cull.create(game::options::get()->graphics.culling_shader, data.instance_layout);
+}
+
+pc::gbuffer optical_outputs(std::uint32_t image)
+{
+    const auto &images = get().optical_targets.at(image).images;
+    return {images.color(0), images.color(1), images.color(2), images.depth()};
+}
+
+bool has_optics()
+{
+    const auto& scene=get().snapshot;
+    return scene && std::any_of(scene->instances.begin(),scene->instances.end(),
+        [](const auto& i){return i.pattern==2u || i.pattern==3u;});
+}
+
+// Conservative screen-space bounds for all visible glass/mirror instances.
+// Clipped to a compact set of disjoint scissor rectangles so the expensive
+// BVH fragment shader never runs across non-optical portions of the frame.
+std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
+{
+    const auto extent=vk::swapchain::get()->extent;
+    std::vector<vk::Rect2D> regions;
+    if(!extent.width || !extent.height)return regions;
+    const auto vp=perspective(camera.pose.fov,
+        float(extent.width)/float(extent.height),.1f,1000.f)*camera.view;
+    const auto overlaps=[](const vk::Rect2D& a,const vk::Rect2D& b) {
+        return a.offset.x<=b.offset.x+int(b.extent.width) &&
+               b.offset.x<=a.offset.x+int(a.extent.width) &&
+               a.offset.y<=b.offset.y+int(b.extent.height) &&
+               b.offset.y<=a.offset.y+int(a.extent.height);
+    };
+    const auto combined=[](const vk::Rect2D& a,const vk::Rect2D& b) {
+        const int x=std::min(a.offset.x,b.offset.x);
+        const int y=std::min(a.offset.y,b.offset.y);
+        const int right=std::max(a.offset.x+int(a.extent.width),
+                                 b.offset.x+int(b.extent.width));
+        const int bottom=std::max(a.offset.y+int(a.extent.height),
+                                  b.offset.y+int(b.extent.height));
+        return vk::Rect2D{{x,y},{std::uint32_t(right-x),
+                                 std::uint32_t(bottom-y)}};
+    };
+    for(const auto& mesh:get().meshes) {
+        if(mesh.instances.empty())continue;
+        for(const auto& instance:mesh.instances) {
+            if(instance.pattern!=2u && instance.pattern!=3u)continue;
+            // Bind-pose bounds do not conservatively contain every skin
+            // deformation. Never clip a reflective animated surface.
+            if(mesh.joint_count)
+                return {vk::Rect2D{{0,0},extent}};
+            std::array<vec4,8> clips{};
+            for(int corner=0;corner<8;++corner) {
+                const auto local=vec3{
+                    (corner&1)?mesh.local_max.x:mesh.local_min.x,
+                    (corner&2)?mesh.local_max.y:mesh.local_min.y,
+                    (corner&4)?mesh.local_max.z:mesh.local_min.z};
+                const auto scale=instance.pose.scale;
+                const auto world=instance.pose.position+
+                    rotate(instance.pose.rotation,{
+                        local.x*scale.x,local.y*scale.y,local.z*scale.z});
+                clips[corner]=vp*vec4{world,1.f};
+            }
+            // Homogeneous frustum rejection also handles optical objects
+            // wholly behind the camera. The old early near-plane fallback
+            // incorrectly made those objects shade the entire screen.
+            const auto outside=[&](auto predicate) {
+                return std::all_of(clips.begin(),clips.end(),predicate);
+            };
+            if(outside([](const vec4& p){return p.z<0.f;}) ||
+               outside([](const vec4& p){return p.z>p.w;}) ||
+               outside([](const vec4& p){return p.x<-p.w;}) ||
+               outside([](const vec4& p){return p.x>p.w;}) ||
+               outside([](const vec4& p){return p.y<-p.w;}) ||
+               outside([](const vec4& p){return p.y>p.w;}))continue;
+            float min_x=float(extent.width),min_y=float(extent.height);
+            float max_x=0.f,max_y=0.f;
+            bool projected=false;
+            const auto include=[&](const vec4& p) {
+                // Near-plane edge intersections can round slightly below zero.
+                if(p.z<-.00001f || p.w<=.00001f)return;
+                const float x=(p.x/p.w*.5f+.5f)*float(extent.width);
+                const float y=(p.y/p.w*.5f+.5f)*float(extent.height);
+                if(!std::isfinite(x) || !std::isfinite(y))return;
+                min_x=std::min(min_x,x);max_x=std::max(max_x,x);
+                min_y=std::min(min_y,y);max_y=std::max(max_y,y);
+                projected=true;
+            };
+            for(const auto& p:clips)include(p);
+            // The perspective projection is not bounded by corners when
+            // an edge crosses the near plane. Include all twelve clipped
+            // box edges instead of conservatively drawing the whole frame.
+            for(int corner=0;corner<8;++corner)
+                for(int axis=0;axis<3;++axis) {
+                    const int bit=1<<axis;
+                    if(corner&bit)continue;
+                    const auto& a=clips[corner];
+                    const auto& b=clips[corner|bit];
+                    if((a.z>=0.f)==(b.z>=0.f))continue;
+                    const float t=-a.z/(b.z-a.z);
+                    include({a.x+(b.x-a.x)*t,a.y+(b.y-a.y)*t,
+                             a.z+(b.z-a.z)*t,a.w+(b.w-a.w)*t});
+                }
+            if(!projected)continue;
+            // Clamp floating bounds before int conversion: very close
+            // geometry can project far beyond the representable int range.
+            const int x0=int(std::clamp(std::floor(min_x)-2.f,0.f,float(extent.width)));
+            const int y0=int(std::clamp(std::floor(min_y)-2.f,0.f,float(extent.height)));
+            const int x1=int(std::clamp(std::ceil(max_x)+2.f,0.f,float(extent.width)));
+            const int y1=int(std::clamp(std::ceil(max_y)+2.f,0.f,float(extent.height)));
+            if(x1<=x0 || y1<=y0)continue;
+            vk::Rect2D region{{x0,y0},{std::uint32_t(x1-x0),
+                                       std::uint32_t(y1-y0)}};
+            // Merge overlaps to avoid re-shading the same pixels.
+            for(std::size_t i=0;i<regions.size();) {
+                if(overlaps(regions[i],region)) {
+                    region=combined(region,regions[i]);
+                    regions.erase(regions.begin()+i);
+                    i=0;
+                } else ++i;
+            }
+            regions.push_back(region);
+            // Many tiny overlapping regions cost more CPU/draw calls than
+            // one union. Retain safe coverage without excessive submissions.
+            if(regions.size()>32) {
+                auto united=regions.front();
+                for(std::size_t i=1;i<regions.size();++i)
+                    united=combined(united,regions[i]);
+                regions.assign(1,united);
+            }
+        }
+    }
+    return regions;
 }
 
 pc::gbuffer outputs(std::uint32_t image)
@@ -376,6 +515,20 @@ gpu_mesh upload_mesh(const ::scene::mesh &mesh, gpu::upload::batch &transfers)
     result.joint_count = animation::joints(mesh.skin_id);
     result.surface = mesh.surface;
     result.index_count = std::uint32_t(mesh.indices.size());
+    if(!mesh.vertices.empty()) {
+        result.local_min=result.local_max=mesh.vertices.front().position;
+        for(const auto& vertex:mesh.vertices) {
+            const auto p=vertex.position;
+            result.local_min={
+                std::min(result.local_min.x,p.x),
+                std::min(result.local_min.y,p.y),
+                std::min(result.local_min.z,p.z)};
+            result.local_max={
+                std::max(result.local_max.x,p.x),
+                std::max(result.local_max.y,p.y),
+                std::max(result.local_max.z,p.z)};
+        }
+    }
     result.geometry.upload(transfers, mesh.vertices.data(), mesh.vertices.size() * sizeof(::scene::vertex), mesh.indices.data(), mesh.indices.size() * sizeof(std::uint32_t), result.index_count);
 
     return result;
@@ -435,9 +588,11 @@ void release_frame_resources()
         mesh.frames.clear();
     data.instance_sets.reset();
     data.pipeline.reset();
+    data.optical_pipeline.reset();
     vk::pipeline_layout::destroy(data.layout);
     data.layout = nullptr;
     data.targets.clear();
+    data.optical_targets.clear();
     vk::render_pass::destroy(data.render_pass);
     data.render_pass = nullptr;
 }
@@ -450,7 +605,10 @@ void create_frame_resources()
         create_render_pass();
 
         for (std::size_t i = 0; i < vk::swapchain::get()->images.size(); ++i)
+        {
             create_target();
+            create_target(true);
+        }
         create_pipeline();
         create_local_frames();
         rebuild_instance_frames();
@@ -477,8 +635,13 @@ void append_instance(gpu_mesh &mesh, const ::scene::instance &instance)
     const float max_scale = std::max({std::abs(pose.scale.x), std::abs(pose.scale.y), std::abs(pose.scale.z)});
 
     mesh.instances.push_back(instance);
+    const float kind=instance.pattern == UINT32_MAX ? -1.f : float(instance.pattern);
+    const unsigned strength=static_cast<unsigned>(std::lround(std::clamp(instance.optical_strength,0.f,1.f)*255.f));
+    const unsigned mattness=static_cast<unsigned>(std::lround(std::clamp(instance.optical_mattness,0.f,1.f)*255.f));
+    const float packed=(instance.pattern==2u || instance.pattern==3u) ?
+        kind+float((strength<<8u)|mattness)/65536.f : kind;
     mesh.transforms.push_back({trs(pose.position, pose.rotation, pose.scale), rotation(pose.rotation) * scale(inverse),
-                               {instance.tint.x, instance.tint.y, instance.tint.z, instance.pattern == UINT32_MAX ? -1.f : float(instance.pattern)}});
+                               {instance.tint.x, instance.tint.y, instance.tint.z, packed}});
 
     const auto position = pose.position + rotate(pose.rotation, center);
     mesh.bounds.push_back({position.x, position.y, position.z, mesh.radius * max_scale});
@@ -842,6 +1005,27 @@ void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame &c
     }
 
     graphics.end_pass();
+
+    // A second G-buffer contains only glass/reflective faces. Opaque depth
+    // excludes glass, so transmitted rays can see the scene behind it.
+    if(has_optics()) {
+        vk::RenderPassBeginInfo optical_begin=begin;
+        optical_begin.framebuffer=data.optical_targets.at(image).framebuffer->framebuffer();
+        ::render::renderer optical_graphics(command);
+        optical_graphics.begin_pass(optical_begin);
+        optical_graphics.viewport(vk::Viewport{0,0,float(extent.width),float(extent.height),0.1f,1.f},
+                                  vk::Rect2D{{0,0},extent});
+        for(const auto& mesh:data.meshes) {
+            if(mesh.transforms.empty() ||
+               std::none_of(mesh.instances.begin(),mesh.instances.end(),
+                   [](const auto& instance) {
+                       return instance.pattern==2u || instance.pattern==3u;
+                   }))continue;
+            const auto params=material_parameters(mesh.surface,view_projection,mesh.joint_count);
+            draw_mesh(optical_graphics,mesh,mesh.frames.at(image),params,true,1,true);
+        }
+        optical_graphics.end_pass();
+    }
 }
 
 void shutdown()

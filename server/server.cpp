@@ -103,12 +103,44 @@ static ::scene::mesh box_mesh(std::uint32_t id, vk::util::math::vec3 h, bool che
     return mesh;
 }
 
+// Unit-diameter UV sphere with interpolated normals for smooth primary and
+// secondary reflections. Geometry is shared between inserted instances.
+static ::scene::mesh sphere_mesh(std::uint32_t id)
+{
+    constexpr std::uint32_t rings=48,segments=96;
+    constexpr float pi=3.14159265358979323846f;
+    ::scene::mesh mesh{};
+    mesh.id=id;
+    mesh.surface.base_color={1,1,1,1};
+    mesh.surface.roughness=.85f;
+    for(std::uint32_t j=0;j<=rings;++j) {
+        const float theta=pi*float(j)/float(rings);
+        for(std::uint32_t i=0;i<=segments;++i) {
+            const float phi=2.f*pi*float(i)/float(segments);
+            const vk::util::math::vec3 n{
+                std::sin(theta)*std::cos(phi),
+                std::cos(theta),
+                std::sin(theta)*std::sin(phi)
+            };
+            mesh.vertices.push_back({n*.5f,n,float(i)/segments,float(j)/rings});
+        }
+    }
+    for(std::uint32_t j=0;j<rings;++j)
+        for(std::uint32_t i=0;i<segments;++i) {
+            const auto a=j*(segments+1)+i;
+            const auto b=a+segments+1;
+            mesh.indices.insert(mesh.indices.end(),{a,a+1,b,a+1,b+1,b});
+        }
+    return mesh;
+}
+
 static ::scene::state make_level()
 {
     using vk::util::math::vec3;
     ::scene::state world{};
     world.meshes.push_back(box_mesh(1, {10, .1f, 10}, true));
     world.meshes.push_back(box_mesh(2, {.5f, .5f, .5f}));
+    world.meshes.push_back(sphere_mesh(::scene::unit_sphere_mesh_id));
 
     const auto place = [&](std::uint32_t id, std::uint32_t mesh, vec3 pos)
     {
@@ -121,7 +153,7 @@ static ::scene::state make_level()
 
     place(1, 1, {0, -.1f, 0});
     // Static room probe surface; editable cubes supply transformed probe faces.
-    world.collision_boxes.push_back({{-10, -.2f, -10}, {10, 0, 10}});
+    // PCloud derives the floor's occlusion box from its live mesh pose.
     place(2, 2, {-2, .5f, 0});
     place(3, 2, {0, .5f, 0});
     place(4, 2, {2, .5f, 0});

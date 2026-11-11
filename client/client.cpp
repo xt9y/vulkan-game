@@ -97,32 +97,60 @@ static std::vector<editor::property> light_properties(const ::scene::point_light
     };
 }
 
-static std::vector<editor::property> cube_properties(const ::scene::instance &cube)
+static std::vector<editor::property> geometry_properties(const ::scene::instance &cube)
 {
     using kind = editor::property_kind;
     const auto angles = net::editor_cube::angles(cube);
-    return {
+    std::vector<editor::property> properties{
         {"pos_x", "Pos X", kind::real, cube.pose.position.x, -500, 500, 0.01, {}},
         {"pos_y", "Pos Y", kind::real, cube.pose.position.y, -500, 500, 0.01, {}},
         {"pos_z", "Pos Z", kind::real, cube.pose.position.z, -500, 500, 0.01, {}},
         {"rot_x", "Rotation X", kind::real, angles.x, -180, 180, 1, {}},
         {"rot_y", "Rotation Y", kind::real, angles.y, -180, 180, 1, {}},
-        {"rot_z", "Rotation Z", kind::real, angles.z, -180, 180, 1, {}},
-        {"width", "Width", kind::real, cube.pose.scale.x, 0.01, 100, 0.01, {}},
-        {"height", "Height", kind::real, cube.pose.scale.y, 0.01, 100, 0.01, {}},
-        {"depth", "Depth", kind::real, cube.pose.scale.z, 0.01, 100, 0.01, {}},
-        {"texture", "Texture", kind::choice, double(cube.pattern == 1), 0, 1, 1, {"Solid", "Checker"}},
-        {"color_r", "Color R", kind::integer, cube.tint.x * 100, 0, 100, 1, {}},
-        {"color_g", "Color G", kind::integer, cube.tint.y * 100, 0, 100, 1, {}},
-        {"color_b", "Color B", kind::integer, cube.tint.z * 100, 0, 100, 1, {}}
+        {"rot_z", "Rotation Z", kind::real, angles.z, -180, 180, 1, {}}
     };
+    if(cube.editor_group) {
+        properties.push_back({"scale", "Scale", kind::real,
+                              cube.pose.scale.x, .01, 100, .01, {}});
+        return properties;
+    }
+    const float width=cube.mesh_id==::scene::ground_mesh_id?20.f:1.f;
+    const float height=cube.mesh_id==::scene::ground_mesh_id?.2f:1.f;
+    const float depth=width;
+    properties.push_back({"width","Width",kind::real,cube.pose.scale.x*width,
+                          .01,100,.01,{}});
+    properties.push_back({"height","Height",kind::real,cube.pose.scale.y*height,
+                          .01,100,.01,{}});
+    properties.push_back({"depth","Depth",kind::real,cube.pose.scale.z*depth,
+                          .01,100,.01,{}});
+    properties.push_back({"texture","Texture",kind::choice,
+        double(cube.pattern<=3?cube.pattern:
+               (cube.mesh_id==::scene::ground_mesh_id?1u:0u)),0,3,1,
+        {"Solid","Generated checker","Glass","Reflective"}});
+    properties.push_back({"color_r","Color R",kind::integer,cube.tint.x*100,
+                          0,100,1,{}});
+    properties.push_back({"color_g","Color G",kind::integer,cube.tint.y*100,
+                          0,100,1,{}});
+    properties.push_back({"color_b","Color B",kind::integer,cube.tint.z*100,
+                          0,100,1,{}});
+    if(cube.pattern==2u || cube.pattern==3u) {
+        properties.push_back({"optical_strength",
+            cube.pattern==2u ? "Pass through" : "Reflectivity",
+            kind::real,cube.optical_strength,0,1,.01,{}});
+        properties.push_back({"optical_mattness","Mattness",
+            kind::real,cube.optical_mattness,0,1,.01,{}});
+    }
+    return properties;
 }
 
-static void on_cube_action(const editor::action &action)
+static void on_geometry_action(const editor::action &action)
 {
     using namespace net::editor_cube;
     resource command{};
-    command.cube.mesh_id = ::scene::unit_cube_mesh_id;
+    command.cube.mesh_id = action.type=="sphere" ?
+        ::scene::unit_sphere_mesh_id :
+        action.type=="mermaid" ? ::scene::mermaid_insert_mesh_id :
+        ::scene::unit_cube_mesh_id;
     if (action.kind == editor::action_kind::insert) {
         const auto frame = clt::camera::capture();
         const auto yaw = frame.pose.yaw, pitch = frame.pose.pitch;
@@ -132,14 +160,20 @@ static void on_cube_action(const editor::action &action)
         command.type = kind::create;
         command.index = UINT32_MAX;
         command.cube.pose.position = frame.eye + forward * 2.5f;
-        command.cube.pattern = 0;
+        if(action.type=="mermaid")
+            command.cube.pose.scale={1.5f,1.5f,1.5f};
+        command.cube.pattern = action.type=="mermaid"?UINT32_MAX:0u;
     }
     else if (action.kind == editor::action_kind::edit || action.kind == editor::action_kind::remove) {
         const auto world = clt::connection::snapshot();
         if (!world) return;
         command.index = std::uint32_t(action.object - editor_cube_ids);
         const auto found = std::find_if(world->instances.begin(), world->instances.end(), [&](const auto &i) {
-            return i.id == command.index && i.mesh_id == ::scene::unit_cube_mesh_id;
+            return i.id==command.index &&
+                (i.mesh_id==::scene::ground_mesh_id ||
+                 i.mesh_id==::scene::unit_cube_mesh_id ||
+                 i.mesh_id==::scene::unit_sphere_mesh_id ||
+                 i.editor_group!=0);
         });
         if (found == world->instances.end()) return;
         command.cube = *found;
@@ -159,9 +193,12 @@ static void on_cube_action(const editor::action &action)
 
 static void on_editor_action(const editor::action &action)
 {
-    if ((action.kind == editor::action_kind::insert && action.type == "cube") ||
-        (action.object > editor_cube_ids && action.object < editor_cube_ids + UINT32_MAX)) {
-        on_cube_action(action);
+    if ((action.kind==editor::action_kind::insert &&
+         (action.type=="cube" || action.type=="sphere" ||
+          action.type=="mermaid")) ||
+        (action.object > editor_cube_ids &&
+         action.object < editor_cube_ids + UINT32_MAX)) {
+        on_geometry_action(action);
         return;
     }
     net::editor_light::resource command{};
@@ -261,12 +298,18 @@ static void publish_editor_objects()
     }
 
     for (const auto &cube : world->instances) {
-        if (cube.mesh_id != ::scene::unit_cube_mesh_id) continue;
+        if(cube.editor_group && cube.id!=cube.editor_group)continue;
+        if(cube.mesh_id!=::scene::ground_mesh_id &&
+           cube.mesh_id!=::scene::unit_cube_mesh_id &&
+           cube.mesh_id!=::scene::unit_sphere_mesh_id &&
+           !cube.editor_group)continue;
         const vec4 clip = vp * vec4{cube.pose.position, 1.f};
         if (!std::isfinite(clip.w) || clip.w <= .0001f || clip.z < 0.f || clip.z > clip.w) continue;
         const float nx = clip.x / clip.w, ny = clip.y / clip.w;
         if (!std::isfinite(nx) || !std::isfinite(ny) || std::abs(nx) > 1.f || std::abs(ny) > 1.f) continue;
-        labels.push_back({editor_cube_ids + cube.id, "CUBE", int(std::lround((nx * .5f + .5f) * width)),
+        const char* label=cube.editor_group?"MERMAID":
+            cube.mesh_id==::scene::unit_sphere_mesh_id?"SPHERE":"CUBE";
+        labels.push_back({editor_cube_ids + cube.id, label, int(std::lround((nx * .5f + .5f) * width)),
                           int(std::lround((ny * .5f + .5f) * height)), true});
     }
     ui.set_labels(std::move(labels));
@@ -283,8 +326,12 @@ static void publish_editor_objects()
         ui.set_properties(editor_light_ids + std::uint64_t(i) + 1u, light_properties(light));
     }
     for (const auto &cube : world->instances)
-        if (cube.mesh_id == ::scene::unit_cube_mesh_id)
-            ui.set_properties(editor_cube_ids + cube.id, cube_properties(cube));
+        if((!cube.editor_group || cube.id==cube.editor_group) &&
+           (cube.mesh_id==::scene::ground_mesh_id ||
+            cube.mesh_id==::scene::unit_cube_mesh_id ||
+            cube.mesh_id==::scene::unit_sphere_mesh_id ||
+            cube.editor_group))
+            ui.set_properties(editor_cube_ids+cube.id,geometry_properties(cube));
 
 }
 
@@ -348,7 +395,12 @@ int main(int argc, char **argv)
         }
 
         clt::weapon::register_weapon(game_weapons::make());
-        editor::instance().set_catalog({{"light", "Light", "Lighting"}, {"cube", "Cube", "Geometry"}});
+        editor::instance().set_catalog({
+            {"light","Light","Lighting"},
+            {"cube","Cube","Geometry"},
+            {"sphere","Sphere","Geometry"},
+            {"mermaid","Mermaid","Geometry"}
+        });
         net::socket::init();
         std::signal(SIGINT, stop);
         std::signal(SIGTERM, stop);

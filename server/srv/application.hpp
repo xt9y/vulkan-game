@@ -47,6 +47,7 @@ struct state
     std::uint32_t editor_cube_revision = 1;
     std::uint32_t next_cube_id = 0x80000000u;
     std::vector<model_request> models;
+    std::vector<::scene::instance> mermaid_template;
 
     bool scene_configured = false;
 
@@ -147,10 +148,14 @@ void set_scene(::scene::state scene)
     get()->editor_light_versions.assign(get()->scene.lights.size(), 1u);
     get()->editor_light_revision = 1;
     get()->editor_cubes.clear();
+    get()->mermaid_template.clear();
     get()->editor_cube_revision = 1;
     get()->next_cube_id = 0x80000000u;
     for (const auto &instance : get()->scene.instances) {
-        if (instance.mesh_id != ::scene::unit_cube_mesh_id) continue;
+        if (instance.mesh_id != ::scene::ground_mesh_id &&
+            instance.mesh_id != ::scene::unit_cube_mesh_id &&
+            instance.mesh_id != ::scene::unit_sphere_mesh_id &&
+            !instance.editor_group)continue;
         net::editor_cube::resource update{};
         update.index = instance.id;
         update.cube = instance;
@@ -218,7 +223,10 @@ void init()
                 for (const auto& mesh : get()->scene.meshes)
                     mesh_id = std::max(mesh_id, mesh.id + 1);
                 for (const auto& instance : get()->scene.instances)
-                    instance_id = std::max(instance_id, instance.id + 1);
+                    // Runtime editor IDs occupy the upper half of the space.
+                    // Imported prefab IDs must not jump into that range.
+                    if(instance.id<0x80000000u)
+                        instance_id=std::max(instance_id,instance.id+1);
                 for (const auto& texture : get()->scene.textures)
                     texture_id = std::max(texture_id, texture.id + 1);
                 for (const auto& skin : get()->scene.skins)
@@ -228,6 +236,13 @@ void init()
 auto imported = assets::load(request.path, mesh_id, instance_id, texture_id, skin_id);
                     if (imported.meshes.empty())
                         throw std::runtime_error("Model has no renderable meshes: " + request.path.string());
+                    // The mermaid is one selectable prefab even when its
+                    // source GLB contains several distinct materials/meshes.
+                    if(request.path.filename()=="mermaid.glb" &&
+                       !imported.instances.empty()) {
+                        const auto root=imported.instances.front().id;
+                        for(auto& inst:imported.instances)inst.editor_group=root;
+                    }
                     for (auto& instance : imported.instances) {
 const auto mesh = std::find_if(imported.meshes.begin(), imported.meshes.end(), [&](const ::scene::mesh& entry) { return entry.id == instance.mesh_id; });
                         if (mesh == imported.meshes.end())
@@ -257,6 +272,10 @@ combined.textures.insert(combined.textures.end(), std::make_move_iterator(import
 combined.skins.insert(combined.skins.end(), std::make_move_iterator(imported.skins.begin()), std::make_move_iterator(imported.skins.end()));
                 }
                 return [imported = std::make_shared<::scene::state>(std::move(combined))]() mutable {
+                    auto& template_instances=get()->mermaid_template;
+                    template_instances.clear();
+                    for(const auto& inst:imported->instances)
+                        if(inst.editor_group)template_instances.push_back(inst);
                     get()->importing = std::move(imported);
                     get()->import_cursor={};
                 }; }))
@@ -294,6 +313,14 @@ void append_scene(::scene::state patch, bool final)
 
     auto added_colliders = player::build_colliders(data.scene.meshes, patch.instances);
 
+    for(const auto& instance:patch.instances)
+        if(instance.editor_group) {
+            net::editor_cube::resource update{};
+            update.index=instance.id;
+            update.cube=instance;
+            update.sequence=update.revision=1;
+            data.editor_cubes.emplace(instance.id,update);
+        }
     append(data.scene.instances, patch.instances);
     append(data.scene.collision_boxes, patch.collision_boxes);
     data.editor_light_versions.insert(data.editor_light_versions.end(),
@@ -361,7 +388,7 @@ int run()
                     ++get()->import_cursor[state::mesh_slot];
                 }
                 else if (get()->import_cursor[state::instance_slot] < imported.instances.size()) {
-                    size = 80;
+                    size = 108; // Serialized instance including editor group.
                     if (!fits(size)) break;
                     patch.instances.push_back(std::move(imported.instances[get()->import_cursor[state::instance_slot]++]));
                 }
@@ -408,6 +435,7 @@ void shutdown() noexcept
     get()->weapon = {};
     get()->scene = {};
     get()->editor_cubes.clear();
+    get()->mermaid_template.clear();
     get()->editor_light_versions.clear();
     get()->editor_light_revision = 1;
     get()->models.clear();
@@ -530,44 +558,110 @@ void handle_editor_cube(const net::endpoint::resource &peer, const net::editor_c
             (client.editor_cube_sequence && command.sequence - client.editor_cube_sequence > 256u))) return;
         if (!duplicate) {
             resource changed{};
-            if (command.type == kind::create) {
-                if (data.editor_cubes.size() >= max_cubes || data.next_cube_id == UINT32_MAX ||
-                    std::none_of(data.scene.meshes.begin(), data.scene.meshes.end(), [](const auto &m) { return m.id == ::scene::unit_cube_mesh_id; })) return;
-                changed = command;
-                changed.index = data.next_cube_id++;
-                changed.cube.id = changed.index;
-                changed.cube.mesh_id = ::scene::unit_cube_mesh_id;
-                changed.enabled = true;
+            const bool insert_mermaid=command.type==kind::create &&
+                command.cube.mesh_id==::scene::mermaid_insert_mesh_id;
+            if(command.type==kind::create) {
+                const std::size_t needed=insert_mermaid ?
+                    data.mermaid_template.size():1u;
+                if(needed==0 || data.editor_cubes.size()+needed>max_cubes ||
+                   data.next_cube_id>UINT32_MAX-needed ||
+                   (!insert_mermaid &&
+                    command.cube.mesh_id!=::scene::unit_cube_mesh_id &&
+                    command.cube.mesh_id!=::scene::unit_sphere_mesh_id) ||
+                   (!insert_mermaid &&
+                    std::none_of(data.scene.meshes.begin(),data.scene.meshes.end(),
+                        [&](const auto& m){return m.id==command.cube.mesh_id;})))
+                    return;
+                changed=command;
+                changed.index=data.next_cube_id++;
+                changed.cube.id=changed.index;
+                // Only a validated imported prefab may carry group metadata.
+                changed.cube.editor_group=0;
+                if(insert_mermaid) {
+                    // All prefab primitives remain separate for their own
+                    // GLB textures, while one root owns the editor controls.
+                    changed.cube=data.mermaid_template.front();
+                    changed.cube.id=changed.index;
+                    changed.cube.editor_group=changed.index;
+                    changed.cube.pose=command.cube.pose;
+                }
+                changed.enabled=true;
             }
             else {
-                const auto found = data.editor_cubes.find(command.index);
-                if (found == data.editor_cubes.end() || !found->second.enabled) return;
-                changed = found->second;
-                if (command.type == kind::remove) changed.enabled = false;
-                else if (!set_property(changed.cube, command.revision, command.value)) return;
+                const auto found=data.editor_cubes.find(command.index);
+                if(found==data.editor_cubes.end() || !found->second.enabled)return;
+                changed=found->second;
+                if(command.type==kind::remove)changed.enabled=false;
+                else if(!set_property(changed.cube,command.revision,command.value))
+                    return;
             }
-            const auto old = data.editor_cubes.find(changed.index);
-            const bool physical = old == data.editor_cubes.end() || old->second.enabled != changed.enabled ||
-                                  !::scene::same_pose(old->second.cube, changed.cube);
-            changed.type = kind::state;
-            changed.sequence = changed.revision = ++data.editor_cube_revision;
-            if (!changed.sequence) changed.sequence = changed.revision = ++data.editor_cube_revision;
-            changed.value = 0;
-            data.editor_cubes[changed.index] = changed;
-            apply_state(data.scene, changed);
-            if (physical) {
-                data.colliders = player::build_colliders(data.scene);
-                data.collision_index = player::build_index(data.colliders);
-                data.weapon_world = {};
-                ::weapon::append(data.weapon_world, data.scene.meshes, data.scene.instances);
+            const auto previous=data.editor_cubes.find(changed.index);
+            const bool physical=previous==data.editor_cubes.end() ||
+                previous->second.enabled!=changed.enabled ||
+                !::scene::same_pose(previous->second.cube,changed.cube);
+            changed.type=kind::state;
+            changed.sequence=changed.revision=++data.editor_cube_revision;
+            if(!changed.sequence)
+                changed.sequence=changed.revision=++data.editor_cube_revision;
+            changed.value=0;
+            std::vector<resource> updates{changed};
+            if(insert_mermaid) {
+                const auto& original=data.mermaid_template.front();
+                for(std::size_t i=1;i<data.mermaid_template.size();++i) {
+                    auto copy=changed;
+                    copy.index=data.next_cube_id++;
+                    copy.cube=data.mermaid_template[i];
+                    copy.cube.id=copy.index;
+                    copy.cube.editor_group=changed.index;
+                    copy.cube.pose.position=changed.cube.pose.position+
+                        (copy.cube.pose.position-original.pose.position);
+                    copy.cube.pose.scale=changed.cube.pose.scale;
+                    copy.cube.pose.rotation=changed.cube.pose.rotation;
+                    copy.cube.rotation_reference=changed.cube.rotation_reference;
+                    updates.push_back(copy);
+                }
             }
-            client.editor_cube_sequence = command.sequence;
-            client.editor_cube_index = changed.index;
-            for (const auto &recipient : session::get()->clients) {
-                if (!recipient.active) continue;
-                changed.token = recipient.token;
-                const auto bytes = encode(changed);
-                net::secure::send(data.socket, recipient.endpoint, bytes.data(), bytes.size());
+            else if(changed.cube.editor_group) {
+                // One edit applies to every GLB primitive in the same
+                // imported model without combining their PBR materials.
+                const auto before=previous->second.cube.pose;
+                for(const auto& [id,stored]:data.editor_cubes) {
+                    if(id==changed.index ||
+                       stored.cube.editor_group!=changed.cube.editor_group)
+                        continue;
+                    auto part=stored;
+                    part.enabled=changed.enabled;
+                    part.type=kind::state;
+                    part.revision=part.sequence=changed.revision;
+                    part.cube.pose.position=stored.cube.pose.position+
+                        (changed.cube.pose.position-before.position);
+                    part.cube.pose.scale=changed.cube.pose.scale;
+                    part.cube.pose.rotation=changed.cube.pose.rotation;
+                    part.cube.rotation_reference=changed.cube.rotation_reference;
+                    updates.push_back(part);
+                }
+            }
+            for(auto& update:updates) {
+                data.editor_cubes[update.index]=update;
+                apply_state(data.scene,update);
+            }
+            if(physical) {
+                data.colliders=player::build_colliders(data.scene);
+                data.collision_index=player::build_index(data.colliders);
+                data.weapon_world={};
+                ::weapon::append(data.weapon_world,data.scene.meshes,
+                                 data.scene.instances);
+            }
+            client.editor_cube_sequence=command.sequence;
+            client.editor_cube_index=changed.index;
+            for(const auto& recipient:session::get()->clients) {
+                if(!recipient.active)continue;
+                for(auto update:updates) {
+                    update.token=recipient.token;
+                    const auto bytes=encode(update);
+                    net::secure::send(data.socket,recipient.endpoint,
+                                      bytes.data(),bytes.size());
+                }
             }
         }
         const auto found = data.editor_cubes.find(client.editor_cube_index);

@@ -47,7 +47,11 @@ void main()
         bool magenta = ((tile.x + tile.y) & 1) != 0;
         base.rgb = magenta ? vec3(1.0, 0.0, 1.0) : vec3(0.0);
     }
-    if (instance_tint.w > 0.5)
+    // Both glass and mirrors are resolved in the separate optical pass.
+    // Do not write either into the opaque G-buffer: doing so causes
+    // double layers, hides nested optics, and duplicates reflections.
+    if (instance_tint.w >= 2.0 && instance_tint.w < 4.0) discard;
+    if (instance_tint.w > 0.5 && instance_tint.w < 1.5)
     {
         // Face-local checker covers all six faces and rotates with the cube.
         ivec2 tile = ivec2(floor(uv * 4.0));

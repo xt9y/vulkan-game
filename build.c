@@ -21,20 +21,42 @@ static const pc_build_paths paths={
 static void compile_shaders(void)
 {
     if(pc_build_compile_shaders(paths,"build/shaders"))exit(1);
-    const char* shaders[]={"shd/mesh.vert","shd/mesh.frag","shd/cull.comp"};
+    const char* shaders[]={"shd/mesh.vert","shd/mesh.frag",
+        "shd/optics.frag","shd/cull.comp",
+        "third-party/vulkan-systems/optics/optics/shaders/compose.frag",
+        "third-party/vulkan-systems/pmap/shaders/photon_clear.comp",
+        "third-party/vulkan-systems/pmap/shaders/photon_emit.comp",
+        "third-party/vulkan-systems/pmap/shaders/photon_bin.comp",
+        "third-party/vulkan-systems/pmap/shaders/photon_prefix.comp",
+        "third-party/vulkan-systems/pmap/shaders/photon_scatter.comp"};
     for(size_t i=0;i<sizeof(shaders)/sizeof(*shaders);++i)
     {
         const char* name=strrchr(shaders[i],'/');
         char output[256],command[640];
         struct stat source,binary;
-        snprintf(output,sizeof(output),"build/shaders/%s.spv",name?name+1:shaders[i]);
+        snprintf(output,sizeof(output),"build/shaders/%s%s.spv",
+                 strstr(shaders[i],"/optics/")?"optics_":
+                 strstr(shaders[i],"/pmap/shaders/")?"pmap_":"",
+                 name?name+1:shaders[i]);
         if(stat(shaders[i],&source))
         {
             fprintf(stderr,"Missing shader: %s\n",shaders[i]);
             exit(1);
         }
-        if(!stat(output,&binary) && binary.st_mtime>=source.st_mtime)continue;
-        snprintf(command,sizeof(command),"glslangValidator -V \"%s\" -o \"%s\"",
+        const char* pmap_header="third-party/vulkan-systems/pmap/shaders/photon_scene.glsl";
+        const char* optics_header="third-party/vulkan-systems/optics/optics/shaders/raytrace.glsl";
+        const int pmap=strstr(shaders[i],"/pmap/shaders/")!=NULL;
+        const int optics=strstr(shaders[i],"/optics/optics/shaders/compose.frag")!=NULL;
+        struct stat include;
+        if(!stat(output,&binary) && binary.st_mtime>=source.st_mtime &&
+           (!pmap || (!stat(pmap_header,&include) &&
+                      binary.st_mtime>=include.st_mtime)) &&
+           (!optics || (!stat(optics_header,&include) &&
+                        binary.st_mtime>=include.st_mtime)))continue;
+        snprintf(command,sizeof(command),
+                 "glslangValidator -V %s\"%s\" -o \"%s\"",
+                 pmap?"-Ithird-party/vulkan-systems/pmap/shaders ":
+                 optics?"-Ithird-party/vulkan-systems/optics/optics/shaders ":"",
                  shaders[i],output);
         if(system(command))
         {
@@ -121,6 +143,12 @@ void build(C_Build* b)
     const pc_build_targets pc=pc_build_register(b,wrapper,paths);
     C_Target* network=make_module(b,"VulkanNetwork","network",NULL);
     C_Target* editor=make_module(b,"VulkanEditor","editor",wrapper);
+    C_Target* optics=make_module(b,"VulkanOptics","optics",wrapper);
+    C_Target* pmap=make_module(b,"VulkanPMap","pmap",wrapper);
+    c_link_target(pmap,pc.gpu);
+    c_link_target(pmap,pc.bvh);
+    c_link_target(optics,pc.render);
+    c_link_target(optics,pc.gpu);
 
     C_Dependency* crypto=c_git(b,"MbedTLS",
         "https://github.com/Mbed-TLS/mbedtls.git",
@@ -198,6 +226,10 @@ void build(C_Build* b)
     C_Target* client=c_executable(b,"vulkan-client");
     c_sources(client,"client/client.cpp");
     game_includes(client);
+    c_include(client,"third-party/vulkan-systems/optics");
+    c_include(client,"third-party/vulkan-systems/pmap");
+    c_link_target(client,optics);
+    c_link_target(client,pmap);
     c_link_target(client,editor);
     pc_build_link(client,pc,wrapper);
     c_link_target(client,network);
