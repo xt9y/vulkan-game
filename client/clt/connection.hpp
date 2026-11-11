@@ -266,6 +266,18 @@ bool send_editor_light(net::editor_light::resource command)
     auto &data = *get();
     std::lock_guard<std::mutex> lock(data.editor_mutex);
 
+    // Replace only unsent consecutive edits to the same property.
+    // Never mutate the in-flight front packet or skip a sequence number.
+    if(data.editor_outgoing.size()>1 &&
+       command.type==net::editor_light::kind::edit) {
+        auto& last=data.editor_outgoing.back();
+        if(last.type==command.type && last.index==command.index &&
+           last.revision==command.revision) {
+            command.sequence=last.sequence;
+            last=command;
+            return true;
+        }
+    }
     if (data.editor_outgoing.size() >= 64) return false;
     command.sequence = ++data.editor_sequence;
 
@@ -283,6 +295,15 @@ bool send_editor_cube(net::editor_cube::resource command)
         !valid(command.cube) || !get()->connected.load(std::memory_order_relaxed)) return false;
     auto &data = *get();
     std::lock_guard lock(data.editor_mutex);
+    if(data.cube_outgoing.size()>1 && command.type==kind::edit) {
+        auto& last=data.cube_outgoing.back();
+        if(last.type==command.type && last.index==command.index &&
+           last.revision==command.revision) {
+            command.sequence=last.sequence;
+            last=command;
+            return true;
+        }
+    }
     if (data.cube_outgoing.size() >= 64) return false;
     command.sequence = ++data.cube_sequence;
     if (!command.sequence) command.sequence = ++data.cube_sequence;
