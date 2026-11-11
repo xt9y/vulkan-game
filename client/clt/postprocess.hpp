@@ -249,9 +249,7 @@ std::shared_ptr<pc::world> prepare_world(const ::scene::state *source)
 
         const auto transformed=[&](const ::scene::vertex& vertex) {
             const vec3 p=palette.empty()?vertex.position:skin_vertex(vertex,palette).position;
-            const auto scale=instance.pose.scale;
-            return instance.pose.position+rotate(instance.pose.rotation,
-                {p.x*scale.x,p.y*scale.y,p.z*scale.z});
+            return ::scene::transform_position(instance.pose,p);
         };
 
         std::vector<vec3> positions;
@@ -319,9 +317,7 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
         if(mesh.surface.alpha_mode==2 && !mesh.surface.base_color_texture &&
            mesh.surface.base_color[3]<.42f)return;
         const auto transform=[&](vec3 p) {
-            const auto& scale=inst.pose.scale;
-            return inst.pose.position+rotate(inst.pose.rotation,
-                {p.x*scale.x,p.y*scale.y,p.z*scale.z});
+            return ::scene::transform_position(inst.pose,p);
         };
         for(std::size_t i=0;i+2<mesh.indices.size();i+=3) {
             const auto ia=mesh.indices[i],ib=mesh.indices[i+1],ic=mesh.indices[i+2];
