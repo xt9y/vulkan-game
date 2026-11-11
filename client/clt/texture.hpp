@@ -1,5 +1,6 @@
 #pragma once
 #include "../../server/scene.hpp"
+#include "../../server/net/scene_stream.hpp"
 #include <climits>
 #include <gpu/texture_cache.hpp>
 #include <gpu/upload.hpp>
@@ -30,22 +31,16 @@ void upload(const ::scene::texture &texture, gpu::upload::batch &batch)
     const auto hash = net::scene_stream::checksum(bytes);
 
     if (cache.contains(texture.id, hash)) return;
-    std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> decoded(nullptr, stbi_image_free);
-
-    const stbi_uc *pixels = texture.pixels.data();
-
-    if (texture.pixels.empty()) {
-        int width = 0, height = 0, channels = 0;
-
-        if (texture.encoded.empty() || texture.encoded.size() > INT_MAX)
-            throw std::runtime_error("Missing local texture data");
-        decoded.reset(stbi_load_from_memory(texture.encoded.data(), int(texture.encoded.size()), &width, &height, &channels, 4));
-
-        if (!decoded || width != int(texture.width) || height != int(texture.height))
-            throw std::runtime_error("Invalid local texture dimensions");
-        pixels = decoded.get();
-    }
-    else if (!texture.width || !texture.height || texture.pixels.size() != std::size_t(texture.width) * texture.height * 4u)
+    net::scene_stream::decoded_rgba decoded;
+    const stbi_uc* pixels=texture.pixels.data();
+    if(texture.pixels.empty()) {
+        decoded=net::scene_stream::decode_rgba(
+            texture.encoded.data(),texture.encoded.size(),
+            int(texture.width),int(texture.height));
+        if(!decoded)throw std::runtime_error("Invalid local texture dimensions");
+        pixels=decoded.pixels.get();
+    } else if(!texture.width || !texture.height ||
+              texture.pixels.size()!=std::size_t(texture.width)*texture.height*4u)
         throw std::runtime_error("Invalid texture pixel count");
     cache.upsert(texture.id, hash, pixels, texture.width, texture.height, batch);
 }
