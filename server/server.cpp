@@ -190,9 +190,6 @@ int main(int argc, char **argv)
         game::options::state settings{};
         settings.bind_host = "0.0.0.0";
         settings.port = 27015;
-        settings.duration = 0;
-        settings.headless = false;
-        settings.help = false;
         game::options::init(argc, argv, game::options::mode::server_only, std::move(settings));
 
         if (game::options::get()->help) {
