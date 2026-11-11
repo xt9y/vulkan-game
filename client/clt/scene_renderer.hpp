@@ -1043,6 +1043,7 @@ void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame &c
 
         data.skinned.clear();
         const bool needs_mirror_skin=has_optics() &&
+            !planar_reflection(camera).has_value() &&
             !optical_rects(camera).empty();
         for (auto &mesh : data.meshes)
         {
