@@ -357,46 +357,36 @@ int run()
             ::scene::state patch;
             constexpr std::size_t target_bytes = 4 * 1024 * 1024;
             std::size_t used = 20;
-            auto fits = [&](std::size_t size)
-            {
-                return used == 20 || size <= target_bytes - used;
+            // Stream each asset category in wire order, respecting the same
+            // per-tick byte budget and allowing one oversized first item.
+            auto drain=[&](auto& src,auto& dst,std::size_t slot,auto measure) {
+                auto& cursor=get()->import_cursor[slot];
+                while(cursor<src.size() && used<target_bytes) {
+                    const std::size_t bytes=measure(src[cursor]);
+                    if(used!=20 && bytes>target_bytes-used)return false;
+                    dst.push_back(std::move(src[cursor++]));
+                    used+=bytes;
+                }
+                return true;
             };
-            while (true)
-            {
-                std::size_t size = 0;
-                if (get()->import_cursor[state::texture_slot] < imported.textures.size()) {
-                    auto &texture = imported.textures[get()->import_cursor[state::texture_slot]];
-                    size = 20 + (texture.encoded.empty() ? texture.pixels.size() : texture.encoded.size());
-                    if (!fits(size)) break;
-                    patch.textures.push_back(std::move(texture));
-                    ++get()->import_cursor[state::texture_slot];
-                }
-                else if (get()->import_cursor[state::skin_slot] < imported.skins.size()) {
-                    auto &skin = imported.skins[get()->import_cursor[state::skin_slot]];
-                    size = 16 + skin.skeleton.size() + skin.inverse_bind.size() * 64;
-                    for (const auto &clip : skin.clips)
-                        size += 8 + clip.name.size() + clip.bytes.size();
-                    if (!fits(size)) break;
-                    patch.skins.push_back(std::move(skin));
-                    ++get()->import_cursor[state::skin_slot];
-                }
-                else if (get()->import_cursor[state::mesh_slot] < imported.meshes.size()) {
-                    auto &mesh = imported.meshes[get()->import_cursor[state::mesh_slot]];
-                    size = 96 + mesh.vertices.size() * (mesh.skin_id ? 64 : 32) + mesh.indices.size() * 4;
-                    if (!fits(size)) break;
-                    patch.meshes.push_back(std::move(mesh));
-                    ++get()->import_cursor[state::mesh_slot];
-                }
-                else if (get()->import_cursor[state::instance_slot] < imported.instances.size()) {
-                    size = 108; // Serialized instance including editor group.
-                    if (!fits(size)) break;
-                    patch.instances.push_back(std::move(imported.instances[get()->import_cursor[state::instance_slot]++]));
-                }
-                else
-                    break;
-                used += size;
-                if (used >= target_bytes) break;
-            }
+            const auto texture_bytes=[](const auto& t) {
+                return 20+(t.encoded.empty()?t.pixels.size():t.encoded.size());
+            };
+            const auto skin_bytes=[](const auto& skin) {
+                std::size_t bytes=16+skin.skeleton.size()+skin.inverse_bind.size()*64;
+                for(const auto& clip:skin.clips)
+                    bytes+=8+clip.name.size()+clip.bytes.size();
+                return bytes;
+            };
+            const auto mesh_bytes=[](const auto& mesh) {
+                return 96+mesh.vertices.size()*(mesh.skin_id?64u:32u)+
+                    mesh.indices.size()*4u;
+            };
+            drain(imported.textures,patch.textures,state::texture_slot,texture_bytes) &&
+            drain(imported.skins,patch.skins,state::skin_slot,skin_bytes) &&
+            drain(imported.meshes,patch.meshes,state::mesh_slot,mesh_bytes) &&
+            drain(imported.instances,patch.instances,state::instance_slot,
+                [](const auto&){return std::size_t(108);});
             const bool final = get()->import_cursor[state::texture_slot] == imported.textures.size() && get()->import_cursor[state::skin_slot] == imported.skins.size() && get()->import_cursor[state::mesh_slot] == imported.meshes.size() && get()->import_cursor[state::instance_slot] == imported.instances.size();
             if (!patch.textures.empty() || !patch.skins.empty() || !patch.meshes.empty() || !patch.instances.empty())
                 append_scene(std::move(patch), final);
