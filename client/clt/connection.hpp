@@ -574,51 +574,45 @@ void run(const std::string &host, std::uint16_t port)
                     break;
 
                 if (!net::endpoint::equal(peer, server)) continue;
-                if (const auto update = net::editor_cube::decode(buffer.data(), *size)) {
-                    if (update->token == token && data.connected.load(std::memory_order_relaxed) &&
-                        (update->type == net::editor_cube::kind::state || update->type == net::editor_cube::kind::ack)) {
-                        if (update->type == net::editor_cube::kind::ack) {
-                            std::lock_guard lock(data.editor_mutex);
-                            if (!data.cube_outgoing.empty() && data.cube_outgoing.front().sequence == update->sequence)
-                                data.cube_outgoing.pop_front();
+                const auto accept_editor=[&](const auto& update,auto& queue,
+                                             auto apply,const char* label) {
+                    if(update.token!=token ||
+                       !data.connected.load(std::memory_order_relaxed) ||
+                       (update.type!=net::editor_light::kind::state &&
+                        update.type!=net::editor_light::kind::ack))return;
+                    if(update.type==net::editor_light::kind::ack) {
+                        std::lock_guard lock(data.editor_mutex);
+                        if(!queue.empty() && queue.front().sequence==update.sequence) {
+                            queue.pop_front();
+                            if(label)std::clog<<"clt: editor "<<label<<" "<<update.index
+                                              <<" confirmed by server\n";
                         }
-                        {
-                            std::lock_guard lock(data.scene_mutex);
-                            const auto found = data.cube_states.find(update->index);
-                            if ((found == data.cube_states.end() && data.cube_states.size() < net::editor_cube::max_cubes) ||
-                                (found != data.cube_states.end() && net::message::newer(update->revision, found->second.revision))) {
-                                data.cube_states[update->index] = *update;
-                                data.cubes_dirty = true;
-                            }
-                        }
-                        last_received = now;
                     }
+                    std::lock_guard lock(data.scene_mutex);
+                    apply(update);
+                    last_received=now;
+                };
+                if(const auto update=net::editor_cube::decode(buffer.data(),*size)) {
+                    accept_editor(*update,data.cube_outgoing,[&](const auto& v) {
+                        const auto it=data.cube_states.find(v.index);
+                        if((it==data.cube_states.end() &&
+                            data.cube_states.size()<net::editor_cube::max_cubes) ||
+                           (it!=data.cube_states.end() &&
+                            net::message::newer(v.revision,it->second.revision))) {
+                            data.cube_states[v.index]=v;
+                            data.cubes_dirty=true;
+                        }
+                    },nullptr);
                     continue;
                 }
-                if (const auto update = net::editor_light::decode(buffer.data(), *size)) {
-                    if (update->token == token && data.connected.load(std::memory_order_relaxed) && (update->type == net::editor_light::kind::state || update->type == net::editor_light::kind::ack)) {
-                        if (update->type == net::editor_light::kind::ack) {
-                            std::lock_guard<std::mutex> lock(data.editor_mutex);
-
-                            if (!data.editor_outgoing.empty() && data.editor_outgoing.front().sequence == update->sequence) {
-                                data.editor_outgoing.pop_front();
-                                std::clog << "clt: editor light " << update->index
-                                          << " confirmed by server\n";
-                            }
+                if(const auto update=net::editor_light::decode(buffer.data(),*size)) {
+                    accept_editor(*update,data.editor_outgoing,[&](const auto& v) {
+                        auto& revision=data.light_versions[v.index];
+                        if(net::message::newer(v.revision,revision)) {
+                            revision=v.revision;
+                            data.light_pending[v.index]=v;
                         }
-                        {
-                            std::lock_guard<std::mutex> lock(data.scene_mutex);
-                            auto &revision = data.light_versions[update->index];
-
-                            if (net::message::newer(update->revision, revision)) {
-                                revision = update->revision;
-                                data.light_pending[update->index] = *update;
-                            }
-                        }
-
-                        last_received = now;
-                    }
-
+                    },"light");
                     continue;
                 }
 
