@@ -15,6 +15,8 @@
 
 namespace clt::application
 {
+inline constexpr int restart_code = 80;
+
 struct state
 {
     bool initialized = false;
@@ -88,6 +90,7 @@ int run()
     prediction::init();
     pc::set_exposure(game::options::get()->graphics.exposure);
     renderer::init(game::options::get()->graphics.vertex_shader.c_str(), game::options::get()->graphics.fragment_shader.c_str());
+    bool restart_requested=false;
     std::atomic<bool> render_stop{false};
     std::exception_ptr render_error;
     std::thread render_thread([&]
@@ -113,7 +116,8 @@ int run()
 
             const auto frame = input::poll();
 
-            static std::array<bool, 8> held{};
+            static std::array<bool, 10> held{};
+            static std::array<clock::time_point,4> repeat_at{};
 
             const auto pressed = [](int key, std::size_t index)
             {
@@ -124,6 +128,27 @@ int run()
                 return edge;
             };
 
+            const auto repeating = [&](int key,std::size_t index) {
+                const bool down=input::key_down(key);
+                const bool edge=pressed(key,index);
+                auto& next=repeat_at[index-4];
+                if(!down) {next={};return false;}
+                const auto now=clock::now();
+                if(edge) {
+                    next=now+std::chrono::milliseconds(250);
+                    return true;
+                }
+                if(now>=next) {
+                    next=now+std::chrono::milliseconds(40);
+                    return true;
+                }
+                return false;
+            };
+            if(pressed(GLFW_KEY_0,8) || pressed(GLFW_KEY_KP_0,9)) {
+                restart_requested=true;
+                break;
+            }
+
             editor::input events{};
             events.question = typed_question.exchange(false, std::memory_order_relaxed);
             events.tab = pressed(GLFW_KEY_TAB, 0);
@@ -132,11 +157,13 @@ int run()
             const bool keypad_enter = pressed(GLFW_KEY_KP_ENTER, 2);
             events.enter = main_enter || keypad_enter;
             events.escape = pressed(GLFW_KEY_ESCAPE, 3);
-            events.up = pressed(GLFW_KEY_UP, 4);
-            events.down = pressed(GLFW_KEY_DOWN, 5);
-            events.left = pressed(GLFW_KEY_LEFT, 6);
-            events.right = pressed(GLFW_KEY_RIGHT, 7);
+            events.up = repeating(GLFW_KEY_UP, 4);
+            events.down = repeating(GLFW_KEY_DOWN, 5);
+            events.left = repeating(GLFW_KEY_LEFT, 6);
+            events.right = repeating(GLFW_KEY_RIGHT, 7);
             events.shift = input::key_down(GLFW_KEY_LEFT_SHIFT) || input::key_down(GLFW_KEY_RIGHT_SHIFT);
+            events.command = input::key_down(GLFW_KEY_LEFT_SUPER) ||
+                             input::key_down(GLFW_KEY_RIGHT_SUPER);
 
             static bool mouse_held = false;
             const bool mouse_down = input::mouse_down(GLFW_MOUSE_BUTTON_LEFT);
@@ -193,7 +220,7 @@ int run()
     if (render_error)
         std::rethrow_exception(render_error);
 
-    return 0;
+    return restart_requested?restart_code:0;
 }
 
 void shutdown() noexcept
