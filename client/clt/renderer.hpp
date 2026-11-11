@@ -26,7 +26,7 @@ struct state
     ::render::frame_scheduler frames;
     ::render::sequence passes;
     gpu::timestamps timings;
-    std::array<double, 7> gpu_ms{};
+    std::array<double, 9> gpu_ms{};
     std::array<double,120> present_history{};
     std::size_t completed_samples=0;
     std::uint64_t next_submission=0;
@@ -245,7 +245,7 @@ void resize()
     postprocess::synchronize_scene();
     data.passes.resize(vk::swapchain::get()->images.size());
     data.frames.resize(vk::swapchain::get()->size);
-    data.timings.create(static_cast<std::uint32_t>(vk::swapchain::get()->images.size()), 7, data.timestamps_supported);
+    data.timings.create(static_cast<std::uint32_t>(vk::swapchain::get()->images.size()), 9, data.timestamps_supported);
     data.submitted_ids.assign(vk::swapchain::get()->images.size(),0);
     data.read_ids.assign(vk::swapchain::get()->images.size(),0);
     data.next_submission=0;
@@ -309,7 +309,9 @@ void draw_frame()
                   // not reflect actual fragment execution cost. Use the
                   // full presentation interval and OPTICS_PROFILE_DISABLE
                   // to measure the real difference on Metal.
-                  << " optics_inner_stamp=" << data.gpu_ms[6] << '\n';
+                  << " optics_inner_stamp=" << data.gpu_ms[6]
+                  << " mirror_light=" << data.gpu_ms[7]
+                  << " mirror_tonemap=" << data.gpu_ms[8] << '\n';
     }
 
     gpu::upload::retire();
