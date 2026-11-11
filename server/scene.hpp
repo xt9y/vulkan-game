@@ -133,6 +133,9 @@ struct state
     std::vector<instance> instances;
     std::vector<collision_box> collision_boxes;
     std::vector<point_light> lights;
+    // Client-local immutable asset generation. Deliberately not serialized:
+    // increments only when scene mesh/texture payloads arrive.
+    std::uint64_t atlas_revision=0;
 };
 inline bool same_pose(const instance &a, const instance &b)
 {
