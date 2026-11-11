@@ -26,10 +26,18 @@ namespace {
 std::unique_ptr<optics::compositor> material_compositor;
 std::unique_ptr<pm::mapper> photon_transport;
 bool transport_pending=false;
+struct skinned_face {
+    std::uint32_t face=0;
+    const ::scene::instance* instance=nullptr;
+    const ::scene::mesh* mesh=nullptr;
+    std::array<std::uint32_t,3> indices{};
+};
+std::vector<skinned_face> skinned_faces;
 }
 void create();
 void synchronize_scene();
 void release();
+void update_skinned(std::uint32_t frame);
 void present(vk::CommandBuffer command, std::uint32_t image,
              const camera::frame &view,const gpu::timestamps* timings);
 
@@ -309,6 +317,7 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
     pm::scene result{};
     faces.clear();
     normals.clear();
+    skinned_faces.clear();
     result.omnidirectional_emitter=true;
     std::unordered_map<std::uint32_t,const ::scene::mesh*> meshes;
     meshes.reserve(world.meshes.size());
@@ -354,6 +363,11 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
                 surface.optical_strength=inst.optical_strength;
                 surface.roughness=inst.optical_mattness;
             }
+            if(mesh.skin_id)
+                skinned_faces.push_back({
+                    std::uint32_t(result.surfaces.size()),&inst,&mesh,
+                    {ia,ib,ic}
+                });
             result.surfaces.push_back(surface);
             // Match the primary mesh vertex shader: inverse transpose
             // under nonuniform scaling, then rotate into world space.
@@ -535,6 +549,7 @@ void synchronize_scene()
     // buffers. synchronize_scene is called only when the renderer is idle.
     if(material_compositor)material_compositor->set_scene({},lights);
     photon_transport.reset();
+    skinned_faces.clear();
     transport_pending=false;
     if(source && std::any_of(source->instances.begin(),source->instances.end(),
         [](const auto& inst){return inst.pattern==2u || inst.pattern==3u;})) {
@@ -577,6 +592,7 @@ void release()
 {
     material_compositor.reset();
     photon_transport.reset();
+    skinned_faces.clear();
     transport_pending=false;
     pc::release();
     registered.reset();
