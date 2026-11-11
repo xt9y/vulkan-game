@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <gpu/culler.hpp>
 #include <gpu/descriptors.hpp>
@@ -390,6 +391,10 @@ bool has_optics()
 // the original ray tracer and its multi-bounce behavior.
 std::optional<planar_view> planar_reflection(const camera::frame& camera)
 {
+    // Compare exact rasterized planar mirrors with the original per-pixel
+    // BVH path without changing the world or shader build.
+    static const bool disabled=std::getenv("OPTICS_PLANAR_DISABLE")!=nullptr;
+    if(disabled)return std::nullopt;
     const auto& scene=get().snapshot;
     if(!scene)return std::nullopt;
     const ::scene::instance* mirror=nullptr;
