@@ -94,32 +94,21 @@ collision_world build_colliders(const std::vector<::scene::mesh> &meshes, std::s
     collision_world boxes;
     boxes.reserve(instances.size());
 
-    std::unordered_map<std::uint32_t,const ::scene::mesh*> by_id;
-    by_id.reserve(meshes.size());
-    for(const auto& mesh:meshes)by_id.emplace(mesh.id,&mesh);
-    for (const auto &instance : instances)
-    {
-        const auto it=by_id.find(instance.mesh_id);
-        if(it==by_id.end() || it->second->vertices.empty())continue;
-        const auto& mesh=*it->second;
-
-        const float limit = std::numeric_limits<float>::max();
-        box b{{limit, limit, limit}, {-limit, -limit, -limit}};
-        const auto &pose = instance.pose;
-
-        for (const auto &v : mesh.vertices)
-        {
-            const vec3 scaled{
-                v.position.x * pose.scale.x, v.position.y * pose.scale.y, v.position.z * pose.scale.z
-            };
-
-            const vec3 p = pose.position + rotate(pose.rotation, scaled);
-            b.min = {std::min(b.min.x, p.x), std::min(b.min.y, p.y), std::min(b.min.z, p.z)};
-            b.max = {std::max(b.max.x, p.x), std::max(b.max.y, p.y), std::max(b.max.z, p.z)};
+    ::scene::each_mesh_instance(meshes,instances,
+                                 [&](const auto& mesh,const auto& instance) {
+        if(mesh.vertices.empty())return;
+        const float limit=std::numeric_limits<float>::max();
+        box b{{limit,limit,limit},{-limit,-limit,-limit}};
+        const auto& pose=instance.pose;
+        for(const auto& v:mesh.vertices) {
+            const vec3 scaled{v.position.x*pose.scale.x,v.position.y*pose.scale.y,
+                              v.position.z*pose.scale.z};
+            const vec3 p=pose.position+rotate(pose.rotation,scaled);
+            b.min={std::min(b.min.x,p.x),std::min(b.min.y,p.y),std::min(b.min.z,p.z)};
+            b.max={std::max(b.max.x,p.x),std::max(b.max.y,p.y),std::max(b.max.z,p.z)};
         }
-
         boxes.push_back(b);
-    }
+    });
 
     return boxes;
 }
