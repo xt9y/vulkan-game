@@ -672,6 +672,8 @@ gpu_mesh upload_mesh(const ::scene::mesh &mesh, gpu::upload::batch &transfers)
                 std::max(result.local_max.y,p.y),
                 std::max(result.local_max.z,p.z)};
         }
+        result.center=(result.local_min+result.local_max)*.5f;
+        result.radius=length((result.local_max-result.local_min)*.5f);
     }
     result.geometry.upload(transfers, mesh.vertices.data(), mesh.vertices.size() * sizeof(::scene::vertex), mesh.indices.data(), mesh.indices.size() * sizeof(std::uint32_t), result.index_count);
 
@@ -931,20 +933,6 @@ void synchronize()
         for (const auto &mesh : source->meshes)
         {
             gpu_mesh gpu = upload_mesh(mesh, upload);
-
-            if (!mesh.vertices.empty()) {
-                vec3 low = mesh.vertices.front().position, high = low;
-
-                for (const auto &vertex : mesh.vertices)
-                {
-                    const auto p = vertex.position;
-                    low = {std::min(low.x, p.x), std::min(low.y, p.y), std::min(low.z, p.z)};
-                    high = {std::max(high.x, p.x), std::max(high.y, p.y), std::max(high.z, p.z)};
-                }
-
-                gpu.center = (low + high) * .5f;
-                gpu.radius = length((high - low) * .5f);
-            }
 
             fresh.push_back(std::move(gpu));
         }
