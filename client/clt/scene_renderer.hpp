@@ -884,10 +884,17 @@ void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame &c
                 indirects.push_back(mesh.frames.at(image).indirect.handle);
         data.cull.begin(command, indirects);
 
+        // Static bind-pose bounds do not contain skinned animation. Keep
+        // skinned instances GPU-visible; the viewport still clips their
+        // rasterization. Static meshes retain exact frustum culling.
+        const std::array<vec4,6> unbounded_planes{};
         for (const auto &mesh : data.meshes)
         {
-            if (mesh.transforms.empty()) continue;
-            data.cull.dispatch(command, mesh.frames.at(image).set, planes, static_cast<std::uint32_t>(mesh.transforms.size()), mesh.index_count);
+            if(mesh.transforms.empty())continue;
+            data.cull.dispatch(command,mesh.frames.at(image).set,
+                mesh.joint_count?unbounded_planes:planes,
+                static_cast<std::uint32_t>(mesh.transforms.size()),
+                mesh.index_count);
         }
 
         data.cull.end(command);
