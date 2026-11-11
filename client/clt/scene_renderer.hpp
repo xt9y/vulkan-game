@@ -374,22 +374,6 @@ std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
     if(!extent.width || !extent.height)return regions;
     const auto vp=perspective(camera.pose.fov,
         float(extent.width)/float(extent.height),.1f,1000.f)*camera.view;
-    const auto overlaps=[](const vk::Rect2D& a,const vk::Rect2D& b) {
-        return a.offset.x<=b.offset.x+int(b.extent.width) &&
-               b.offset.x<=a.offset.x+int(a.extent.width) &&
-               a.offset.y<=b.offset.y+int(b.extent.height) &&
-               b.offset.y<=a.offset.y+int(a.extent.height);
-    };
-    const auto combined=[](const vk::Rect2D& a,const vk::Rect2D& b) {
-        const int x=std::min(a.offset.x,b.offset.x);
-        const int y=std::min(a.offset.y,b.offset.y);
-        const int right=std::max(a.offset.x+int(a.extent.width),
-                                 b.offset.x+int(b.extent.width));
-        const int bottom=std::max(a.offset.y+int(a.extent.height),
-                                  b.offset.y+int(b.extent.height));
-        return vk::Rect2D{{x,y},{std::uint32_t(right-x),
-                                 std::uint32_t(bottom-y)}};
-    };
     for(const auto& mesh:get().meshes) {
         if(mesh.instances.empty())continue;
         for(const auto& instance:mesh.instances) {
@@ -460,26 +444,72 @@ std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
             if(x1<=x0 || y1<=y0)continue;
             vk::Rect2D region{{x0,y0},{std::uint32_t(x1-x0),
                                        std::uint32_t(y1-y0)}};
-            // Merge overlaps to avoid re-shading the same pixels.
-            for(std::size_t i=0;i<regions.size();) {
-                if(overlaps(regions[i],region)) {
-                    region=combined(region,regions[i]);
-                    regions.erase(regions.begin()+i);
-                    i=0;
-                } else ++i;
-            }
+            // Store the exact projected bounds. The final union below avoids
+            // both overlap re-shading and excess pixels from bounding-box
+            // merging of L-shaped / disjoint material silhouettes.
             regions.push_back(region);
-            // Many tiny overlapping regions cost more CPU/draw calls than
-            // one union. Retain safe coverage without excessive submissions.
-            if(regions.size()>32) {
-                auto united=regions.front();
-                for(std::size_t i=1;i<regions.size();++i)
-                    united=combined(united,regions[i]);
-                regions.assign(1,united);
-            }
         }
     }
-    return regions;
+    // Sweep horizontal bands through all rectangle y-edges. Within each
+    // band, merge overlapping x intervals; then join identical intervals
+    // vertically. Output is non-overlapping and covers exactly the union
+    // of the original conservative projections (no image quality change).
+    if(regions.size()<2)return regions;
+    std::vector<int> y_edges;
+    y_edges.reserve(regions.size()*2);
+    for(const auto& r:regions) {
+        y_edges.push_back(r.offset.y);
+        y_edges.push_back(r.offset.y+int(r.extent.height));
+    }
+    std::sort(y_edges.begin(),y_edges.end());
+    y_edges.erase(std::unique(y_edges.begin(),y_edges.end()),y_edges.end());
+    std::vector<vk::Rect2D> disjoint;
+    for(std::size_t band=1;band<y_edges.size();++band) {
+        const int top=y_edges[band-1],bottom=y_edges[band];
+        if(top==bottom)continue;
+        std::vector<std::pair<int,int>> intervals;
+        intervals.reserve(regions.size());
+        for(const auto& r:regions)
+            if(r.offset.y<=top && r.offset.y+int(r.extent.height)>=bottom)
+                intervals.emplace_back(r.offset.x,
+                                       r.offset.x+int(r.extent.width));
+        std::sort(intervals.begin(),intervals.end());
+        for(std::size_t k=0;k<intervals.size();) {
+            const int left=intervals[k].first;
+            int right=intervals[k++].second;
+            while(k<intervals.size() && intervals[k].first<=right) {
+                right=std::max(right,intervals[k].second);
+                ++k;
+            }
+            if(right<=left)continue;
+            auto previous=std::find_if(disjoint.rbegin(),disjoint.rend(),
+                [&](const vk::Rect2D& r) {
+                    return r.offset.x==left &&
+                        r.extent.width==std::uint32_t(right-left) &&
+                        r.offset.y+int(r.extent.height)==top;
+                });
+            if(previous!=disjoint.rend())
+                previous->extent.height+=std::uint32_t(bottom-top);
+            else
+                disjoint.push_back({{left,top},
+                    {std::uint32_t(right-left),std::uint32_t(bottom-top)}});
+        }
+    }
+    // Bound CPU/draw overhead on scenes with many separate optical pieces.
+    // This fallback still has exact output because the shader mask discards
+    // all non-optical fragments inside the larger scissor.
+    if(disjoint.size()>32) {
+        int left=int(extent.width),top=int(extent.height),right=0,bottom=0;
+        for(const auto& r:regions) {
+            left=std::min(left,r.offset.x);
+            top=std::min(top,r.offset.y);
+            right=std::max(right,r.offset.x+int(r.extent.width));
+            bottom=std::max(bottom,r.offset.y+int(r.extent.height));
+        }
+        return {{{left,top},{std::uint32_t(right-left),
+                            std::uint32_t(bottom-top)}}};
+    }
+    return disjoint;
 }
 
 pc::gbuffer outputs(std::uint32_t image)
