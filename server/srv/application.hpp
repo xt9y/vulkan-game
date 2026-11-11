@@ -326,7 +326,7 @@ void append_scene(::scene::state patch, bool final)
     data.editor_light_versions.insert(data.editor_light_versions.end(),
                                       patch.lights.size(), data.editor_light_revision);
     append(data.scene.lights, patch.lights);
-    data.collision_index.append(player::collision_bounds(added_colliders));
+    data.collision_index.append(added_colliders);
     append(data.colliders, added_colliders);
     data.scene_batches.push_back({std::move(bytes), final});
 }
