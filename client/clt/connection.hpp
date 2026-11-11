@@ -179,6 +179,13 @@ std::shared_ptr<const scene::state> snapshot()
     auto combined = data.scene
                         ? std::make_shared<::scene::state>(*data.scene)
                         : std::make_shared<::scene::state>();
+    // New asset batches change reflected UV layouts and the atlas. Property
+    // changes and lighting revisions reuse the original packed textures.
+    for(const auto& patch:data.pending_scene)
+        if(!patch.meshes.empty() || !patch.textures.empty()) {
+            ++combined->atlas_revision;
+            break;
+        }
 
     const auto append = [&](auto field)
     {
