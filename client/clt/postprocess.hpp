@@ -476,7 +476,7 @@ void create()
         const auto optical=scene_renderer::optical_outputs(i);
         material_frames.push_back({
             pc::ldr_view(i),ordinary[3],optical[0],optical[1],
-            optical[2],optical[3]
+            optical[2],optical[3],pc::probe_view(i)
         });
     }
     auto compositor=std::make_unique<optics::compositor>();
@@ -535,6 +535,8 @@ void synchronize_scene()
             if(light.enabled && light.strength>0.f)
                 lights.push_back({light.position,light.radius,
                                   light.color,light.strength});
+    if(material_compositor)
+        material_compositor->set_probe_space(pc::probe_space());
     // Drop old descriptor references before releasing the mapper's GPU
     // buffers. synchronize_scene is called only when the renderer is idle.
     if(material_compositor)material_compositor->set_scene({},lights);
@@ -622,7 +624,8 @@ void present(vk::CommandBuffer cmd, std::uint32_t image,
                 params.right={v(0,0),v(0,1),v(0,2),
                               half_tan*float(extent.width)/float(extent.height)};
                 params.up={v(1,0),v(1,1),v(1,2),half_tan};
-                params.forward={-v(2,0),-v(2,1),-v(2,2),0.f};
+                params.forward={-v(2,0),-v(2,1),-v(2,2),
+                                game::options::get()->graphics.exposure};
                 const auto regions=scene_renderer::optical_rects(view);
                 material_compositor->record(command,image,params,regions,extent);
             }
