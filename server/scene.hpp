@@ -74,6 +74,14 @@ struct transform
     vk::util::math::quat rotation;
 };
 
+// Shared model transform for physics, rays, GI and optical bounds.
+inline vk::util::math::vec3 transform_position(const transform& pose,
+                                               vk::util::math::vec3 point)
+{
+    return pose.position+vk::util::math::rotate(pose.rotation,{
+        point.x*pose.scale.x,point.y*pose.scale.y,point.z*pose.scale.z});
+}
+
 struct clip
 {
     std::string name;
