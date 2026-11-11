@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdlib>
+#include <initializer_list>
 #include <string>
 #include <vector>
 #ifdef __APPLE__
