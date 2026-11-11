@@ -344,6 +344,8 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
                 std::clamp(mesh.surface.base_color[2]*inst.tint.z,0.f,1.f)
             };
             surface.triangle=true;
+            surface.emission={mesh.surface.emissive[0],mesh.surface.emissive[1],
+                              mesh.surface.emissive[2]};
             surface.pattern=inst.pattern==1u?2u:
                 (inst.pattern==UINT32_MAX &&
                  mesh.surface.procedural_pattern==1u?1u:0u);
@@ -368,16 +370,25 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
                 if(dot(n,surface.normal)<0.f)n=n*-1.f;
                 return std::array<float,4>{n.x,n.y,n.z,0.f};
             };
-            normals.push_back({
+            optics::face_normals shaded{
                 smooth(mesh.vertices[ia]),
                 smooth(mesh.vertices[ib]),
                 smooth(mesh.vertices[ic])
-            });
+            };
+            shaded.a[3]=std::clamp(mesh.surface.metallic,0.f,1.f);
+            shaded.b[3]=std::clamp(mesh.surface.roughness,.045f,1.f);
+            shaded.c[3]=std::clamp(mesh.surface.occlusion,0.f,1.f);
+            normals.push_back(shaded);
             optics::face_uv mapping{};
             mapping.a={mesh.vertices[ia].u,mesh.vertices[ia].v};
             mapping.b={mesh.vertices[ib].u,mesh.vertices[ib].v};
             mapping.c={mesh.vertices[ic].u,mesh.vertices[ic].v};
             mapping.texture_id=mesh.surface.base_color_texture;
+            mapping.metallic_roughness_texture=
+                mesh.surface.metallic_roughness_texture;
+            mapping.normal_texture=mesh.surface.normal_texture;
+            mapping.occlusion_texture=mesh.surface.occlusion_texture;
+            mapping.emissive_texture=mesh.surface.emissive_texture;
             mapping.alpha_cutoff=mesh.surface.alpha_mode==1 ?
                 mesh.surface.alpha_cutoff :
                 mesh.surface.alpha_mode==2 ? .42f : 0.f;
@@ -406,7 +417,10 @@ std::vector<optics::texture_rgba> optical_textures(
 {
     std::unordered_set<std::uint32_t> used;
     for(const auto& f:faces)
-        if(f.texture_id)used.insert(f.texture_id);
+        for(const auto id:{f.texture_id,f.metallic_roughness_texture,
+                           f.normal_texture,f.occlusion_texture,
+                           f.emissive_texture})
+            if(id)used.insert(id);
     std::vector<optics::texture_rgba> atlas;
     atlas.reserve(used.size());
     for(const auto& image:world.textures) {
@@ -486,6 +500,10 @@ bool atlas_unchanged(const ::scene::state& a,const ::scene::state& b)
         if(x.id!=y.id || x.vertices.size()!=y.vertices.size() ||
            x.indices!=y.indices ||
            x.surface.base_color_texture!=y.surface.base_color_texture ||
+           x.surface.metallic_roughness_texture!=y.surface.metallic_roughness_texture ||
+           x.surface.normal_texture!=y.surface.normal_texture ||
+           x.surface.occlusion_texture!=y.surface.occlusion_texture ||
+           x.surface.emissive_texture!=y.surface.emissive_texture ||
            x.surface.alpha_mode!=y.surface.alpha_mode ||
            x.surface.alpha_cutoff!=y.surface.alpha_cutoff)return false;
         for(std::size_t j=0;j<x.vertices.size();++j)
