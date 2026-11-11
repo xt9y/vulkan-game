@@ -15,6 +15,7 @@
 #include <gpu/timestamps.hpp>
 #include <gpu/upload.hpp>
 #include <iostream>
+#include <vector>
 #include <render/frame.hpp>
 #include <render/sequence.hpp>
 
@@ -26,6 +27,10 @@ struct state
     ::render::sequence passes;
     gpu::timestamps timings;
     std::array<double, 7> gpu_ms{};
+    std::array<double,120> present_history{};
+    std::size_t completed_samples=0;
+    std::uint64_t next_submission=0;
+    std::vector<std::uint64_t> submitted_ids,read_ids;
     std::uint32_t profile_frames = 0;
 
     bool timestamps_supported = false;
@@ -241,6 +246,10 @@ void resize()
     data.passes.resize(vk::swapchain::get()->images.size());
     data.frames.resize(vk::swapchain::get()->size);
     data.timings.create(static_cast<std::uint32_t>(vk::swapchain::get()->images.size()), 7, data.timestamps_supported);
+    data.submitted_ids.assign(vk::swapchain::get()->images.size(),0);
+    data.read_ids.assign(vk::swapchain::get()->images.size(),0);
+    data.next_submission=0;
+    data.completed_samples=0;
 }
 
 void draw_frame()
@@ -270,20 +279,37 @@ void draw_frame()
 
     for (std::uint32_t image = 0; image < vk::swapchain::get()->images.size(); ++image)
     {
-        auto values = data.timings.read(image);
-
-        if (values.size() == data.gpu_ms.size())
-            std::copy(values.begin(), values.end(), data.gpu_ms.begin());
+        // Do not count the same completed swapchain image repeatedly.
+        if(data.submitted_ids[image]==data.read_ids[image])continue;
+        auto values=data.timings.read(image);
+        if(values.size()==data.gpu_ms.size()) {
+            std::copy(values.begin(),values.end(),data.gpu_ms.begin());
+            data.present_history[data.completed_samples%data.present_history.size()]=values[5];
+            ++data.completed_samples;
+            data.read_ids[image]=data.submitted_ids[image];
+        }
     }
 
     if (++data.profile_frames % 120 == 0 && data.timings.supported()) {
+        const std::size_t count=std::min(data.completed_samples,
+                                         data.present_history.size());
+        auto sorted=data.present_history;
+        std::sort(sorted.begin(),sorted.begin()+count);
+        const double p50=count?sorted[(count-1)/2]:0.0;
+        const double p95=count?sorted[(count-1)*95/100]:0.0;
         std::clog << "gpu(ms): geometry=" << data.gpu_ms[0]
                   << " cloud=" << data.gpu_ms[1]
                   << " gi=" << data.gpu_ms[2]
                   << " lighting=" << data.gpu_ms[3]
                   << " tonemap=" << data.gpu_ms[4]
                   << " present=" << data.gpu_ms[5]
-                  << " optics=" << data.gpu_ms[6] << '\n';
+                  << " present_p50=" << p50
+                  << " present_p95=" << p95
+                  // Nested timestamps in one tile-based render pass may
+                  // not reflect actual fragment execution cost. Use the
+                  // full presentation interval and OPTICS_PROFILE_DISABLE
+                  // to measure the real difference on Metal.
+                  << " optics_inner_stamp=" << data.gpu_ms[6] << '\n';
     }
 
     gpu::upload::retire();
@@ -361,6 +387,7 @@ void draw_frame()
         auto result = data.frames.submit(active);
 
         data.timings.submitted(active.image);
+        data.submitted_ids[active.image]=++data.next_submission;
 
         if (result == vk::Result::eSuccess || result == vk::Result::eSuboptimalKHR)
             pc::updated(active.image);
