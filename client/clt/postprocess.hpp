@@ -490,31 +490,13 @@ void create()
 // and acceleration structures are handled separately by the mapper.
 bool atlas_unchanged(const ::scene::state& a,const ::scene::state& b)
 {
-    if(a.instances.size()!=b.instances.size() ||
-       a.meshes.size()!=b.meshes.size() ||
-       a.textures.size()!=b.textures.size())return false;
+    if(a.atlas_revision!=b.atlas_revision ||
+       a.instances.size()!=b.instances.size())return false;
+    // Only instance-to-mesh ordering changes per-face UV mapping without
+    // new asset payloads. Pose, tint and lighting cannot change atlas pixels.
     for(std::size_t i=0;i<a.instances.size();++i)
-        if(a.instances[i].mesh_id!=b.instances[i].mesh_id)return false;
-    for(std::size_t i=0;i<a.meshes.size();++i) {
-        const auto& x=a.meshes[i];const auto& y=b.meshes[i];
-        if(x.id!=y.id || x.vertices.size()!=y.vertices.size() ||
-           x.indices!=y.indices ||
-           x.surface.base_color_texture!=y.surface.base_color_texture ||
-           x.surface.metallic_roughness_texture!=y.surface.metallic_roughness_texture ||
-           x.surface.normal_texture!=y.surface.normal_texture ||
-           x.surface.occlusion_texture!=y.surface.occlusion_texture ||
-           x.surface.emissive_texture!=y.surface.emissive_texture ||
-           x.surface.alpha_mode!=y.surface.alpha_mode ||
-           x.surface.alpha_cutoff!=y.surface.alpha_cutoff)return false;
-        for(std::size_t j=0;j<x.vertices.size();++j)
-            if(x.vertices[j].u!=y.vertices[j].u ||
-               x.vertices[j].v!=y.vertices[j].v)return false;
-    }
-    for(std::size_t i=0;i<a.textures.size();++i) {
-        const auto& x=a.textures[i];const auto& y=b.textures[i];
-        if(x.id!=y.id || x.width!=y.width || x.height!=y.height ||
-           x.pixels!=y.pixels || x.encoded!=y.encoded)return false;
-    }
+        if(a.instances[i].id!=b.instances[i].id ||
+           a.instances[i].mesh_id!=b.instances[i].mesh_id)return false;
     return true;
 }
 
