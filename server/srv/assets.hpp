@@ -77,19 +77,18 @@ std::vector<::scene::texture> images(const fastgltf::Asset &asset, std::uint32_t
         if (source.empty() || source.size() > INT_MAX)
             throw std::runtime_error("Invalid glTF image size");
 
-        int w = 0, h = 0, channels = 0;
-        auto *pixels = stbi_load_from_memory(reinterpret_cast<const stbi_uc *>(source.data()), int(source.size()), &w, &h, &channels, 4);
-
-        if (!pixels || w <= 0 || h <= 0 || std::uint64_t(w) * h * 4 > net::scene_stream::max_scene_bytes - 128) {
-            stbi_image_free(pixels);
+        auto decoded=net::scene_stream::decode_rgba(
+            reinterpret_cast<const stbi_uc*>(source.data()),source.size());
+        if(!decoded || std::uint64_t(decoded.width)*decoded.height*4u >
+                       net::scene_stream::max_scene_bytes-128)
             throw std::runtime_error("Invalid or oversized glTF texture");
-        }
         ::scene::texture texture;
-        texture.id = first_texture + std::uint32_t(i);
-        texture.width = std::uint32_t(w);
-        texture.height = std::uint32_t(h);
-        texture.encoded.assign(reinterpret_cast<const std::uint8_t *>(source.data()), reinterpret_cast<const std::uint8_t *>(source.data()) + source.size());
-        stbi_image_free(pixels);
+        texture.id=first_texture+std::uint32_t(i);
+        texture.width=std::uint32_t(decoded.width);
+        texture.height=std::uint32_t(decoded.height);
+        texture.encoded.assign(
+            reinterpret_cast<const std::uint8_t*>(source.data()),
+            reinterpret_cast<const std::uint8_t*>(source.data())+source.size());
         result.push_back(std::move(texture));
     }
 
