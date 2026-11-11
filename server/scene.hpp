@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <span>
+#include <unordered_map>
 
 namespace scene
 {
@@ -161,5 +163,17 @@ inline bool geometry_prefix_unchanged(const state &previous, const state &incomi
     for (std::size_t i = 0; i < previous.instances.size(); ++i)
         if (surface ? !same_geometry(previous.instances[i], incoming.instances[i]) : !same_pose(previous.instances[i], incoming.instances[i])) return false;
     return true;
+}
+// Mesh IDs are shared across every instance; resolve them in one scan.
+template<class Visit>
+void each_mesh_instance(const std::vector<mesh>& meshes,
+                        std::span<const instance> instances,Visit&& visit)
+{
+    std::unordered_map<std::uint32_t,const mesh*> by_id;
+    by_id.reserve(meshes.size());
+    for(const auto& m:meshes)by_id.emplace(m.id,&m);
+    for(const auto& instance:instances)
+        if(const auto found=by_id.find(instance.mesh_id);found!=by_id.end())
+            visit(*found->second,instance);
 }
 } // namespace scene
