@@ -48,13 +48,8 @@ struct state
     bool grounded = false;
 };
 
-struct box
-{
-    vk::util::math::vec3 min;
-    vk::util::math::vec3 max;
-};
-
-using collision_world = std::vector<box>;
+using box=spatial::bounds;
+using collision_world=std::vector<box>;
 collision_world build_colliders(const std::vector<::scene::mesh> &meshes, std::span<const ::scene::instance> instances);
 namespace
 {
@@ -129,21 +124,10 @@ collision_world build_colliders(const std::vector<::scene::mesh> &meshes, std::s
     return boxes;
 }
 
-std::vector<spatial::bounds> collision_bounds(const collision_world &boxes)
-{
-    std::vector<spatial::bounds> result;
-    result.reserve(boxes.size());
-
-    for (const auto &box : boxes)
-        result.push_back({box.min, box.max});
-
-    return result;
-}
-
 spatial::index build_index(const collision_world &boxes)
 {
     spatial::index index;
-    index.rebuild(collision_bounds(boxes));
+    index.rebuild(boxes);
 
     return index;
 }
