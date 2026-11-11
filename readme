@@ -31,3 +31,23 @@ Run from the repository root:
   c build run vulkan-client
 
 The namespace-header layout has not yet been validated by a native build.
+
+Mirror performance profiling (same camera, resolution and scene each run):
+  c build run vulkan-server
+  c build run vulkan-client
+  OPTICS_PROFILE_DISABLE=1 c build run vulkan-client
+
+Compare 'present_p50' and 'present_p95' from at least 120 completed
+frames, not 'optics_inner_stamp'. On tile-based GPUs (especially Apple
+Metal/MoltenVK), timestamps inside the presentation render pass may not
+isolate its fragment shading; 'present' includes the base fullscreen
+draw, optical overlay and editor. The profile-disable option is an
+intentional A/B diagnostic and does not affect default rendering.
+The optics coverage log counts submitted conservative scissor pixels;
+it is not a count of actual mirror-mask fragments. Disjoint rectangles
+remove duplicate shading without changing the image. Closest-hit and
+shadow traversal use exact BVH triangles, compact face IDs and per-ray
+precomputed reciprocal directions. Perfect mirrors use an exact
+serial mirror path and retain the full tracer when glass is reached.
+No resolution scaling or denoising is used. Native GPU timings are
+necessary to quantify any improvement.
