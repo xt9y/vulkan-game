@@ -924,7 +924,8 @@ void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame &c
         const float smooth_tick = float(server_tick) + std::clamp(elapsed, 0.f, 0.2f) * float(net::limits::tick_hz);
 
         data.skinned.clear();
-        const bool needs_mirror_skin=has_optics();
+        const bool needs_mirror_skin=has_optics() &&
+            !optical_rects(camera).empty();
         for (auto &mesh : data.meshes)
         {
             if (!mesh.joint_count || mesh.transforms.empty()) continue;
