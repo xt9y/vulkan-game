@@ -45,90 +45,65 @@ void present(vk::CommandBuffer command, std::uint32_t image,
 
 namespace
 {
-void append_remote_players(editor::draw_list &commands, const camera::frame &view, vk::Extent2D extent)
+void append_remote_players(editor::draw_list& commands,
+                           const camera::frame& view,vk::Extent2D extent)
 {
-    if (!editor::instance().visible() || !extent.width || !extent.height) return;
-
-    const auto parameters = connection::movement_parameters();
-    if (!parameters) return;
-
-    const auto players = connection::remote_players();
-
-    if (players.empty()) return;
+    if(!editor::instance().visible() || !extent.width || !extent.height)return;
+    const auto parameters=connection::movement_parameters();
+    if(!parameters)return;
+    const auto players=connection::remote_players();
+    if(players.empty())return;
     using namespace vk::util::math;
-
-    const mat4 vp = perspective(view.pose.fov, float(extent.width) / float(extent.height), .1f, 1000.f) * view.view;
-
-    struct screen_point
-    {
-        float x = 0, y = 0;
-        bool valid = false;
-    };
-
-    for (const auto &player : players)
-    {
-        const vec3 lower = player.position - vec3{parameters->radius, 0.f, parameters->radius};
-        const vec3 upper = player.position + vec3{parameters->radius, parameters->height, parameters->radius};
-
-        std::array<screen_point, 8> projected{};
-
-        for (int corner = 0; corner < 8; ++corner)
-        {
-            const vec3 position{
-                (corner & 1) ? upper.x : lower.x,
-                (corner & 2) ? upper.y : lower.y,
-                (corner & 4) ? upper.z : lower.z
+    const mat4 vp=perspective(view.pose.fov,
+        float(extent.width)/float(extent.height),.1f,1000.f)*view.view;
+    struct point {float x=0,y=0;bool valid=false;};
+    for(const auto& player:players) {
+        const vec3 lo=player.position-
+            vec3{parameters->radius,0.f,parameters->radius};
+        const vec3 hi=player.position+
+            vec3{parameters->radius,parameters->height,parameters->radius};
+        std::array<point,8> projected{};
+        for(int corner=0;corner<8;++corner) {
+            const vec3 p{
+                (corner&1)?hi.x:lo.x,(corner&2)?hi.y:lo.y,
+                (corner&4)?hi.z:lo.z
             };
-
-            const vec4 clip = vp * vec4{position, 1.f};
-
-            if (!std::isfinite(clip.w) || clip.w <= .0001f || clip.z < 0.f || clip.z > clip.w) continue;
-
-            const float x = 480.f * (1.f + clip.x / clip.w);
-            const float y = 270.f * (1.f + clip.y / clip.w);
-
-            if (std::isfinite(x) && std::isfinite(y)) projected[corner] = {x, y, true};
+            const vec4 clip=vp*vec4{p,1.f};
+            if(!std::isfinite(clip.w) || clip.w<=.0001f ||
+               clip.z<0.f || clip.z>clip.w)continue;
+            const float x=480.f*(1.f+clip.x/clip.w);
+            const float y=270.f*(1.f+clip.y/clip.w);
+            if(std::isfinite(x) && std::isfinite(y))
+                projected[corner]={x,y,true};
         }
-
-        for (int corner = 0; corner < 8; ++corner)
-            for (int axis = 0; axis < 3; ++axis)
-            {
-                if (corner & (1 << axis)) continue;
-                const auto &a = projected[corner];
-                const auto &b = projected[corner | (1 << axis)];
-
-                if (!a.valid || !b.valid) continue;
-
-                const float dx = b.x - a.x, dy = b.y - a.y;
-                float start = 0.f, end = 1.f;
-                const auto clip = [&](float p, float q)
-                {
-                    if (std::abs(p) < 1e-7f) return q >= 0.f;
-
-                    const float t = q / p;
-
-                    if (p < 0.f) start = std::max(start, t);
-                    else
-                        end = std::min(end, t);
-
-                    return start <= end;
+        for(int corner=0;corner<8;++corner)
+            for(int axis=0;axis<3;++axis) {
+                if(corner&(1<<axis))continue;
+                const auto& a=projected[corner];
+                const auto& b=projected[corner|(1<<axis)];
+                if(!a.valid || !b.valid)continue;
+                const float dx=b.x-a.x,dy=b.y-a.y;
+                float start=0.f,end=1.f;
+                const auto clip=[&](float p,float q) {
+                    if(std::abs(p)<1e-7f)return q>=0.f;
+                    const float t=q/p;
+                    if(p<0.f)start=std::max(start,t);
+                    else end=std::min(end,t);
+                    return start<=end;
                 };
-
-                if (!clip(-dx, a.x) || !clip(dx, 960.f - a.x) ||
-                    !clip(-dy, a.y) || !clip(dy, 540.f - a.y)) continue;
-                const float x0 = a.x + dx * start, y0 = a.y + dy * start;
-                const float x1 = a.x + dx * end, y1 = a.y + dy * end;
-                const int steps = std::max(1, int(std::ceil(
-                                                  std::max(std::abs(x1 - x0), std::abs(y1 - y0)) / 2.f)));
-                for (int i = 0; i <= steps; ++i)
-                {
-                    const float t = float(i) / float(steps);
-
+                if(!clip(-dx,a.x) || !clip(dx,960.f-a.x) ||
+                   !clip(-dy,a.y) || !clip(dy,540.f-a.y))continue;
+                const float x0=a.x+dx*start,y0=a.y+dy*start;
+                const float x1=a.x+dx*end,y1=a.y+dy*end;
+                const int steps=std::max(1,int(std::ceil(
+                    std::max(std::abs(x1-x0),std::abs(y1-y0))/2.f)));
+                for(int i=0;i<=steps;++i) {
+                    const float t=float(i)/float(steps);
                     editor::draw_command pixel{};
-                    pixel.x = int(std::lround(x0 + (x1 - x0) * t)) - 1;
-                    pixel.y = int(std::lround(y0 + (y1 - y0) * t)) - 1;
-                    pixel.width = pixel.height = 2;
-                    pixel.tint = {0.f, 1.f, 0.2f, 1.f};
+                    pixel.x=int(std::lround(x0+(x1-x0)*t))-1;
+                    pixel.y=int(std::lround(y0+(y1-y0)*t))-1;
+                    pixel.width=pixel.height=2;
+                    pixel.tint={0.f,1.f,.2f,1.f};
                     commands.push_back(std::move(pixel));
                 }
             }
