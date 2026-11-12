@@ -25,7 +25,8 @@ static void compile_shaders(void)
         "shd/optics.frag","shd/cull.comp",
         "third-party/vulkan-systems/optics/optics/shaders/compose.frag",
         "third-party/vulkan-systems/optics/optics/shaders/compose_mirror.frag",
-        "third-party/vulkan-systems/optics/optics/shaders/compose_planar.frag"};
+        "third-party/vulkan-systems/optics/optics/shaders/compose_planar.frag",
+        "third-party/vulkan-systems/optics/optics/shaders/compose_glass.frag"};
     for(size_t i=0;i<sizeof(shaders)/sizeof(*shaders);++i)
     {
         const char* name=strrchr(shaders[i],'/');

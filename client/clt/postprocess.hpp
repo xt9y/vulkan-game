@@ -561,17 +561,25 @@ void synchronize_scene()
     const bool has_optics=source && std::any_of(
         source->instances.begin(),source->instances.end(),
         [](const auto& inst){return inst.pattern==2u || inst.pattern==3u;});
-    if(material_compositor && !has_optics)
-        material_compositor->set_scene({},lights);
+    const bool has_mirror=source && std::any_of(
+        source->instances.begin(),source->instances.end(),
+        [](const auto& inst){return inst.pattern==3u;});
     optical_geometry_source.reset();
     optical_surfaces.clear();
     skinned_faces.clear();
-    if(has_optics) {
+    // Without mirrors, glass only samples the raster HDR image. No scene
+    // triangle flattening, 80k-face BVH, UV atlas, or skinned BVH refit.
+    if(!has_mirror && material_compositor) {
+        material_compositor->set_scene({},lights,has_optics);
+        if(!has_optics)material_compositor->set_textures({},{});
+        else std::clog<<"optics: glass-only HDR path, no reflection BVH\n";
+    }
+    if(has_mirror) {
         std::vector<optics::face_uv> face_uvs;
         std::vector<optics::face_normals> face_normals;
         optical_surfaces=optical_scene(*source,face_uvs,face_normals);
         if(optical_surfaces.empty() && material_compositor)
-            material_compositor->set_scene({},lights);
+            material_compositor->set_scene({},lights,has_optics);
         if(!optical_surfaces.empty() && material_compositor) {
             optical_geometry_source=source;
             material_compositor->set_scene(optical_surfaces,lights,

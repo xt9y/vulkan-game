@@ -76,10 +76,10 @@ inline bool set_property(::scene::instance& cube,std::uint32_t property,float va
         if(value<0.f || value>3.f || value!=std::floor(value))return false;
         const auto selected=std::uint32_t(value);
         if(cube.pattern!=selected && (selected==2u || selected==3u)) {
-            cube.tint=selected==2u?vk::util::math::vec3{.10f,.50f,.70f}:
+            cube.tint=selected==2u?vk::util::math::vec3{.96f,.985f,1.f}:
                                    vk::util::math::vec3{.70f,.90f,1.f};
-            cube.optical_strength=selected==2u?.98f:1.f;
-            cube.optical_mattness=.35f;
+            cube.optical_strength=selected==2u?.99f:1.f;
+            cube.optical_mattness=selected==2u?.04f:.35f;
         }
         cube.pattern=selected;
     } else {

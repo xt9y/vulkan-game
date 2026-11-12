@@ -446,9 +446,9 @@ std::optional<planar_view> planar_reflection(const camera::frame& camera)
     };
 }
 
-// Conservative screen-space bounds for all visible glass/mirror instances.
-// Clipped to a compact set of disjoint scissor rectangles so the expensive
-// BVH fragment shader never runs across non-optical portions of the frame.
+// Conservative screen-space bounds for visible glass/mirror instances.
+// Disjoint rectangles avoid overshading; glass uses a cheap compositing
+// shader and only reflective mirror pixels traverse the scene BVH.
 std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
 {
     const auto extent=vk::swapchain::get()->extent;
