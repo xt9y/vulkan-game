@@ -30,6 +30,7 @@ namespace clt::scene_renderer
 struct planar_view {
     camera::frame reflected;
     vk::util::math::vec4 clip;
+    vk::util::math::vec4 center,axis_y,axis_z;
 };
 
 namespace
@@ -381,14 +382,20 @@ bool single_glass()
     bool found=false;
     for(const auto& instance:scene->instances) {
         if(instance.pattern!=2u && instance.pattern!=3u)continue;
-        if(instance.pattern!=2u || found)return false;
+        const auto& scale=instance.pose.scale;
+        const bool solid=(instance.mesh_id==::scene::unit_sphere_mesh_id ||
+            instance.mesh_id==::scene::unit_cube_mesh_id) &&
+            std::min({std::abs(scale.x),std::abs(scale.y),
+                      std::abs(scale.z)})>=.06f;
+        if(instance.pattern!=2u || found || solid)return false;
         found=true;
     }
     return found;
 }
 
-// A single thin planar glass or mirror uses rasterized reflection. Other
-// optical scenes retain the BVH fallback and multi-bounce behavior.
+// One planar mirror can be rasterized efficiently even with glass in
+// front of it. The glass compositor samples its reflection after
+// checking whether the transmitted ray intersects the mirror plane.
 std::optional<planar_view> planar_reflection(const camera::frame& camera)
 {
     // Compare exact rasterized planar mirrors with the original per-pixel
@@ -399,11 +406,13 @@ std::optional<planar_view> planar_reflection(const camera::frame& camera)
     if(!scene)return std::nullopt;
     const ::scene::instance* optical=nullptr;
     for(const auto& instance:scene->instances) {
-        if(instance.pattern!=2u && instance.pattern!=3u)continue;
+        // A glass object does not invalidate the single planar mirror.
+        if(instance.pattern!=3u)continue;
         if(optical)return std::nullopt;
         optical=&instance;
     }
-    if(!optical || optical->mesh_id!=::scene::unit_cube_mesh_id ||
+    if(!optical ||
+       optical->mesh_id!=::scene::unit_cube_mesh_id ||
        std::abs(optical->pose.scale.x)>.5f ||
        std::abs(optical->pose.scale.x)<.001f ||
        std::abs(optical->pose.scale.y)<1.f ||
@@ -425,6 +434,19 @@ std::optional<planar_view> planar_reflection(const camera::frame& camera)
     const float face=side>=0.f?hi:lo;
     const vec3 point=optical->pose.position+
                      axis*(face*optical->pose.scale.x);
+    float min_y=found->vertices.front().position.y;
+    float max_y=min_y,min_z=found->vertices.front().position.z,max_z=min_z;
+    for(const auto& vertex:found->vertices) {
+        min_y=std::min(min_y,vertex.position.y);
+        max_y=std::max(max_y,vertex.position.y);
+        min_z=std::min(min_z,vertex.position.z);
+        max_z=std::max(max_z,vertex.position.z);
+    }
+    const vec3 center=point+rotate(optical->pose.rotation,{
+        0.f,(min_y+max_y)*.5f*optical->pose.scale.y,
+        (min_z+max_z)*.5f*optical->pose.scale.z});
+    const vec3 axis_y=normalize(rotate(optical->pose.rotation,{0,1,0}));
+    const vec3 axis_z=normalize(rotate(optical->pose.rotation,{0,0,1}));
     const float distance=dot(camera.eye-point,N);
     if(distance<.02f)return std::nullopt;
     const auto reflect=[&](vec3 v){return v-N*(2.f*dot(v,N));};
@@ -436,14 +458,20 @@ std::optional<planar_view> planar_reflection(const camera::frame& camera)
         virtual_eye+reflected_forward,reflect(up));
     return planar_view{
         {camera.pose,reflected_view,virtual_eye},
-        {N.x,N.y,N.z,-dot(N,point)+.0002f}
+        {N.x,N.y,N.z,-dot(N,point)+.0002f},
+        {center.x,center.y,center.z,1.f},
+        {axis_y.x,axis_y.y,axis_y.z,
+            (max_y-min_y)*.5f*std::abs(optical->pose.scale.y)},
+        {axis_z.x,axis_z.y,axis_z.z,
+            (max_z-min_z)*.5f*std::abs(optical->pose.scale.z)}
     };
 }
 
-// Conservative screen-space bounds for all visible glass/mirror instances.
-// Clipped to a compact set of disjoint scissor rectangles so the expensive
-// BVH fragment shader never runs across non-optical portions of the frame.
-std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
+// Conservative screen-space bounds for visible glass/mirror instances.
+// Disjoint rectangles avoid overshading; glass uses a cheap compositing
+// shader and only reflective mirror pixels traverse the scene BVH.
+std::vector<vk::Rect2D> optical_rects(const camera::frame& camera,
+                                      std::uint32_t material=0u)
 {
     const auto extent=vk::swapchain::get()->extent;
     std::vector<vk::Rect2D> regions;
@@ -454,6 +482,7 @@ std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
         if(mesh.instances.empty())continue;
         for(const auto& instance:mesh.instances) {
             if(instance.pattern!=2u && instance.pattern!=3u)continue;
+            if(material!=0u && instance.pattern!=material)continue;
             // Bind-pose bounds do not conservatively contain every skin
             // deformation. Never clip a reflective animated surface.
             if(mesh.joint_count)
@@ -751,7 +780,15 @@ void append_instance(gpu_mesh &mesh, const ::scene::instance &instance)
     const float max_scale = std::max({std::abs(pose.scale.x), std::abs(pose.scale.y), std::abs(pose.scale.z)});
 
     mesh.instances.push_back(instance);
-    const float kind=instance.pattern == UINT32_MAX ? -1.f : float(instance.pattern);
+    // 4 is a render-only glass mode: a closed solid with two refractive
+    // interfaces. Thin panes retain kind 2 and the cheap transparent path.
+    const bool glass_solid=instance.pattern==2u &&
+        (instance.mesh_id==::scene::unit_sphere_mesh_id ||
+         instance.mesh_id==::scene::unit_cube_mesh_id) &&
+        std::min({std::abs(pose.scale.x),std::abs(pose.scale.y),
+                  std::abs(pose.scale.z)})>=.06f;
+    const float kind=instance.pattern==UINT32_MAX?-1.f:
+        float(glass_solid?4u:instance.pattern);
     const unsigned strength=static_cast<unsigned>(std::lround(std::clamp(instance.optical_strength,0.f,1.f)*255.f));
     const unsigned mattness=static_cast<unsigned>(std::lround(std::clamp(instance.optical_mattness,0.f,1.f)*255.f));
     const float packed=(instance.pattern==2u || instance.pattern==3u) ?
@@ -968,15 +1005,13 @@ void cull_world(vk::CommandBuffer command,std::uint32_t image,
     std::vector<vk::Buffer> indirects;
     indirects.reserve(data.meshes.size());
     for(const auto& mesh:data.meshes)
-        if(!mesh.transforms.empty())
+        if(!mesh.transforms.empty() && !mesh.joint_count)
             indirects.push_back(mesh.frames.at(image).indirect.handle);
     data.cull.begin(command,indirects);
-    const std::array<vec4,6> unbounded{};
     for(const auto& mesh:data.meshes) {
-        if(mesh.transforms.empty())continue;
+        if(mesh.transforms.empty() || mesh.joint_count)continue;
         data.cull.dispatch(command,mesh.frames.at(image).set,
-            mesh.joint_count?unbounded:planes,
-            std::uint32_t(mesh.transforms.size()),mesh.index_count);
+            planes,std::uint32_t(mesh.transforms.size()),mesh.index_count);
     }
     data.cull.end(command);
 }
@@ -1015,7 +1050,12 @@ void draw_world(::render::renderer& graphics, std::uint32_t image,
             [](const auto& i) { return i.pattern == 2u || i.pattern == 3u; })) continue;
         auto params = material_parameters(mesh.surface, vp, mesh.joint_count);
         params.clip_plane = clip;
-        draw_mesh(graphics, mesh, mesh.frames.at(image), params, true, 1, optical);
+        // Skinned instances are already sampled and uploaded in exact
+        // CPU order. Avoid GPU compacted indices for their palette lookup.
+        draw_mesh(graphics,mesh,mesh.frames.at(image),params,
+                  mesh.joint_count==0,
+                  mesh.joint_count?std::uint32_t(mesh.transforms.size()):1u,
+                  optical);
     }
 }
 

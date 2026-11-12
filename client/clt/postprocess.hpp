@@ -550,15 +550,33 @@ void synchronize_scene()
         return;
     }
     // Scene replacement occurs after previous GPU submissions have completed.
-    if(material_compositor)material_compositor->set_scene({},lights);
+    const bool has_optics=source && std::any_of(
+        source->instances.begin(),source->instances.end(),
+        [](const auto& inst){return inst.pattern==2u || inst.pattern==3u;});
+    const bool has_mirror=source && std::any_of(
+        source->instances.begin(),source->instances.end(),
+        [](const auto& inst){return inst.pattern==3u;});
+    const bool had_mirror=!optical_surfaces.empty();
     optical_geometry_source.reset();
     optical_surfaces.clear();
     skinned_faces.clear();
-    if(source && std::any_of(source->instances.begin(),source->instances.end(),
-        [](const auto& inst){return inst.pattern==2u || inst.pattern==3u;})) {
+    // Without mirrors, glass only samples the raster HDR image. No scene
+    // triangle flattening, 80k-face BVH, UV atlas, or skinned BVH refit.
+    if(!has_mirror && material_compositor) {
+        material_compositor->set_scene({},lights,has_optics);
+        if(had_mirror) {
+            // Retire the previous mirror's atlas and smooth-normal buffers.
+            material_compositor->set_normals({});
+            material_compositor->set_textures({},{});
+        }
+        if(has_optics)std::clog<<"optics: glass-only HDR path, no reflection BVH\n";
+    }
+    if(has_mirror) {
         std::vector<optics::face_uv> face_uvs;
         std::vector<optics::face_normals> face_normals;
         optical_surfaces=optical_scene(*source,face_uvs,face_normals);
+        if(optical_surfaces.empty() && material_compositor)
+            material_compositor->set_scene({},lights,has_optics);
         if(!optical_surfaces.empty() && material_compositor) {
             optical_geometry_source=source;
             material_compositor->set_scene(optical_surfaces,lights,
@@ -689,36 +707,59 @@ void present(vk::CommandBuffer cmd, std::uint32_t image,
                 const float half_tan=std::tan(view.pose.fov*.5f);
                 const auto& v=view.view;
                 optics::camera params{};
-                params.view_projection=perspective(view.pose.fov,
-                    float(extent.width)/float(extent.height),.1f,1000.f)*v;
-                // 2: planar raster, 3: isolated glass with HDR transmission,
-                // 1: nested BVH optics.
-                const bool planar=scene_renderer::planar_reflection(view).has_value();
+                // None of the optics shaders consumes a camera VP.
+                // Reuse its existing push-constant space to expose the
+                // planar mirror to transmissive glass without extra buffers.
+                params.view_projection={};
+                const auto planar=scene_renderer::planar_reflection(view);
+                if(planar) {
+                    const auto pack=[&](int column,const vec4& data) {
+                        params.view_projection(0,column)=data.x;
+                        params.view_projection(1,column)=data.y;
+                        params.view_projection(2,column)=data.z;
+                        params.view_projection(3,column)=data.w;
+                    };
+                    pack(0,planar->clip);
+                    pack(1,planar->center);
+                    pack(2,planar->axis_y);
+                    pack(3,planar->axis_z);
+                }
+                // 2: planar reflected camera, 3: thin glass transmission.
                 params.eye={view.eye.x,view.eye.y,view.eye.z,
-                            planar?2.f:scene_renderer::single_glass()?3.f:1.f};
+                            planar.has_value()?2.f:
+                                scene_renderer::single_glass()?3.f:1.f};
                 params.right={v(0,0),v(0,1),v(0,2),
                               half_tan*float(extent.width)/float(extent.height)};
                 params.up={v(1,0),v(1,1),v(1,2),half_tan};
                 params.forward={-v(2,0),-v(2,1),-v(2,2),
                                 game::options::get()->graphics.exposure};
-                const auto regions=scene_renderer::optical_rects(view);
-                // The nested optics timestamp can be near-zero when the
-                // mirror is outside the view. Record how much screen space
-                // actually enters the BVH shader, separately from present.
+                // Each optical material resolves only its own projected
+                // area. Mixed scenes no longer scan the same large scissor
+                // rectangle in both the glass and BVH mirror shaders.
+                const auto glass_regions=scene_renderer::optical_rects(view,2u);
+                const auto mirror_regions=scene_renderer::optical_rects(view,3u);
                 static std::uint32_t observations=0,active=0;
-                static std::uint64_t submitted_pixels=0;
-                if(!regions.empty())++active;
-                for(const auto& region:regions)
-                    submitted_pixels+=std::uint64_t(region.extent.width)*
-                                      region.extent.height;
+                static std::uint64_t glass_pixels=0,mirror_pixels=0;
+                if(!glass_regions.empty() || !mirror_regions.empty())++active;
+                const auto count_pixels=[](const auto& regions) {
+                    std::uint64_t area=0;
+                    for(const auto& r:regions)
+                        area+=std::uint64_t(r.extent.width)*r.extent.height;
+                    return area;
+                };
+                glass_pixels+=count_pixels(glass_regions);
+                mirror_pixels+=count_pixels(mirror_regions);
                 if(++observations==120) {
                     std::clog<<"optics: active_frames="<<active
                              <<"/120 scissor_pixels_per_frame="
-                             <<submitted_pixels/120<<"\n";
+                             <<(glass_pixels+mirror_pixels)/120
+                             <<" glass_pixels="<<glass_pixels/120
+                             <<" mirror_pixels="<<mirror_pixels/120<<"\n";
                     observations=active=0;
-                    submitted_pixels=0;
+                    glass_pixels=mirror_pixels=0;
                 }
-                material_compositor->record(command,image,params,regions,extent);
+                material_compositor->record(command,image,params,
+                    glass_regions,mirror_regions,extent);
             }
             if(timings)timings->end(command,image,6);
             editor::draw_list commands;

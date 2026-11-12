@@ -91,8 +91,12 @@ static void on_geometry_action(const editor::action &action)
         const auto forward=::weapon::direction(frame.pose.yaw,frame.pose.pitch);
         command.type = kind::create;
         command.index = UINT32_MAX;
-        command.cube.pose.position = frame.eye + forward * 2.5f;
-        if(action.type=="mermaid")
+        // Mermaid is much larger than an editor cube. At 1.5x scale
+        // placing its seat 2.5 m ahead can put the model directly against
+        // the near camera, making limbs/tail look separated in perspective.
+        const bool mermaid=action.type=="mermaid";
+        command.cube.pose.position=frame.eye+forward*(mermaid?6.f:2.5f);
+        if(mermaid)
             command.cube.pose.scale={1.5f,1.5f,1.5f};
         command.cube.pattern = action.type=="mermaid"?UINT32_MAX:0u;
     }

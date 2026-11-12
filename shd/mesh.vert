@@ -40,13 +40,16 @@ layout(push_constant) uniform Draw
 
 void main()
 {
-    Instance instance = instances[instance_index];
-    instance_tint = instance.tint;
-    mat4 deform = mat4(1.0);
     uint joints_per_instance=uint(pc.emissive.w+0.5)>>8u;
-    if (joints_per_instance != 0u)
+    // Skinned meshes are drawn directly; their instance order is the
+    // CPU skin-palette order. Static meshes still use compacted IDs.
+    uint id=joints_per_instance!=0u?uint(gl_InstanceIndex):instance_index;
+    Instance instance=instances[id];
+    instance_tint=instance.tint;
+    mat4 deform=mat4(1.0);
+    if(joints_per_instance!=0u)
     {
-        uint first = instance_index * joints_per_instance;
+        uint first=id*joints_per_instance;
         deform = in_weights.x * bones[first + in_joints.x] +
                  in_weights.y * bones[first + in_joints.y] +
                  in_weights.z * bones[first + in_joints.z] +
