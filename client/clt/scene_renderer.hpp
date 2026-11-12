@@ -392,8 +392,8 @@ bool single_glass()
     return found;
 }
 
-// A single thin planar glass or mirror uses rasterized reflection. Other
-// optical scenes retain the BVH fallback and multi-bounce behavior.
+// Only planar mirrors need a reflected-camera raster pass. Glass already
+// traces real reflections in optics, so a second full scene render is wasted.
 std::optional<planar_view> planar_reflection(const camera::frame& camera)
 {
     // Compare exact rasterized planar mirrors with the original per-pixel
@@ -408,7 +408,8 @@ std::optional<planar_view> planar_reflection(const camera::frame& camera)
         if(optical)return std::nullopt;
         optical=&instance;
     }
-    if(!optical || optical->mesh_id!=::scene::unit_cube_mesh_id ||
+    if(!optical || optical->pattern!=3u ||
+       optical->mesh_id!=::scene::unit_cube_mesh_id ||
        std::abs(optical->pose.scale.x)>=.06f ||
        std::abs(optical->pose.scale.x)<.001f ||
        std::abs(optical->pose.scale.y)<1.f ||
