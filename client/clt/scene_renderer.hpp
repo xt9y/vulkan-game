@@ -982,15 +982,13 @@ void cull_world(vk::CommandBuffer command,std::uint32_t image,
     std::vector<vk::Buffer> indirects;
     indirects.reserve(data.meshes.size());
     for(const auto& mesh:data.meshes)
-        if(!mesh.transforms.empty())
+        if(!mesh.transforms.empty() && !mesh.joint_count)
             indirects.push_back(mesh.frames.at(image).indirect.handle);
     data.cull.begin(command,indirects);
-    const std::array<vec4,6> unbounded{};
     for(const auto& mesh:data.meshes) {
-        if(mesh.transforms.empty())continue;
+        if(mesh.transforms.empty() || mesh.joint_count)continue;
         data.cull.dispatch(command,mesh.frames.at(image).set,
-            mesh.joint_count?unbounded:planes,
-            std::uint32_t(mesh.transforms.size()),mesh.index_count);
+            planes,std::uint32_t(mesh.transforms.size()),mesh.index_count);
     }
     data.cull.end(command);
 }
@@ -1029,7 +1027,12 @@ void draw_world(::render::renderer& graphics, std::uint32_t image,
             [](const auto& i) { return i.pattern == 2u || i.pattern == 3u; })) continue;
         auto params = material_parameters(mesh.surface, vp, mesh.joint_count);
         params.clip_plane = clip;
-        draw_mesh(graphics, mesh, mesh.frames.at(image), params, true, 1, optical);
+        // Skinned instances are already sampled and uploaded in exact
+        // CPU order. Avoid GPU compacted indices for their palette lookup.
+        draw_mesh(graphics,mesh,mesh.frames.at(image),params,
+                  mesh.joint_count==0,
+                  mesh.joint_count?std::uint32_t(mesh.transforms.size()):1u,
+                  optical);
     }
 }
 
