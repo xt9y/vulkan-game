@@ -381,7 +381,12 @@ bool single_glass()
     bool found=false;
     for(const auto& instance:scene->instances) {
         if(instance.pattern!=2u && instance.pattern!=3u)continue;
-        if(instance.pattern!=2u || found)return false;
+        const auto& scale=instance.pose.scale;
+        const bool solid=instance.mesh_id==::scene::unit_sphere_mesh_id ||
+            (instance.mesh_id==::scene::unit_cube_mesh_id &&
+             std::min({std::abs(scale.x),std::abs(scale.y),
+                       std::abs(scale.z)})>=.06f);
+        if(instance.pattern!=2u || found || solid)return false;
         found=true;
     }
     return found;
@@ -404,7 +409,7 @@ std::optional<planar_view> planar_reflection(const camera::frame& camera)
         optical=&instance;
     }
     if(!optical || optical->mesh_id!=::scene::unit_cube_mesh_id ||
-       std::abs(optical->pose.scale.x)>.5f ||
+       std::abs(optical->pose.scale.x)>.06f ||
        std::abs(optical->pose.scale.x)<.001f ||
        std::abs(optical->pose.scale.y)<1.f ||
        std::abs(optical->pose.scale.z)<1.f)
@@ -751,7 +756,15 @@ void append_instance(gpu_mesh &mesh, const ::scene::instance &instance)
     const float max_scale = std::max({std::abs(pose.scale.x), std::abs(pose.scale.y), std::abs(pose.scale.z)});
 
     mesh.instances.push_back(instance);
-    const float kind=instance.pattern == UINT32_MAX ? -1.f : float(instance.pattern);
+    // 4 is a render-only glass mode: a closed solid with two refractive
+    // interfaces. Thin panes retain kind 2 and the cheap transparent path.
+    const bool glass_solid=instance.pattern==2u &&
+        (instance.mesh_id==::scene::unit_sphere_mesh_id ||
+         (instance.mesh_id==::scene::unit_cube_mesh_id &&
+          std::min({std::abs(pose.scale.x),std::abs(pose.scale.y),
+                    std::abs(pose.scale.z)})>=.06f));
+    const float kind=instance.pattern==UINT32_MAX?-1.f:
+        float(glass_solid?4u:instance.pattern);
     const unsigned strength=static_cast<unsigned>(std::lround(std::clamp(instance.optical_strength,0.f,1.f)*255.f));
     const unsigned mattness=static_cast<unsigned>(std::lround(std::clamp(instance.optical_mattness,0.f,1.f)*255.f));
     const float packed=(instance.pattern==2u || instance.pattern==3u) ?

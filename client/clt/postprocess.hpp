@@ -332,6 +332,14 @@ std::vector<optics::surface> optical_scene(
                  mesh.surface.procedural_pattern==1u?1u:0u);
             if(inst.pattern==2u || inst.pattern==3u) {
                 surface.optical_type=inst.pattern==2u?1u:2u;
+                // Preserve a proper volume for closed built-in primitives,
+                // but never magnify through thin panels or arbitrary cards.
+                surface.solid=inst.pattern==2u &&
+                    (inst.mesh_id==::scene::unit_sphere_mesh_id ||
+                     (inst.mesh_id==::scene::unit_cube_mesh_id &&
+                      std::min({std::abs(inst.pose.scale.x),
+                                std::abs(inst.pose.scale.y),
+                                std::abs(inst.pose.scale.z)})>=.06f));
                 surface.optical_strength=inst.pattern==3u?
                     1.f:inst.optical_strength;
                 surface.roughness=inst.pattern==3u?
@@ -550,15 +558,20 @@ void synchronize_scene()
         return;
     }
     // Scene replacement occurs after previous GPU submissions have completed.
-    if(material_compositor)material_compositor->set_scene({},lights);
+    const bool has_optics=source && std::any_of(
+        source->instances.begin(),source->instances.end(),
+        [](const auto& inst){return inst.pattern==2u || inst.pattern==3u;});
+    if(material_compositor && !has_optics)
+        material_compositor->set_scene({},lights);
     optical_geometry_source.reset();
     optical_surfaces.clear();
     skinned_faces.clear();
-    if(source && std::any_of(source->instances.begin(),source->instances.end(),
-        [](const auto& inst){return inst.pattern==2u || inst.pattern==3u;})) {
+    if(has_optics) {
         std::vector<optics::face_uv> face_uvs;
         std::vector<optics::face_normals> face_normals;
         optical_surfaces=optical_scene(*source,face_uvs,face_normals);
+        if(optical_surfaces.empty() && material_compositor)
+            material_compositor->set_scene({},lights);
         if(!optical_surfaces.empty() && material_compositor) {
             optical_geometry_source=source;
             material_compositor->set_scene(optical_surfaces,lights,

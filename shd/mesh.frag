@@ -52,7 +52,7 @@ void main()
     // Both glass and mirrors are resolved in the separate optical pass.
     // Do not write either into the opaque G-buffer: doing so causes
     // double layers, hides nested optics, and duplicates reflections.
-    if (instance_tint.w >= 2.0 && instance_tint.w < 4.0) discard;
+    if (instance_tint.w >= 2.0 && instance_tint.w < 5.0) discard;
     if (instance_tint.w > 0.5 && instance_tint.w < 1.5)
     {
         // Face-local checker covers all six faces and rotates with the cube.

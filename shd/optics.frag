@@ -12,12 +12,15 @@ layout(location=2) out vec4 out_material;
 void main()
 {
     float kind=floor(instance_tint.w+0.000001);
-    if(kind!=2.0 && kind!=3.0)discard;
+    if(kind!=2.0 && kind!=3.0 && kind!=4.0)discard;
     uint packed=uint(round(fract(instance_tint.w)*65536.0));
     float strength=float((packed>>8u)&255u)/255.0;
     float mattness=float(packed&255u)/255.0;
     vec3 N=normalize(world_normal);
-    out_normal=vec4(N*.5+.5,kind==2.0?.5:1.0);
+    out_normal=vec4(N*.5+.5,kind==3.0?1.0:.5);
     out_tint=vec4(instance_tint.rgb,strength);
-    out_material=vec4(mattness,kind==2.0?1.52:1.0,0.0,1.0);
+    // The optical targets are RGBA8 UNORM. Encode IOR as (ior - 1):
+    // an unnormalized 1.52 would otherwise be clamped to 1.0.
+    out_material=vec4(mattness,kind==3.0?0.0:.52,
+                      kind==4.0?1.0:0.0,1.0);
 }
