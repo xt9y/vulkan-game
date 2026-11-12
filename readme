@@ -14,9 +14,9 @@ including its types, declarations and implementations:
   client/clt/*.hpp           clt::*
 
 Only server/server.cpp and client/client.cpp are application translation
-units. They contain the entry points and host setup; the client includes
-the shared server code with VULKAN_GAME_SHARED_ONLY. Assets and shaders
-stay in their existing root directories.
+units. They contain the entry points and host setup. Shared scene, protocol
+and asset code is included through its headers. Assets and shaders stay
+in their existing root directories.
 
 Dependencies: VulkanWrapper, VulkanSystems and Vulkan-Headers submodules,
 GLFW, fastgltf, Ozz, stb and Mbed TLS.
@@ -30,7 +30,9 @@ Run from the repository root:
   c build run vulkan-server
   c build run vulkan-client
 
-The namespace-header layout has not yet been validated by a native build.
+Both targets have been validated with native builds on macOS. Protocol
+regression checks (AddressSanitizer and UBSan) use the build's include paths:
+  python3 tests/run_protocol.py
 
 Mirror performance profiling (same camera, resolution and scene each run):
   c build run vulkan-server

@@ -5,7 +5,6 @@ namespace game_weapons
 {
 ::weapon::gun make()
 {
-    using motion = ::weapon::motion;
     ::weapon::gun glock{};
     glock.rules.id = 1;
     glock.rules.magazine_capacity = 15;

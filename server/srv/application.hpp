@@ -1,4 +1,9 @@
 #pragma once
+#include "../game/application.hpp"
+#include "../game/options.hpp"
+#include "../game/secure_config.hpp"
+#include "../net/animation.hpp"
+#include "assets.hpp"
 #include "../net/editor_light.hpp"
 #include "../net/editor_cube.hpp"
 #include "../net/movement.hpp"
@@ -79,15 +84,9 @@ struct state
     bool initialized = false;
 };
 
-state *get();
-void set_scene(::scene::state scene);
-void load_model(std::filesystem::path path, ::scene::transform pose, std::uint32_t animation);
-void add_weapon(::weapon::definition definition);
 void init();
 void begin_stream();
 void append_scene(::scene::state patch, bool final = false);
-int run();
-void shutdown() noexcept;
 
 using clock = std::chrono::steady_clock;
 
@@ -132,7 +131,6 @@ void reply(const net::endpoint::resource &peer, net::message::type type, const n
 void tick_players();
 void tick_weapons();
 void handle_weapon(const net::endpoint::resource &peer, const net::weapon::command &command);
-net::weapon::snapshot weapon_snapshot(const session::resource &client, double now);
 } // namespace
 state *get()
 {
@@ -448,12 +446,7 @@ void send_editor(const session::resource& client,Packet packet)
 template<class F>
 void with_client(const net::endpoint::resource& peer,std::uint32_t token,F&& action)
 {
-    for(auto& client:session::get()->clients)
-        if(client.active && client.token==token &&
-           net::endpoint::equal(client.endpoint,peer)) {
-            action(client);
-            return;
-        }
+    if (auto* client = session::authenticated(peer, token)) action(*client);
 }
 bool editor_local(const net::endpoint::resource &peer)
 {

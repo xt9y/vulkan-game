@@ -1,4 +1,5 @@
 #pragma once
+#include "../../server/net/scene_stream.hpp"
 #include "../../server/game/secure_config.hpp"
 #include "../../server/net/animation.hpp"
 #include "../../server/net/editor_light.hpp"
@@ -28,6 +29,7 @@
 #include <random>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -81,23 +83,8 @@ struct state
     bool initialized = false;
 };
 
-state *get();
 std::shared_ptr<const ::scene::state> snapshot();
 std::optional<net::animation::resource> animation(std::uint32_t instance_id);
-bool send_editor_light(net::editor_light::resource command);
-bool send_editor_cube(net::editor_cube::resource command);
-bool send_weapon(net::weapon::command command);
-std::deque<net::weapon::snapshot> take_weapon_updates();
-std::deque<net::weapon::shot> take_weapon_shots();
-void check_error();
-void send_input(const ::player::input &input);
-void request_respawn(std::uint32_t last_input);
-bool respawning();
-std::optional<net::movement::snapshot> take_authority();
-std::optional<::player::parameters_t> movement_parameters();
-std::vector<net::movement::peer> remote_players();
-void init();
-void shutdown() noexcept;
 
 using clock = std::chrono::steady_clock;
 
@@ -574,47 +561,48 @@ void run(const std::string &host, std::uint16_t port)
                     break;
 
                 if (!net::endpoint::equal(peer, server)) continue;
-                const auto accept_editor=[&](const auto& update,auto& queue,
-                                             auto apply,const char* label) {
-                    if(update.token!=token ||
-                       !data.connected.load(std::memory_order_relaxed) ||
-                       (update.type!=net::editor_light::kind::state &&
-                        update.type!=net::editor_light::kind::ack))return;
-                    if(update.type==net::editor_light::kind::ack) {
-                        std::lock_guard lock(data.editor_mutex);
-                        if(!queue.empty() && queue.front().sequence==update.sequence) {
-                            queue.pop_front();
-                            if(label)std::clog<<"clt: editor "<<label<<" "<<update.index
-                                              <<" confirmed by server\n";
-                        }
-                    }
-                    std::lock_guard lock(data.scene_mutex);
-                    apply(update);
-                    last_received=now;
+                // A decoded packet is consumed even if authentication fails.
+                // Only the configured endpoint reaches this dispatcher.
+                const auto dispatch = [&](auto decode, auto accept) {
+                    const auto packet = decode(buffer.data(), *size);
+                    if (!packet) return false;
+                    const auto packet_token = [&] {
+                        if constexpr (requires { packet->token; }) return packet->token;
+                        else return packet->state.token;
+                    }();
+                    if (packet_token == token && data.connected.load(std::memory_order_relaxed)) accept(*packet);
+                    return true;
                 };
-                if(const auto update=net::editor_cube::decode(buffer.data(),*size)) {
-                    accept_editor(*update,data.cube_outgoing,[&](const auto& v) {
-                        const auto it=data.cube_states.find(v.index);
-                        if((it==data.cube_states.end() &&
-                            data.cube_states.size()<net::editor_cube::max_cubes) ||
-                           (it!=data.cube_states.end() &&
-                            net::message::newer(v.revision,it->second.revision))) {
-                            data.cube_states[v.index]=v;
-                            data.cubes_dirty=true;
+                const auto accept_editor = [&](const auto& update, auto& outgoing, auto merge) {
+                    if (update.type != net::editor_light::kind::state && update.type != net::editor_light::kind::ack) return;
+                    if (update.type == net::editor_light::kind::ack) {
+                        std::lock_guard lock(data.editor_mutex);
+                        if (!outgoing.empty() && outgoing.front().sequence == update.sequence) outgoing.pop_front();
+                    }
+                    {
+                        std::lock_guard lock(data.scene_mutex);
+                        merge(update);
+                    }
+                    last_received = now;
+                };
+                if (dispatch(net::editor_cube::decode, [&](const auto& update) {
+                    accept_editor(update, data.cube_outgoing, [&](const auto& value) {
+                        const auto found = data.cube_states.find(value.index);
+                        if ((found == data.cube_states.end() && data.cube_states.size() < net::editor_cube::max_cubes) ||
+                            (found != data.cube_states.end() && net::message::newer(value.revision, found->second.revision))) {
+                            data.cube_states[value.index] = value;
+                            data.cubes_dirty = true;
                         }
-                    },nullptr);
-                    continue;
-                }
-                if(const auto update=net::editor_light::decode(buffer.data(),*size)) {
-                    accept_editor(*update,data.editor_outgoing,[&](const auto& v) {
-                        auto& revision=data.light_versions[v.index];
-                        if(net::message::newer(v.revision,revision)) {
-                            revision=v.revision;
-                            data.light_pending[v.index]=v;
+                    });
+                }) || dispatch(net::editor_light::decode, [&](const auto& update) {
+                    accept_editor(update, data.editor_outgoing, [&](const auto& value) {
+                        auto& revision = data.light_versions[value.index];
+                        if (net::message::newer(value.revision, revision)) {
+                            revision = value.revision;
+                            data.light_pending[value.index] = value;
                         }
-                    },"light");
-                    continue;
-                }
+                    });
+                })) continue;
 
                 auto accept_weapon = [&](const net::weapon::snapshot &update)
                 {
@@ -648,69 +636,40 @@ void run(const std::string &host, std::uint16_t port)
                     return true;
                 };
 
-                if (const auto shot = net::weapon::decode_shot(buffer.data(), *size)) {
-                    if (shot->state.token == token && data.connected.load(std::memory_order_relaxed) &&
-                        !data.respawn_pending.load(std::memory_order_acquire) &&
-                        (!respawn_server_tick ||
-                         net::message::newer(shot->state.tick,respawn_server_tick))) {
-                        accept_weapon(shot->state);
-                        std::lock_guard<std::mutex> lock(data.weapon_mutex);
-
-                        if (data.weapon_shots.size() >= 64)
-                            data.weapon_shots.pop_front();
-                        data.weapon_shots.push_back(*shot);
-                    }
-
-                    continue;
-                }
-
-                if (const auto update = net::weapon::decode_snapshot(buffer.data(), *size)) {
-                    if (update->token == token && data.connected.load(std::memory_order_relaxed))
-                        accept_weapon(*update);
-
-                    continue;
-                }
-
-                // Shared parse/authentication/keepalive gate for state packets.
-                // Each handler owns only the state-specific update and mutex.
-                const auto dispatch=[&](auto decode,auto handle) {
-                    const auto value=decode(buffer.data(),*size);
-                    if(!value)return false;
-                    if(value->token==token &&
-                       data.connected.load(std::memory_order_relaxed)) {
-                        handle(*value);
-                        last_received=now;
-                    }
-                    return true;
-                };
-                if(dispatch(net::animation::decode,[&](const auto& v) {
+                if (dispatch(net::weapon::decode_shot, [&](const auto& shot) {
+                    if (data.respawn_pending.load(std::memory_order_acquire) ||
+                        (respawn_server_tick && !net::message::newer(shot.state.tick, respawn_server_tick))) return;
+                    accept_weapon(shot.state);
+                    std::lock_guard lock(data.weapon_mutex);
+                    if (data.weapon_shots.size() >= 64) data.weapon_shots.pop_front();
+                    data.weapon_shots.push_back(shot);
+                }) || dispatch(net::weapon::decode_snapshot, accept_weapon) ||
+                dispatch(net::animation::decode, [&](const auto& value) {
                     std::lock_guard lock(data.animation_mutex);
-                    const auto previous=data.animations.find(v.instance_id);
-                    if(previous==data.animations.end() ||
-                       net::message::newer(v.server_tick,previous->second.server_tick))
-                        data.animations[v.instance_id]=v;
-                }))continue;
-                if(dispatch(net::movement::decode_parameters,[&](const auto& v) {
+                    const auto old = data.animations.find(value.instance_id);
+                    if (old == data.animations.end() || net::message::newer(value.server_tick, old->second.server_tick))
+                        data.animations[value.instance_id] = value;
+                    last_received = now;
+                }) || dispatch(net::movement::decode_parameters, [&](const auto& settings) {
                     std::lock_guard lock(data.player_mutex);
-                    data.server_parameters=v.values;
-                }))continue;
-                if(dispatch(net::movement::decode_peers,[&](const auto& v) {
+                    data.server_parameters = settings.values;
+                    last_received = now;
+                }) || dispatch(net::movement::decode_peers, [&](const auto& peers) {
                     std::lock_guard lock(data.peers_mutex);
-                    if(data.peers_received==clock::time_point{} ||
-                       net::message::newer(v.tick,data.peers.tick)) {
-                        data.peers=v;
-                        data.peers_received=now;
+                    if (data.peers_received == clock::time_point{} || net::message::newer(peers.tick, data.peers.tick)) {
+                        data.peers = peers;
+                        data.peers_received = now;
                     }
-                }))continue;
-                if(dispatch(net::movement::decode_snapshot,[&](const auto& v) {
-                    if(!net::message::newer(v.tick,last_player_tick))return;
-                    last_player_tick=v.tick;
-                    while(!unacknowledged.empty() &&
-                          !net::message::newer(unacknowledged.front().sequence,v.sequence))
+                    last_received = now;
+                }) || dispatch(net::movement::decode_snapshot, [&](const auto& update) {
+                    last_received = now;
+                    if (!net::message::newer(update.tick, last_player_tick)) return;
+                    last_player_tick = update.tick;
+                    while (!unacknowledged.empty() && !net::message::newer(unacknowledged.front().sequence, update.sequence))
                         unacknowledged.pop_front();
                     std::lock_guard lock(data.player_mutex);
-                    data.authority=v;
-                }))continue;
+                    data.authority = update;
+                })) continue;
 
                 const auto message = net::message::decode(buffer.data(), *size);
                 if(message && message->type==net::message::type::respawned &&

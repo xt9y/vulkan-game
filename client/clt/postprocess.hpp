@@ -36,9 +36,6 @@ struct skinned_face {
 };
 std::vector<skinned_face> skinned_faces;
 }
-void create();
-void synchronize_scene();
-void release();
 void update_skinned(std::uint32_t frame,const camera::frame& view);
 void present(vk::CommandBuffer command, std::uint32_t image,
              const camera::frame &view,const gpu::timestamps* timings);

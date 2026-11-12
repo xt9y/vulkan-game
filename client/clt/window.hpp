@@ -1,4 +1,5 @@
 #pragma once
+#include "../../server/game/options.hpp"
 #include "vulkan_loader.hpp"
 #include <GLFW/glfw3.h>
 #include <atomic>

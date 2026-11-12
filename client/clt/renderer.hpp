@@ -1,4 +1,5 @@
 #pragma once
+#include "vulkan_loader.hpp"
 #include "connection.hpp"
 #include "postprocess.hpp"
 #include "scene_renderer.hpp"
@@ -37,10 +38,7 @@ struct state
     bool initialized = false;
 };
 
-state *get();
-void init(const char *vertex_path, const char *fragment_path);
 void resize();
-void draw_frame();
 void shutdown() noexcept;
 
 namespace

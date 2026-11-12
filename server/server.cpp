@@ -1,57 +1,9 @@
-#include "util/math/quaternion.hpp"
-#include "util/math/vector.hpp"
-#include <algorithm>
-#include <array>
-#include <atomic>
-#include <chrono>
-#include <climits>
-#include <cmath>
-#include <csignal>
-#include <cstddef>
-#include <cstdint>
-#include <cstdlib>
-#include <cstring>
-#include <deque>
-#include <exception>
-#include <filesystem>
-#include <fstream>
-#include <functional>
-#include <iostream>
-#include <iterator>
-#include <limits>
-#include <memory>
-#include <network/socket.hpp>
-#include <numeric>
-#include <optional>
-#include <regex>
-#include <span>
-#include <stdexcept>
-#include <string>
-#include <string_view>
-#include <thread>
-#include <utility>
-#include <vector>
-#include <vk/vk.hpp>
-
 #include "game/application.hpp"
 #include "game/options.hpp"
-#include "game/secure_config.hpp"
 #include "game_weapons.hpp"
-#include "net/animation.hpp"
-#include "net/editor_light.hpp"
-#include "net/limits.hpp"
-#include "net/message.hpp"
-#include "net/movement.hpp"
-#include "net/movement/detail.hpp"
-#include "net/weapon.hpp"
-#include "player.hpp"
-#include "scene.hpp"
-#include "srv/assets.hpp"
-#include "weapon.hpp"
-
-#ifndef VULKAN_GAME_SHARED_ONLY
 #include "srv/application.hpp"
-#include "srv/session.hpp"
+#include <csignal>
+#include <iostream>
 
 static ::scene::mesh box_mesh(std::uint32_t id, vk::util::math::vec3 h, bool checker = false)
 {
@@ -215,4 +167,3 @@ int main(int argc, char **argv)
         return 1;
     }
 }
-#endif

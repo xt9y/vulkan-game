@@ -1,45 +1,3 @@
-#define VULKAN_GAME_SHARED_ONLY
-#include "../server/server.cpp"
-#undef VULKAN_GAME_SHARED_ONLY
-
-#include <algorithm>
-#include <array>
-#include <atomic>
-#include <bit>
-#include <chrono>
-#include <climits>
-#include <cmath>
-#include <csignal>
-#include <cstddef>
-#include <cstdint>
-#include <cstdlib>
-#include <cstring>
-#include <deque>
-#include <editor/editor.hpp>
-#include <editor/vulkan.hpp>
-#include <exception>
-#include <filesystem>
-#include <iostream>
-#include <iterator>
-#include <limits>
-#include <map>
-#include <memory>
-#include <mutex>
-#include <network/socket.hpp>
-#include <optional>
-#include <pcloud/pcloud.hpp>
-#include <random>
-#include <stdexcept>
-#include <string>
-#include <string_view>
-#include <thread>
-#include <tuple>
-#include <unordered_map>
-#include <unordered_set>
-#include <utility>
-#include <vector>
-#include <vk/vk.hpp>
-
 #include "clt/animation.hpp"
 #include "clt/camera.hpp"
 #include "clt/connection.hpp"
@@ -52,6 +10,10 @@
 #include "clt/vulkan_loader.hpp"
 #include "clt/weapon.hpp"
 #include "clt/window.hpp"
+#include "../server/game/application.hpp"
+#include "../server/game/options.hpp"
+#include "../server/game_weapons.hpp"
+#include <csignal>
 
 static constexpr std::uint64_t editor_light_ids = 1ull << 32;
 static constexpr std::uint64_t editor_cube_ids = 2ull << 32;

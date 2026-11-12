@@ -60,6 +60,14 @@ state *get()
     return &data;
 }
 
+resource* authenticated(const net::endpoint::resource& peer, std::uint32_t token)
+{
+    for (auto& client : get()->clients)
+        if (client.active && client.token == token && net::endpoint::equal(client.endpoint, peer))
+            return &client;
+    return nullptr;
+}
+
 void init()
 {
     *get() = {};

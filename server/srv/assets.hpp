@@ -30,9 +30,7 @@
 
 namespace srv::assets
 {
-std::vector<::scene::texture> images(const fastgltf::Asset &asset, std::uint32_t first_texture);
 
-::scene::state load(const std::filesystem::path &path, std::uint32_t first_mesh, std::uint32_t first_instance, std::uint32_t first_texture, std::uint32_t first_skin);
 
 struct rig
 {

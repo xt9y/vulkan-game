@@ -24,9 +24,7 @@ using clip = ::weapon::clip;
 using bindings = ::weapon::bindings;
 using definition = ::weapon::gun;
 using gun = ::weapon::gun;
-bindings active_bindings();
 void register_weapon(definition value);
-void check_magazine();
 struct instance_data
 {
     vk::util::math::mat4 model;
@@ -45,11 +43,9 @@ struct draw
 };
 
 void controls(bool trigger, bool ads, bool reload, std::uint32_t movement);
-void initialize();
 const ::scene::state &assets();
 const std::vector<draw> &update(const vk::util::math::mat4 &view);
 vk::util::math::mat4 view_projection(float aspect, const vk::util::math::mat4 &view);
-void shutdown();
 
 using namespace vk::util::math;
 namespace
