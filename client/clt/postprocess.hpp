@@ -556,6 +556,7 @@ void synchronize_scene()
     const bool has_mirror=source && std::any_of(
         source->instances.begin(),source->instances.end(),
         [](const auto& inst){return inst.pattern==3u;});
+    const bool had_mirror=!optical_surfaces.empty();
     optical_geometry_source.reset();
     optical_surfaces.clear();
     skinned_faces.clear();
@@ -563,8 +564,12 @@ void synchronize_scene()
     // triangle flattening, 80k-face BVH, UV atlas, or skinned BVH refit.
     if(!has_mirror && material_compositor) {
         material_compositor->set_scene({},lights,has_optics);
-        if(!has_optics)material_compositor->set_textures({},{});
-        else std::clog<<"optics: glass-only HDR path, no reflection BVH\n";
+        if(had_mirror) {
+            // Retire the previous mirror's atlas and smooth-normal buffers.
+            material_compositor->set_normals({});
+            material_compositor->set_textures({},{});
+        }
+        if(has_optics)std::clog<<"optics: glass-only HDR path, no reflection BVH\n";
     }
     if(has_mirror) {
         std::vector<optics::face_uv> face_uvs;
