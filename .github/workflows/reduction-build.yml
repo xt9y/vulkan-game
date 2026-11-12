@@ -2,6 +2,8 @@ name: Reduction branch build
 on:
   push:
     branches: [reduction-dod-20261111]
+  pull_request:
+    branches: [main]
 jobs:
   native:
     runs-on: ubuntu-24.04
