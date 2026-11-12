@@ -469,7 +469,8 @@ std::optional<planar_view> planar_reflection(const camera::frame& camera)
 // Conservative screen-space bounds for visible glass/mirror instances.
 // Disjoint rectangles avoid overshading; glass uses a cheap compositing
 // shader and only reflective mirror pixels traverse the scene BVH.
-std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
+std::vector<vk::Rect2D> optical_rects(const camera::frame& camera,
+                                      std::uint32_t material=0u)
 {
     const auto extent=vk::swapchain::get()->extent;
     std::vector<vk::Rect2D> regions;
@@ -480,6 +481,7 @@ std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
         if(mesh.instances.empty())continue;
         for(const auto& instance:mesh.instances) {
             if(instance.pattern!=2u && instance.pattern!=3u)continue;
+            if(material!=0u && instance.pattern!=material)continue;
             // Bind-pose bounds do not conservatively contain every skin
             // deformation. Never clip a reflective animated surface.
             if(mesh.joint_count)

@@ -733,16 +733,21 @@ void present(vk::CommandBuffer cmd, std::uint32_t image,
                 params.up={v(1,0),v(1,1),v(1,2),half_tan};
                 params.forward={-v(2,0),-v(2,1),-v(2,2),
                                 game::options::get()->graphics.exposure};
-                const auto regions=scene_renderer::optical_rects(view);
-                // The nested optics timestamp can be near-zero when the
-                // mirror is outside the view. Record how much screen space
-                // actually enters the BVH shader, separately from present.
+                // Each optical material resolves only its own projected
+                // area. Mixed scenes no longer scan the same large scissor
+                // rectangle in both the glass and BVH mirror shaders.
+                const auto glass_regions=scene_renderer::optical_rects(view,2u);
+                const auto mirror_regions=scene_renderer::optical_rects(view,3u);
                 static std::uint32_t observations=0,active=0;
                 static std::uint64_t submitted_pixels=0;
-                if(!regions.empty())++active;
-                for(const auto& region:regions)
-                    submitted_pixels+=std::uint64_t(region.extent.width)*
-                                      region.extent.height;
+                if(!glass_regions.empty() || !mirror_regions.empty())++active;
+                const auto count_pixels=[&](const auto& regions) {
+                    for(const auto& r:regions)
+                        submitted_pixels+=std::uint64_t(r.extent.width)*
+                                          r.extent.height;
+                };
+                count_pixels(glass_regions);
+                count_pixels(mirror_regions);
                 if(++observations==120) {
                     std::clog<<"optics: active_frames="<<active
                              <<"/120 scissor_pixels_per_frame="
@@ -750,7 +755,8 @@ void present(vk::CommandBuffer cmd, std::uint32_t image,
                     observations=active=0;
                     submitted_pixels=0;
                 }
-                material_compositor->record(command,image,params,regions,extent);
+                material_compositor->record(command,image,params,
+                    glass_regions,mirror_regions,extent);
             }
             if(timings)timings->end(command,image,6);
             editor::draw_list commands;
