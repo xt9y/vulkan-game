@@ -25,7 +25,7 @@ static void compile_shaders(void)
         "shd/optics.frag","shd/cull.comp",
         "third-party/vulkan-systems/optics/optics/shaders/compose.frag",
         "third-party/vulkan-systems/optics/optics/shaders/compose_mirror.frag",
-        "third-party/vulkan-systems/optics/optics/shaders/compose_planar.frag",
+        "third-party/vulkan-systems/optics/optics/shaders/compose_planar.frag"};
     for(size_t i=0;i<sizeof(shaders)/sizeof(*shaders);++i)
     {
         const char* name=strrchr(shaders[i],'/');
@@ -33,8 +33,7 @@ static void compile_shaders(void)
         struct stat source,binary;
         snprintf(output,sizeof(output),"build/shaders/%s%s.spv",
                  strstr(shaders[i],"/optics/")?"optics_":
-                 strstr(shaders[i],"/pmap/shaders/")?"pmap_":"",
-                 name?name+1:shaders[i]);
+                 "",name?name+1:shaders[i]);
         if(stat(shaders[i],&source))
         {
             fprintf(stderr,"Missing shader: %s\n",shaders[i]);
@@ -46,7 +45,6 @@ static void compile_shaders(void)
         const int optics=strstr(shaders[i],"/optics/optics/shaders/")!=NULL;
         struct stat include;
         if(!stat(output,&binary) && binary.st_mtime>=source.st_mtime &&
-                      binary.st_mtime>=include.st_mtime)) &&
            (!optics || (!stat(optics_header,&include) &&
                         binary.st_mtime>=include.st_mtime)) &&
            (!optics || (!stat(composition_header,&include) &&

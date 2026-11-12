@@ -503,9 +503,6 @@ bool optical_geometry_unchanged(const ::scene::state& a,
     return true;
 }
 
-    return true;
-}
-
 void synchronize_scene()
 {
     const auto source = connection::snapshot();
@@ -572,7 +569,7 @@ void synchronize_scene()
                 material_compositor->set_textures(
                     face_uvs,optical_textures(*source,face_uvs));
             std::clog<<"optics: own BVH with "<<optical_surfaces.size()
-                     <<" triangle faces, PCloud indirect lighting\\n";
+                     <<" triangle faces, PCloud indirect lighting\n";
         }
     }
     registered=source;
