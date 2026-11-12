@@ -409,7 +409,7 @@ std::optional<planar_view> planar_reflection(const camera::frame& camera)
         optical=&instance;
     }
     if(!optical || optical->mesh_id!=::scene::unit_cube_mesh_id ||
-       std::abs(optical->pose.scale.x)>.06f ||
+       std::abs(optical->pose.scale.x)>=.06f ||
        std::abs(optical->pose.scale.x)<.001f ||
        std::abs(optical->pose.scale.y)<1.f ||
        std::abs(optical->pose.scale.z)<1.f)
