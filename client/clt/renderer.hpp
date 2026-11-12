@@ -1,4 +1,5 @@
 #pragma once
+#include "vulkan_loader.hpp"
 #include "connection.hpp"
 #include "postprocess.hpp"
 #include "scene_renderer.hpp"
@@ -37,10 +38,7 @@ struct state
     bool initialized = false;
 };
 
-state *get();
-void init(const char *vertex_path, const char *fragment_path);
 void resize();
-void draw_frame();
 void shutdown() noexcept;
 
 namespace
@@ -357,6 +355,14 @@ void draw_frame()
 
     data.timings.begin_frame(active.command, active.image);
 
+    // Shared image-access declaration for the point-cloud/reflection graph.
+    const auto access=[&](vk::Image image,bool writing,bool fragment=false) {
+        return gpu::access::for_image(image,range,vk::ImageLayout::eGeneral,
+            fragment?vk::PipelineStageFlagBits::eFragmentShader:
+                     vk::PipelineStageFlagBits::eComputeShader,
+            writing?vk::AccessFlagBits::eShaderWrite:
+                    vk::AccessFlagBits::eShaderRead,writing);
+    };
     const auto measure = [&](std::uint32_t index, gpu::graph::callback callback)
         -> gpu::graph::callback
     {
@@ -378,99 +384,60 @@ void draw_frame()
         announced_planar=true;
     }
     const auto reflected=pc::reflection_images(active.image);
-    data.passes.record(active.command,active.image,{
-        {"geometry",{},measure(0,[image=active.image,render_camera,
-                                  planar,planar_visible](vk::CommandBuffer cmd) {
-            scene_renderer::draw(cmd,image,render_camera);
-            if(planar_visible)
-                scene_renderer::draw_reflection(cmd,image,render_camera,*planar);
-            else {
-                postprocess::update_skinned(image,render_camera);
-                postprocess::update_photons(cmd,image,render_camera);
-            }
-        })},
-        {"point-cloud",{
-            gpu::access::for_buffer(target.points,
-                vk::PipelineStageFlagBits::eComputeShader,
-                vk::AccessFlagBits::eShaderWrite,true)
-        },measure(1,[image=active.image](vk::CommandBuffer cmd) {
-            pc::cloud(cmd,image);
-        })},
-        {"probe-grid",{
-            gpu::access::for_buffer(target.points,
-                vk::PipelineStageFlagBits::eComputeShader,
-                vk::AccessFlagBits::eShaderRead,false),
-            gpu::access::for_image(target.grid,range,vk::ImageLayout::eGeneral,
-                vk::PipelineStageFlagBits::eComputeShader,
-                vk::AccessFlagBits::eShaderWrite,true)
-        },measure(2,[image=active.image](vk::CommandBuffer cmd) {
-            pc::gi(cmd,image);
-        })},
-        {"lighting",{
-            gpu::access::for_image(target.grid,range,vk::ImageLayout::eGeneral,
-                vk::PipelineStageFlagBits::eComputeShader,
-                vk::AccessFlagBits::eShaderRead,false),
-            gpu::access::for_image(target.hdr,range,vk::ImageLayout::eGeneral,
-                vk::PipelineStageFlagBits::eComputeShader,
-                vk::AccessFlagBits::eShaderWrite,true)
-        },measure(3,[image=active.image,gi_camera](vk::CommandBuffer cmd) {
-            pc::lighting(cmd,image,gi_camera);
-        })},
-        {"tonemapping",{
-            gpu::access::for_image(target.hdr,range,vk::ImageLayout::eGeneral,
-                vk::PipelineStageFlagBits::eComputeShader,
-                vk::AccessFlagBits::eShaderRead,false),
-            gpu::access::for_image(target.ldr,range,vk::ImageLayout::eGeneral,
-                vk::PipelineStageFlagBits::eComputeShader,
-                vk::AccessFlagBits::eShaderWrite,true)
-        },measure(4,[image=active.image,gi_camera](vk::CommandBuffer cmd) {
-            pc::tonemap(cmd,image,gi_camera);
-        })},
-        {"mirror-lighting",{
-            gpu::access::for_image(target.grid,range,vk::ImageLayout::eGeneral,
-                vk::PipelineStageFlagBits::eComputeShader,
-                vk::AccessFlagBits::eShaderRead,false),
-            gpu::access::for_image(reflected.hdr,range,vk::ImageLayout::eGeneral,
-                vk::PipelineStageFlagBits::eComputeShader,
-                vk::AccessFlagBits::eShaderWrite,true)
-        },measure(7,[image=active.image,planar,planar_visible](vk::CommandBuffer cmd) {
+    using pass=::render::sequence::pass;
+    std::vector<pass> passes;
+    passes.reserve(8);
+    const auto add=[&](const char* name,std::uint32_t slot,
+                       std::vector<gpu::access> resources,
+                       gpu::graph::callback action) {
+        passes.push_back({name,std::move(resources),measure(slot,std::move(action))});
+    };
+    const auto image=active.image;
+    const auto buffer=[&](vk::Buffer handle,bool write) {
+        return gpu::access::for_buffer(handle,
+            vk::PipelineStageFlagBits::eComputeShader,
+            write?vk::AccessFlagBits::eShaderWrite:
+                  vk::AccessFlagBits::eShaderRead,write);
+    };
+    add("geometry",0,{},[=](vk::CommandBuffer cmd) {
+        scene_renderer::draw(cmd,image,render_camera);
+        if(planar_visible)
+            scene_renderer::draw_reflection(cmd,image,render_camera,*planar);
+        else {
+            postprocess::update_skinned(image,render_camera);
+            postprocess::update_photons(cmd,image,render_camera);
+        }
+    });
+    add("point-cloud",1,{buffer(target.points,true)},
+        [=](vk::CommandBuffer cmd){pc::cloud(cmd,image);});
+    add("probe-grid",2,{buffer(target.points,false),access(target.grid,true)},
+        [=](vk::CommandBuffer cmd){pc::gi(cmd,image);});
+    add("lighting",3,{access(target.grid,false),access(target.hdr,true)},
+        [=](vk::CommandBuffer cmd){pc::lighting(cmd,image,gi_camera);});
+    add("tonemapping",4,{access(target.hdr,false),access(target.ldr,true)},
+        [=](vk::CommandBuffer cmd){pc::tonemap(cmd,image,gi_camera);});
+    add("mirror-lighting",7,{access(target.grid,false),access(reflected.hdr,true)},
+        [=](vk::CommandBuffer cmd) {
             if(!planar_visible)return;
             const auto& r=planar->reflected;
             const auto& v=r.view;
             pc::reflection_lighting(cmd,image,{
                 r.eye,{-v(2,0),-v(2,1),-v(2,2)},
                 {v(0,0),v(0,1),v(0,2)},
-                {v(1,0),v(1,1),v(1,2)},r.pose.fov
-            });
-        })},
-        {"mirror-tonemap",{
-            gpu::access::for_image(reflected.hdr,range,vk::ImageLayout::eGeneral,
-                vk::PipelineStageFlagBits::eComputeShader,
-                vk::AccessFlagBits::eShaderRead,false),
-            gpu::access::for_image(reflected.ldr,range,vk::ImageLayout::eGeneral,
-                vk::PipelineStageFlagBits::eComputeShader,
-                vk::AccessFlagBits::eShaderWrite,true)
-        },measure(8,[image=active.image,planar_visible](vk::CommandBuffer cmd) {
+                {v(1,0),v(1,1),v(1,2)},r.pose.fov});
+        });
+    add("mirror-tonemap",8,
+        {access(reflected.hdr,false),access(reflected.ldr,true)},
+        [=](vk::CommandBuffer cmd) {
             if(planar_visible)pc::reflection_tonemap(cmd,image);
-        })},
-        {"presentation",{
-            gpu::access::for_image(target.ldr,range,vk::ImageLayout::eGeneral,
-                vk::PipelineStageFlagBits::eFragmentShader,
-                vk::AccessFlagBits::eShaderRead,false),
-            gpu::access::for_image(target.hdr,range,vk::ImageLayout::eGeneral,
-                vk::PipelineStageFlagBits::eFragmentShader,
-                vk::AccessFlagBits::eShaderRead,false),
-            gpu::access::for_image(target.grid,range,vk::ImageLayout::eGeneral,
-                vk::PipelineStageFlagBits::eFragmentShader,
-                vk::AccessFlagBits::eShaderRead,false),
-            gpu::access::for_image(reflected.ldr,range,vk::ImageLayout::eGeneral,
-                vk::PipelineStageFlagBits::eFragmentShader,
-                vk::AccessFlagBits::eShaderRead,false)
-        },measure(5,[image=active.image,render_camera,
-                      timings=&data.timings](vk::CommandBuffer cmd) {
-            postprocess::present(cmd,image,render_camera,timings);
-        })}
+        });
+    add("presentation",5,{
+        access(target.ldr,false,true),access(target.hdr,false,true),
+        access(target.grid,false,true),access(reflected.ldr,false,true)
+    },[=,timings=&data.timings](vk::CommandBuffer cmd) {
+        postprocess::present(cmd,image,render_camera,timings);
     });
+    data.passes.record(active.command,image,std::move(passes));
 
     try
     {

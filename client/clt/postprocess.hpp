@@ -36,99 +36,71 @@ struct skinned_face {
 };
 std::vector<skinned_face> skinned_faces;
 }
-void create();
-void synchronize_scene();
-void release();
 void update_skinned(std::uint32_t frame,const camera::frame& view);
 void present(vk::CommandBuffer command, std::uint32_t image,
              const camera::frame &view,const gpu::timestamps* timings);
 
 namespace
 {
-void append_remote_players(editor::draw_list &commands, const camera::frame &view, vk::Extent2D extent)
+void append_remote_players(editor::draw_list& commands,
+                           const camera::frame& view,vk::Extent2D extent)
 {
-    if (!editor::instance().visible() || !extent.width || !extent.height) return;
-
-    const auto parameters = connection::movement_parameters();
-    if (!parameters) return;
-
-    const auto players = connection::remote_players();
-
-    if (players.empty()) return;
+    if(!editor::instance().visible() || !extent.width || !extent.height)return;
+    const auto parameters=connection::movement_parameters();
+    if(!parameters)return;
+    const auto players=connection::remote_players();
+    if(players.empty())return;
     using namespace vk::util::math;
-
-    const mat4 vp = perspective(view.pose.fov, float(extent.width) / float(extent.height), .1f, 1000.f) * view.view;
-
-    struct screen_point
-    {
-        float x = 0, y = 0;
-        bool valid = false;
-    };
-
-    for (const auto &player : players)
-    {
-        const vec3 lower = player.position - vec3{parameters->radius, 0.f, parameters->radius};
-        const vec3 upper = player.position + vec3{parameters->radius, parameters->height, parameters->radius};
-
-        std::array<screen_point, 8> projected{};
-
-        for (int corner = 0; corner < 8; ++corner)
-        {
-            const vec3 position{
-                (corner & 1) ? upper.x : lower.x,
-                (corner & 2) ? upper.y : lower.y,
-                (corner & 4) ? upper.z : lower.z
+    const mat4 vp=perspective(view.pose.fov,
+        float(extent.width)/float(extent.height),.1f,1000.f)*view.view;
+    struct point {float x=0,y=0;bool valid=false;};
+    for(const auto& player:players) {
+        const vec3 lo=player.position-
+            vec3{parameters->radius,0.f,parameters->radius};
+        const vec3 hi=player.position+
+            vec3{parameters->radius,parameters->height,parameters->radius};
+        std::array<point,8> projected{};
+        for(int corner=0;corner<8;++corner) {
+            const vec3 p{
+                (corner&1)?hi.x:lo.x,(corner&2)?hi.y:lo.y,
+                (corner&4)?hi.z:lo.z
             };
-
-            const vec4 clip = vp * vec4{position, 1.f};
-
-            if (!std::isfinite(clip.w) || clip.w <= .0001f || clip.z < 0.f || clip.z > clip.w) continue;
-
-            const float x = 480.f * (1.f + clip.x / clip.w);
-            const float y = 270.f * (1.f + clip.y / clip.w);
-
-            if (std::isfinite(x) && std::isfinite(y)) projected[corner] = {x, y, true};
+            const vec4 clip=vp*vec4{p,1.f};
+            if(!std::isfinite(clip.w) || clip.w<=.0001f ||
+               clip.z<0.f || clip.z>clip.w)continue;
+            const float x=480.f*(1.f+clip.x/clip.w);
+            const float y=270.f*(1.f+clip.y/clip.w);
+            if(std::isfinite(x) && std::isfinite(y))
+                projected[corner]={x,y,true};
         }
-
-        for (int corner = 0; corner < 8; ++corner)
-            for (int axis = 0; axis < 3; ++axis)
-            {
-                if (corner & (1 << axis)) continue;
-                const auto &a = projected[corner];
-                const auto &b = projected[corner | (1 << axis)];
-
-                if (!a.valid || !b.valid) continue;
-
-                const float dx = b.x - a.x, dy = b.y - a.y;
-                float start = 0.f, end = 1.f;
-                const auto clip = [&](float p, float q)
-                {
-                    if (std::abs(p) < 1e-7f) return q >= 0.f;
-
-                    const float t = q / p;
-
-                    if (p < 0.f) start = std::max(start, t);
-                    else
-                        end = std::min(end, t);
-
-                    return start <= end;
+        for(int corner=0;corner<8;++corner)
+            for(int axis=0;axis<3;++axis) {
+                if(corner&(1<<axis))continue;
+                const auto& a=projected[corner];
+                const auto& b=projected[corner|(1<<axis)];
+                if(!a.valid || !b.valid)continue;
+                const float dx=b.x-a.x,dy=b.y-a.y;
+                float start=0.f,end=1.f;
+                const auto clip=[&](float p,float q) {
+                    if(std::abs(p)<1e-7f)return q>=0.f;
+                    const float t=q/p;
+                    if(p<0.f)start=std::max(start,t);
+                    else end=std::min(end,t);
+                    return start<=end;
                 };
-
-                if (!clip(-dx, a.x) || !clip(dx, 960.f - a.x) ||
-                    !clip(-dy, a.y) || !clip(dy, 540.f - a.y)) continue;
-                const float x0 = a.x + dx * start, y0 = a.y + dy * start;
-                const float x1 = a.x + dx * end, y1 = a.y + dy * end;
-                const int steps = std::max(1, int(std::ceil(
-                                                  std::max(std::abs(x1 - x0), std::abs(y1 - y0)) / 2.f)));
-                for (int i = 0; i <= steps; ++i)
-                {
-                    const float t = float(i) / float(steps);
-
+                if(!clip(-dx,a.x) || !clip(dx,960.f-a.x) ||
+                   !clip(-dy,a.y) || !clip(dy,540.f-a.y))continue;
+                const float x0=a.x+dx*start,y0=a.y+dy*start;
+                const float x1=a.x+dx*end,y1=a.y+dy*end;
+                const int steps=std::max(1,int(std::ceil(
+                    std::max(std::abs(x1-x0),std::abs(y1-y0))/2.f)));
+                for(int i=0;i<=steps;++i) {
+                    const float t=float(i)/float(steps);
                     editor::draw_command pixel{};
-                    pixel.x = int(std::lround(x0 + (x1 - x0) * t)) - 1;
-                    pixel.y = int(std::lround(y0 + (y1 - y0) * t)) - 1;
-                    pixel.width = pixel.height = 2;
-                    pixel.tint = {0.f, 1.f, 0.2f, 1.f};
+                    pixel.x=int(std::lround(x0+(x1-x0)*t))-1;
+                    pixel.y=int(std::lround(y0+(y1-y0)*t))-1;
+                    pixel.width=pixel.height=2;
+                    pixel.tint={0.f,1.f,.2f,1.f};
                     commands.push_back(std::move(pixel));
                 }
             }
@@ -205,18 +177,44 @@ bool lighting_shape_unchanged(const ::scene::state& previous,
         if(caster(incoming.instances[i]))return false;
     return true;
 }
-bool lighting_unchanged(const ::scene::state& previous,
-                        const ::scene::state& incoming)
+// Called only after lighting_shape_unchanged succeeds; never rewalk
+// the mesh and instance topology just to compare light radiance.
+bool light_radiance_unchanged(const ::scene::state& a,
+                              const ::scene::state& b)
 {
-    if(!lighting_shape_unchanged(previous,incoming))return false;
-    for(std::size_t i=0;i<previous.lights.size();++i) {
-        const auto& a=previous.lights[i];
-        const auto& b=incoming.lights[i];
-        if(a.color.x!=b.color.x || a.color.y!=b.color.y ||
-           a.color.z!=b.color.z || a.strength!=b.strength)
-            return false;
+    for(std::size_t i=0;i<a.lights.size();++i) {
+        const auto& x=a.lights[i],&y=b.lights[i];
+        if(x.color.x!=y.color.x || x.color.y!=y.color.y ||
+           x.color.z!=y.color.z || x.strength!=y.strength)return false;
     }
     return true;
+}
+
+// One weighted skinning implementation for PCloud and optical BVH refits.
+struct skinned_vertex {
+    vk::util::math::vec3 position{},normal{};
+};
+skinned_vertex skin_vertex(const ::scene::vertex& v,
+                           const std::vector<animation::matrix>& bones)
+{
+    using namespace vk::util::math;
+    if(bones.empty())return {v.position,v.normal};
+    vec3 p{},n{};float total=0.f;
+    for(std::size_t k=0;k<4;++k) {
+        const auto w=v.weights[k];
+        if(w<=0.f)continue;
+        if(v.joints[k]>=bones.size())throw std::runtime_error("Invalid skin joint");
+        const auto& m=bones[v.joints[k]];
+        const auto apply=[&](vec3 x,float t) {
+            return vec3{m[0]*x.x+m[4]*x.y+m[8]*x.z+m[12]*t,
+                        m[1]*x.x+m[5]*x.y+m[9]*x.z+m[13]*t,
+                        m[2]*x.x+m[6]*x.y+m[10]*x.z+m[14]*t};
+        };
+        p=p+apply(v.position,1.f)*w;
+        n=n+apply(v.normal,0.f)*w;
+        total+=w;
+    }
+    return total>0.f?skinned_vertex{p,n}:skinned_vertex{v.position,v.normal};
 }
 
 std::shared_ptr<pc::world> prepare_world(const ::scene::state *source)
@@ -233,53 +231,21 @@ std::shared_ptr<pc::world> prepare_world(const ::scene::state *source)
 
     for (const auto &box : source->collision_boxes)
         prepared->collision_boxes.push_back({box.minimum, box.maximum});
-    std::unordered_map<std::uint32_t, const ::scene::mesh *> mesh_lookup;
-    mesh_lookup.reserve(source->meshes.size());
-
-    for (const auto &mesh : source->meshes)
-        mesh_lookup.emplace(mesh.id, &mesh);
-
-    for (const auto &instance : source->instances)
-    {
-        const auto found = mesh_lookup.find(instance.mesh_id);
-
-        if (found == mesh_lookup.end()) continue;
-
-        const auto *mesh = found->second;
+    ::scene::each_mesh_instance(source->meshes,source->instances,
+                                 [&](const auto& selected,const auto& instance) {
+        const auto* mesh=&selected;
 
         // Transparent glass is handled by photonic transmission, not
         // opaque point-cloud shadow blocking.
-        if (mesh->surface.alpha_mode == 2 || instance.pattern == 2u) continue;
+        if (mesh->surface.alpha_mode == 2 || instance.pattern == 2u) return;
         std::vector<animation::matrix> palette;
 
         if (mesh->skin_id && !animation::sample(mesh->skin_id, instance.animation, 0.0f, palette, instance.overlay_animation, instance.overlay_weight, instance.overlay_root))
             throw std::runtime_error("Cannot sample imported shadow caster skin");
 
-        const auto transformed = [&](const ::scene::vertex &v)
-        {
-            vec3 local = v.position;
-
-            if (!palette.empty()) {
-                local = {};
-
-                for (std::size_t j = 0; j < 4; ++j)
-                {
-                    if (v.weights[j] <= 0.0f) continue;
-                    if (v.joints[j] >= palette.size())
-                        throw std::runtime_error("Shadow caster joint index invalid");
-                    const auto &m = palette[v.joints[j]];
-
-                    const vec3 p = v.position;
-
-                    local = local + vec3{
-                                        m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12], m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13], m[2] * p.x + m[6] * p.y + m[10] * p.z + m[14]
-                                    } * v.weights[j];
-                }
-            }
-
-            const auto &scale = instance.pose.scale;
-
-            return instance.pose.position + rotate(instance.pose.rotation, {local.x * scale.x, local.y * scale.y, local.z * scale.z});
+        const auto transformed=[&](const ::scene::vertex& vertex) {
+            const vec3 p=palette.empty()?vertex.position:skin_vertex(vertex,palette).position;
+            return ::scene::transform_position(instance.pose,p);
         };
 
         std::vector<vec3> positions;
@@ -320,7 +286,7 @@ std::shared_ptr<pc::world> prepare_world(const ::scene::state *source)
                 continue;
             prepared->triangles.push_back({a, b, c});
         }
-    }
+    });
 
     return prepared;
 }
@@ -341,20 +307,13 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
     normals.clear();
     skinned_faces.clear();
     result.omnidirectional_emitter=true;
-    std::unordered_map<std::uint32_t,const ::scene::mesh*> meshes;
-    meshes.reserve(world.meshes.size());
-    for(const auto& mesh:world.meshes)meshes.emplace(mesh.id,&mesh);
-    for(const auto& inst:world.instances) {
-        const auto it=meshes.find(inst.mesh_id);
-        if(it==meshes.end())continue;
-        const auto& mesh=*it->second;
+    ::scene::each_mesh_instance(world.meshes,world.instances,
+                                 [&](const auto& mesh,const auto& inst) {
         // Match the raster pass's stable clip rule for blended hair cards.
         if(mesh.surface.alpha_mode==2 && !mesh.surface.base_color_texture &&
-           mesh.surface.base_color[3]<.42f)continue;
+           mesh.surface.base_color[3]<.42f)return;
         const auto transform=[&](vec3 p) {
-            const auto& scale=inst.pose.scale;
-            return inst.pose.position+rotate(inst.pose.rotation,
-                {p.x*scale.x,p.y*scale.y,p.z*scale.z});
+            return ::scene::transform_position(inst.pose,p);
         };
         for(std::size_t i=0;i+2<mesh.indices.size();i+=3) {
             const auto ia=mesh.indices[i],ib=mesh.indices[i+1],ic=mesh.indices[i+2];
@@ -440,7 +399,7 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
                 mesh.surface.alpha_mode==2 ? .42f : 0.f;
             faces.push_back(mapping);
         }
-    }
+    });
     pm::surface emitter{};
     emitter.origin=light==world.lights.end()?vec3{}:light->position;
     emitter.u={.4f,0.f,0.f};
@@ -600,7 +559,7 @@ void synchronize_scene()
     if(!same_light_shape) {
         pc::set_scene(prepare_world(source.get()));
         pc::synchronize_scene();
-    } else if(!lighting_unchanged(*registered,*source)) {
+    } else if(!light_radiance_unchanged(*registered,*source)) {
         // The same shadow rays and probe positions, with new radiance.
         std::vector<pc::light> values;
         values.reserve(source->lights.size());
@@ -736,45 +695,17 @@ void update_skinned(std::uint32_t image,const camera::frame& view)
             const auto& instance=*face.instance;
             cache->second.reserve(face.mesh->vertices.size());
             for(const auto& vertex:face.mesh->vertices) {
-                vec3 local{},normal{};
-                float weight_sum=0.f;
-                for(std::size_t k=0;k<4;++k) {
-                    const float weight=vertex.weights[k];
-                    if(weight<=0.f)continue;
-                    if(vertex.joints[k]>=bones.size())
-                        throw std::runtime_error("optics: skinned joint out of bounds");
-                    const auto& m=bones[vertex.joints[k]];
-                    const vec3 p=vertex.position,n=vertex.normal;
-                    local=local+vec3{
-                        m[0]*p.x+m[4]*p.y+m[8]*p.z+m[12],
-                        m[1]*p.x+m[5]*p.y+m[9]*p.z+m[13],
-                        m[2]*p.x+m[6]*p.y+m[10]*p.z+m[14]
-                    }*weight;
-                    normal=normal+vec3{
-                        m[0]*n.x+m[4]*n.y+m[8]*n.z,
-                        m[1]*n.x+m[5]*n.y+m[9]*n.z,
-                        m[2]*n.x+m[6]*n.y+m[10]*n.z
-                    }*weight;
-                    weight_sum+=weight;
-                }
-                if(weight_sum<=0.f) {
-                    local=vertex.position;
-                    normal=vertex.normal;
-                }
+                const auto local=skin_vertex(vertex,bones);
                 const auto scale=instance.pose.scale;
-                const auto position=instance.pose.position+
-                    rotate(instance.pose.rotation,{
-                        local.x*scale.x,local.y*scale.y,local.z*scale.z
-                    });
+                const auto position=instance.pose.position+rotate(instance.pose.rotation,{
+                    local.position.x*scale.x,local.position.y*scale.y,local.position.z*scale.z});
                 const vec3 n=rotate(instance.pose.rotation,{
-                    normal.x/scale.x,normal.y/scale.y,normal.z/scale.z
-                });
-                cache->second.push_back({
-                    position,length_squared(n)>1e-8f?
-                    normalize(n):vec3{0.f,1.f,0.f}
-                });
+                    local.normal.x/scale.x,local.normal.y/scale.y,local.normal.z/scale.z});
+                cache->second.push_back({position,length_squared(n)>1e-8f?
+                    normalize(n):vec3{0.f,1.f,0.f}});
             }
         }
+
         const auto& v=cache->second;
         const auto ia=face.indices[0],ib=face.indices[1],ic=face.indices[2];
         if(ia>=v.size() || ib>=v.size() || ic>=v.size())continue;

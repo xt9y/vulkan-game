@@ -1,4 +1,5 @@
 #pragma once
+#include "../../server/game/options.hpp"
 #include "camera.hpp"
 #include "connection.hpp"
 #include "texture.hpp"
@@ -26,23 +27,10 @@
 
 namespace clt::scene_renderer
 {
-pc::gbuffer outputs(std::uint32_t image);
-bool needs_sync();
-void create_frame_resources();
-void release_frame_resources();
-void init(const char *vertex_path, const char *fragment_path);
-void synchronize();
-void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame &camera);
 struct planar_view {
     camera::frame reflected;
     vk::util::math::vec4 clip;
 };
-std::optional<planar_view> planar_reflection(const camera::frame&);
-bool single_glass();
-pc::gbuffer reflection_outputs(std::uint32_t);
-void draw_reflection(vk::CommandBuffer,std::uint32_t,
-                     const camera::frame&,const planar_view&);
-void shutdown();
 
 namespace
 {
@@ -281,53 +269,53 @@ vk::Format depth_format()
 
 void create_render_pass()
 {
-    auto &data = get();
-    std::array<vk::AttachmentDescription, 4> attachments{};
-    std::array<vk::AttachmentReference, 3> colors{};
-
-    for (std::uint32_t i = 0; i < colors.size(); ++i)
-    {
-        attachments[i].format = color_formats()[i];
-        attachments[i].samples = vk::SampleCountFlagBits::e1;
-        attachments[i].loadOp = vk::AttachmentLoadOp::eClear;
-        attachments[i].storeOp = vk::AttachmentStoreOp::eStore;
-        attachments[i].initialLayout = vk::ImageLayout::eUndefined;
-        attachments[i].finalLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-        colors[i] = {i, vk::ImageLayout::eColorAttachmentOptimal};
+    auto& data=get();
+    std::array<vk::AttachmentDescription,4> attachments{};
+    std::array<vk::AttachmentReference,3> colors{};
+    const auto formats=color_formats();
+    for(std::uint32_t i=0;i<attachments.size();++i) {
+        auto& desc=attachments[i];
+        desc.format=i<3?formats[i]:depth_format();
+        desc.samples=vk::SampleCountFlagBits::e1;
+        desc.loadOp=vk::AttachmentLoadOp::eClear;
+        desc.storeOp=vk::AttachmentStoreOp::eStore;
+        desc.initialLayout=vk::ImageLayout::eUndefined;
+        desc.finalLayout=i<3?vk::ImageLayout::eShaderReadOnlyOptimal:
+                             vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+        if(i<3)colors[i]={i,vk::ImageLayout::eColorAttachmentOptimal};
     }
-
-    attachments[3].format = depth_format();
-    attachments[3].samples = vk::SampleCountFlagBits::e1;
-    attachments[3].loadOp = vk::AttachmentLoadOp::eClear;
-    attachments[3].storeOp = vk::AttachmentStoreOp::eStore;
-    attachments[3].initialLayout = vk::ImageLayout::eUndefined;
-    attachments[3].finalLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
-    vk::AttachmentReference depth{3, vk::ImageLayout::eDepthStencilAttachmentOptimal};
+    vk::AttachmentReference depth{3,vk::ImageLayout::eDepthStencilAttachmentOptimal};
     vk::SubpassDescription subpass{};
-    subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
-    subpass.colorAttachmentCount = colors.size();
-    subpass.pColorAttachments = colors.data();
-    subpass.pDepthStencilAttachment = &depth;
-    std::array<vk::SubpassDependency, 2> barriers{};
-    barriers[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-    barriers[0].dstSubpass = 0;
-    barriers[0].srcStageMask = vk::PipelineStageFlagBits::eTopOfPipe;
-    barriers[0].dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
-    barriers[0].dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
-    barriers[1].srcSubpass = 0;
-    barriers[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-    barriers[1].srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests;
-    barriers[1].dstStageMask = vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eFragmentShader;
-    barriers[1].srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
-    barriers[1].dstAccessMask = vk::AccessFlagBits::eShaderRead;
+    subpass.pipelineBindPoint=vk::PipelineBindPoint::eGraphics;
+    subpass.colorAttachmentCount=std::uint32_t(colors.size());
+    subpass.pColorAttachments=colors.data();
+    subpass.pDepthStencilAttachment=&depth;
+    std::array<vk::SubpassDependency,2> barriers{};
+    barriers[0].srcSubpass=VK_SUBPASS_EXTERNAL;
+    barriers[0].dstSubpass=0;
+    barriers[0].srcStageMask=vk::PipelineStageFlagBits::eTopOfPipe;
+    barriers[0].dstStageMask=vk::PipelineStageFlagBits::eColorAttachmentOutput|
+                             vk::PipelineStageFlagBits::eEarlyFragmentTests;
+    barriers[0].dstAccessMask=vk::AccessFlagBits::eColorAttachmentWrite|
+                              vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+    barriers[1].srcSubpass=0;
+    barriers[1].dstSubpass=VK_SUBPASS_EXTERNAL;
+    barriers[1].srcStageMask=vk::PipelineStageFlagBits::eColorAttachmentOutput|
+                             vk::PipelineStageFlagBits::eEarlyFragmentTests|
+                             vk::PipelineStageFlagBits::eLateFragmentTests;
+    barriers[1].dstStageMask=vk::PipelineStageFlagBits::eComputeShader|
+                             vk::PipelineStageFlagBits::eFragmentShader;
+    barriers[1].srcAccessMask=vk::AccessFlagBits::eColorAttachmentWrite|
+                              vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+    barriers[1].dstAccessMask=vk::AccessFlagBits::eShaderRead;
     vk::RenderPassCreateInfo info{};
-    info.attachmentCount = attachments.size();
-    info.pAttachments = attachments.data();
-    info.subpassCount = 1;
-    info.pSubpasses = &subpass;
-    info.dependencyCount = barriers.size();
-    info.pDependencies = barriers.data();
-    data.render_pass = vk::render_pass::create(info);
+    info.attachmentCount=std::uint32_t(attachments.size());
+    info.pAttachments=attachments.data();
+    info.subpassCount=1;
+    info.pSubpasses=&subpass;
+    info.dependencyCount=std::uint32_t(barriers.size());
+    info.pDependencies=barriers.data();
+    data.render_pass=vk::render_pass::create(info);
 }
 
 void create_target(bool optical=false,bool reflected=false)
@@ -368,16 +356,14 @@ void init(const char *vertex_path, const char *fragment_path)
     data.cull.create(game::options::get()->graphics.culling_shader, data.instance_layout);
 }
 
-pc::gbuffer optical_outputs(std::uint32_t image)
+pc::gbuffer target_outputs(const std::vector<state::target>& targets,
+                           std::uint32_t image)
 {
-    const auto &images = get().optical_targets.at(image).images;
-    return {images.color(0), images.color(1), images.color(2), images.depth()};
-}
-pc::gbuffer reflection_outputs(std::uint32_t image)
-{
-    const auto &images=get().reflection_targets.at(image).images;
+    const auto& images=targets.at(image).images;
     return {images.color(0),images.color(1),images.color(2),images.depth()};
 }
+pc::gbuffer optical_outputs(std::uint32_t image) {return target_outputs(get().optical_targets,image);}
+pc::gbuffer reflection_outputs(std::uint32_t image) {return target_outputs(get().reflection_targets,image);}
 
 bool has_optics()
 {
@@ -478,10 +464,7 @@ std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
                     (corner&1)?mesh.local_max.x:mesh.local_min.x,
                     (corner&2)?mesh.local_max.y:mesh.local_min.y,
                     (corner&4)?mesh.local_max.z:mesh.local_min.z};
-                const auto scale=instance.pose.scale;
-                const auto world=instance.pose.position+
-                    rotate(instance.pose.rotation,{
-                        local.x*scale.x,local.y*scale.y,local.z*scale.z});
+                const auto world=::scene::transform_position(instance.pose,local);
                 clips[corner]=vp*vec4{world,1.f};
             }
             // Homogeneous frustum rejection also handles optical objects
@@ -545,10 +528,9 @@ std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
     // vertically. Output is non-overlapping and covers exactly the union
     // of the original conservative projections (no image quality change).
     if(regions.size()<2)return regions;
-    if(regions.size()>64) {
-        // Avoid O(n²) band construction when an editor scene contains
-        // hundreds of independent reflective pieces. Bounding fallback
-        // is safe because the optical G-buffer mask rejects empty pixels.
+    // The two complexity fallbacks share the same conservative rectangle.
+    // The material mask continues to reject unused pixels.
+    const auto enclosing=[&]() {
         int left=int(extent.width),top=int(extent.height),right=0,bottom=0;
         for(const auto& r:regions) {
             left=std::min(left,r.offset.x);
@@ -556,9 +538,10 @@ std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
             right=std::max(right,r.offset.x+int(r.extent.width));
             bottom=std::max(bottom,r.offset.y+int(r.extent.height));
         }
-        return {{{left,top},{std::uint32_t(right-left),
-                            std::uint32_t(bottom-top)}}};
-    }
+        return vk::Rect2D{{left,top},
+            {std::uint32_t(right-left),std::uint32_t(bottom-top)}};
+    };
+    if(regions.size()>64)return {enclosing()};
     std::vector<int> y_edges;
     y_edges.reserve(regions.size()*2);
     for(const auto& r:regions) {
@@ -568,60 +551,45 @@ std::vector<vk::Rect2D> optical_rects(const camera::frame& camera)
     std::sort(y_edges.begin(),y_edges.end());
     y_edges.erase(std::unique(y_edges.begin(),y_edges.end()),y_edges.end());
     std::vector<vk::Rect2D> disjoint;
+    // The previous band is the only one eligible for vertical merging.
+    // Index intervals directly instead of scanning every emitted rectangle.
+    std::map<std::pair<int,int>,std::size_t> active;
     for(std::size_t band=1;band<y_edges.size();++band) {
         const int top=y_edges[band-1],bottom=y_edges[band];
         if(top==bottom)continue;
         std::vector<std::pair<int,int>> intervals;
-        intervals.reserve(regions.size());
         for(const auto& r:regions)
             if(r.offset.y<=top && r.offset.y+int(r.extent.height)>=bottom)
-                intervals.emplace_back(r.offset.x,
-                                       r.offset.x+int(r.extent.width));
+                intervals.emplace_back(r.offset.x,r.offset.x+int(r.extent.width));
         std::sort(intervals.begin(),intervals.end());
-        for(std::size_t k=0;k<intervals.size();) {
-            const int left=intervals[k].first;
-            int right=intervals[k++].second;
-            while(k<intervals.size() && intervals[k].first<=right) {
-                right=std::max(right,intervals[k].second);
-                ++k;
-            }
+        std::map<std::pair<int,int>,std::size_t> next;
+        for(std::size_t i=0;i<intervals.size();) {
+            const int left=intervals[i].first;
+            int right=intervals[i++].second;
+            while(i<intervals.size() && intervals[i].first<=right)
+                right=std::max(right,intervals[i++].second);
             if(right<=left)continue;
-            auto previous=std::find_if(disjoint.rbegin(),disjoint.rend(),
-                [&](const vk::Rect2D& r) {
-                    return r.offset.x==left &&
-                        r.extent.width==std::uint32_t(right-left) &&
-                        r.offset.y+int(r.extent.height)==top;
-                });
-            if(previous!=disjoint.rend())
-                previous->extent.height+=std::uint32_t(bottom-top);
-            else
+            const auto key=std::pair{left,right};
+            const auto it=active.find(key);
+            if(it!=active.end()) {
+                disjoint[it->second].extent.height+=std::uint32_t(bottom-top);
+                next.emplace(key,it->second);
+            } else {
+                next.emplace(key,disjoint.size());
                 disjoint.push_back({{left,top},
                     {std::uint32_t(right-left),std::uint32_t(bottom-top)}});
+            }
         }
+        active.swap(next);
     }
     // Bound CPU/draw overhead on scenes with many separate optical pieces.
     // This fallback still has exact output because the shader mask discards
     // all non-optical fragments inside the larger scissor.
-    if(disjoint.size()>32) {
-        int left=int(extent.width),top=int(extent.height),right=0,bottom=0;
-        for(const auto& r:regions) {
-            left=std::min(left,r.offset.x);
-            top=std::min(top,r.offset.y);
-            right=std::max(right,r.offset.x+int(r.extent.width));
-            bottom=std::max(bottom,r.offset.y+int(r.extent.height));
-        }
-        return {{{left,top},{std::uint32_t(right-left),
-                            std::uint32_t(bottom-top)}}};
-    }
+    if(disjoint.size()>32)return {enclosing()};
     return disjoint;
 }
 
-pc::gbuffer outputs(std::uint32_t image)
-{
-    const auto &images = get().targets.at(image).images;
-
-    return {images.color(0), images.color(1), images.color(2), images.depth()};
-}
+pc::gbuffer outputs(std::uint32_t image) {return target_outputs(get().targets,image);}
 
 void release_local_frames()
 {
@@ -672,6 +640,8 @@ gpu_mesh upload_mesh(const ::scene::mesh &mesh, gpu::upload::batch &transfers)
                 std::max(result.local_max.y,p.y),
                 std::max(result.local_max.z,p.z)};
         }
+        result.center=(result.local_min+result.local_max)*.5f;
+        result.radius=length((result.local_max-result.local_min)*.5f);
     }
     result.geometry.upload(transfers, mesh.vertices.data(), mesh.vertices.size() * sizeof(::scene::vertex), mesh.indices.data(), mesh.indices.size() * sizeof(std::uint32_t), result.index_count);
 
@@ -932,20 +902,6 @@ void synchronize()
         {
             gpu_mesh gpu = upload_mesh(mesh, upload);
 
-            if (!mesh.vertices.empty()) {
-                vec3 low = mesh.vertices.front().position, high = low;
-
-                for (const auto &vertex : mesh.vertices)
-                {
-                    const auto p = vertex.position;
-                    low = {std::min(low.x, p.x), std::min(low.y, p.y), std::min(low.z, p.z)};
-                    high = {std::max(high.x, p.x), std::max(high.y, p.y), std::max(high.z, p.z)};
-                }
-
-                gpu.center = (low + high) * .5f;
-                gpu.radius = length((high - low) * .5f);
-            }
-
             fresh.push_back(std::move(gpu));
         }
 
@@ -982,6 +938,87 @@ void synchronize()
             texture::bind(frame.set, mesh.surface);
 }
 
+// Shared frustum cull for the camera and its reflected raster view.
+// The reflected pass reuses the same indirect/instance buffers only after
+// the original draw's vertex and indirect reads have completed.
+void cull_world(vk::CommandBuffer command,std::uint32_t image,
+                const mat4& vp,bool reflected=false)
+{
+    auto& data=get();
+    if(!data.snapshot)return;
+    if(reflected) {
+        vk::MemoryBarrier reuse{};
+        reuse.srcAccessMask=vk::AccessFlagBits::eIndirectCommandRead |
+                            vk::AccessFlagBits::eVertexAttributeRead;
+        reuse.dstAccessMask=vk::AccessFlagBits::eTransferWrite |
+                            vk::AccessFlagBits::eShaderWrite;
+        command.pipelineBarrier(
+            vk::PipelineStageFlagBits::eDrawIndirect |
+            vk::PipelineStageFlagBits::eVertexInput,
+            vk::PipelineStageFlagBits::eTransfer |
+            vk::PipelineStageFlagBits::eComputeShader,{},{reuse},{},{});
+    }
+    const auto frustum_planes=frustum(vp);
+    std::array<vec4,6> planes{};
+    for(std::size_t i=0;i<planes.size();++i) {
+        const auto& p=frustum_planes[i];
+        const float inv=1.f/std::max(p.magnitude,1e-6f);
+        planes[i]={p.normal.x*inv,p.normal.y*inv,p.normal.z*inv,p.offset*inv};
+    }
+    std::vector<vk::Buffer> indirects;
+    indirects.reserve(data.meshes.size());
+    for(const auto& mesh:data.meshes)
+        if(!mesh.transforms.empty())
+            indirects.push_back(mesh.frames.at(image).indirect.handle);
+    data.cull.begin(command,indirects);
+    const std::array<vec4,6> unbounded{};
+    for(const auto& mesh:data.meshes) {
+        if(mesh.transforms.empty())continue;
+        data.cull.dispatch(command,mesh.frames.at(image).set,
+            mesh.joint_count?unbounded:planes,
+            std::uint32_t(mesh.transforms.size()),mesh.index_count);
+    }
+    data.cull.end(command);
+}
+
+
+// All three G-buffers have the same clear values, viewport and render pass.
+// Keep the callback inside the pass so framebuffer/clear pointers stay valid.
+template<class Draw>
+void draw_target(vk::CommandBuffer command, std::uint32_t image,
+                 const std::vector<state::target>& targets, Draw draw)
+{
+    const auto extent = vk::swapchain::get()->extent;
+    std::array<vk::ClearValue, 4> clear{};
+    for (std::size_t i = 0; i < 3; ++i)
+        clear[i].color = vk::ClearColorValue(std::array<float, 4>{0, 0, 0, 0});
+    clear[3].depthStencil = vk::ClearDepthStencilValue(1.f, 0);
+    vk::RenderPassBeginInfo begin{};
+    begin.renderPass = get().render_pass;
+    begin.framebuffer = targets.at(image).framebuffer->framebuffer();
+    begin.renderArea = vk::Rect2D{{0, 0}, extent};
+    begin.clearValueCount = clear.size();
+    begin.pClearValues = clear.data();
+    ::render::renderer graphics(command);
+    graphics.begin_pass(begin);
+    graphics.viewport(vk::Viewport{0, 0, float(extent.width), float(extent.height), .1f, 1.f}, begin.renderArea);
+    draw(graphics);
+    graphics.end_pass();
+}
+
+void draw_world(::render::renderer& graphics, std::uint32_t image,
+                const mat4& vp, const std::array<float, 4>& clip = {0, 0, 0, 1}, bool optical = false)
+{
+    for (const auto& mesh : get().meshes) {
+        if (mesh.transforms.empty()) continue;
+        if (optical && std::none_of(mesh.instances.begin(), mesh.instances.end(),
+            [](const auto& i) { return i.pattern == 2u || i.pattern == 3u; })) continue;
+        auto params = material_parameters(mesh.surface, vp, mesh.joint_count);
+        params.clip_plane = clip;
+        draw_mesh(graphics, mesh, mesh.frames.at(image), params, true, 1, optical);
+    }
+}
+
 void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame &camera)
 {
     auto &data = get();
@@ -992,61 +1029,7 @@ void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame &c
     const auto view_projection = perspective(camera.pose.fov, aspect, 0.1f, 1000.0f) * camera.view;
     const auto weapon_view_projection = weapon::view_projection(aspect, camera.view);
 
-    std::array<vk::ClearValue, 4> clear{};
-
-    for (std::size_t i = 0; i < 3; ++i)
-    {
-        clear[i].color = vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f});
-    }
-
-    clear[3].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
-    vk::RenderPassBeginInfo begin{};
-    begin.renderPass = data.render_pass;
-    begin.framebuffer = data.targets.at(image).framebuffer->framebuffer();
-    begin.renderArea = vk::Rect2D{vk::Offset2D{0, 0}, extent};
-    begin.clearValueCount = clear.size();
-    begin.pClearValues = clear.data();
-
-    if (data.snapshot) {
-        const auto camera_planes = frustum(view_projection);
-
-        std::array<vec4, 6> planes{};
-
-        for (std::size_t i = 0; i < planes.size(); ++i)
-        {
-            const auto &plane = camera_planes[i];
-
-            const float inverse = 1.0f / std::max(plane.magnitude, 1e-6f);
-
-            planes[i] = {
-                plane.normal.x * inverse, plane.normal.y * inverse, plane.normal.z * inverse, plane.offset * inverse
-            };
-        }
-
-        std::vector<vk::Buffer> indirects;
-        indirects.reserve(data.meshes.size());
-
-        for (const auto &mesh : data.meshes)
-            if (!mesh.transforms.empty())
-                indirects.push_back(mesh.frames.at(image).indirect.handle);
-        data.cull.begin(command, indirects);
-
-        // Static bind-pose bounds do not contain skinned animation. Keep
-        // skinned instances GPU-visible; the viewport still clips their
-        // rasterization. Static meshes retain exact frustum culling.
-        const std::array<vec4,6> unbounded_planes{};
-        for (const auto &mesh : data.meshes)
-        {
-            if(mesh.transforms.empty())continue;
-            data.cull.dispatch(command,mesh.frames.at(image).set,
-                mesh.joint_count?unbounded_planes:planes,
-                static_cast<std::uint32_t>(mesh.transforms.size()),
-                mesh.index_count);
-        }
-
-        data.cull.end(command);
-    }
-
+    cull_world(command,image,view_projection);
     if (data.snapshot) {
         const auto server_tick = connection::get()->server_tick.load(std::memory_order_relaxed);
         const auto now = std::chrono::steady_clock::now();
@@ -1128,142 +1111,51 @@ void draw(vk::CommandBuffer command, std::uint32_t image, const camera::frame &c
         if (!item.palette.empty())
             vk::buffer::write(frame.skin_palette, item.palette.data(), item.palette.size() * sizeof(animation::matrix));
     }
-    ::render::renderer graphics(command);
-    graphics.begin_pass(begin);
-    graphics.viewport(vk::Viewport{0.0f, 0.0f, float(extent.width), float(extent.height), 0.1f, 1.0f}, vk::Rect2D{{0, 0}, extent});
-
-    if (data.snapshot) {
-        for (const auto &mesh : data.meshes)
+    draw_target(command, image, data.targets, [&](auto& graphics) {
+        draw_world(graphics, image, view_projection);
+        for (bool viewmodel : {false, true})
         {
-            if (mesh.transforms.empty())
-                continue;
-            const auto &m = mesh.surface;
+            graphics.viewport(vk::Viewport{
+                                  0, 0, float(extent.width), float(extent.height), viewmodel ? 0.f : .1f, viewmodel ? .099f : 1.f
+                              },
+                              vk::Rect2D{{0, 0}, extent});
+            for (const auto &item : weapon_draws)
+            {
+                if (item.viewmodel != viewmodel)
+                    continue;
 
-            const auto params = material_parameters(m, view_projection, mesh.joint_count);
-            draw_mesh(graphics, mesh, mesh.frames.at(image), params, true, 1);
+                const auto found = local_mesh(item.mesh_id);
+
+                if (found == data.local_meshes.end())
+                    continue;
+                const auto &mesh = *found;
+                const auto &frame = mesh.frames.at(image);
+                const auto &m = mesh.surface;
+
+                const auto params = material_parameters(m, viewmodel ? weapon_view_projection : view_projection, mesh.joint_count);
+                draw_mesh(graphics, mesh, frame, params, false, static_cast<std::uint32_t>(item.instances.size()));
+            }
         }
-    }
 
-    for (bool viewmodel : {false, true})
-    {
-        graphics.viewport(vk::Viewport{
-                              0, 0, float(extent.width), float(extent.height), viewmodel ? 0.f : .1f, viewmodel ? .099f : 1.f
-                          },
-                          vk::Rect2D{{0, 0}, extent});
-        for (const auto &item : weapon_draws)
-        {
-            if (item.viewmodel != viewmodel)
-                continue;
-
-            const auto found = local_mesh(item.mesh_id);
-
-            if (found == data.local_meshes.end())
-                continue;
-            const auto &mesh = *found;
-            const auto &frame = mesh.frames.at(image);
-            const auto &m = mesh.surface;
-
-            const auto params = material_parameters(m, viewmodel ? weapon_view_projection : view_projection, mesh.joint_count);
-            draw_mesh(graphics, mesh, frame, params, false, static_cast<std::uint32_t>(item.instances.size()));
-        }
-    }
-
-    graphics.end_pass();
-
-    // A second G-buffer contains only glass/reflective faces. Opaque depth
-    // excludes glass, so transmitted rays can see the scene behind it.
-    if(has_optics()) {
-        vk::RenderPassBeginInfo optical_begin=begin;
-        optical_begin.framebuffer=data.optical_targets.at(image).framebuffer->framebuffer();
-        ::render::renderer optical_graphics(command);
-        optical_graphics.begin_pass(optical_begin);
-        optical_graphics.viewport(vk::Viewport{0,0,float(extent.width),float(extent.height),0.1f,1.f},
-                                  vk::Rect2D{{0,0},extent});
-        for(const auto& mesh:data.meshes) {
-            if(mesh.transforms.empty() ||
-               std::none_of(mesh.instances.begin(),mesh.instances.end(),
-                   [](const auto& instance) {
-                       return instance.pattern==2u || instance.pattern==3u;
-                   }))continue;
-            const auto params=material_parameters(mesh.surface,view_projection,mesh.joint_count);
-            draw_mesh(optical_graphics,mesh,mesh.frames.at(image),params,true,1,true);
-        }
-        optical_graphics.end_pass();
-    }
+    });
+    // Transmissive faces use their own depth; opaque depth remains available behind glass.
+    if (has_optics())
+        draw_target(command, image, data.optical_targets, [&](auto& graphics) {
+            draw_world(graphics, image, view_projection, {0, 0, 0, 1}, true);
+        });
 }
 
-// Rasterize the virtual reflected camera into the same material G-buffer
-// used by PCloud. The full-resolution shader samples the mirror image
-// horizontally flipped to compensate for the reflection handedness.
-void draw_reflection(vk::CommandBuffer command,std::uint32_t image,
-                     const camera::frame& original,const planar_view& planar)
+void draw_reflection(vk::CommandBuffer command, std::uint32_t image,
+                     const camera::frame& original, const planar_view& planar)
 {
-    auto& data=get();
-    if(!data.snapshot || optical_rects(original).empty())return;
-    const auto extent=vk::swapchain::get()->extent;
-    const float aspect=float(extent.width)/float(extent.height);
-    const mat4 vp=perspective(planar.reflected.pose.fov,aspect,.1f,1000.f)*
-                  planar.reflected.view;
-    const auto camera_planes=frustum(vp);
-    std::array<vec4,6> planes{};
-    for(std::size_t i=0;i<planes.size();++i) {
-        const auto& p=camera_planes[i];
-        const float inv=1.f/std::max(p.magnitude,1e-6f);
-        planes[i]={p.normal.x*inv,p.normal.y*inv,p.normal.z*inv,
-                   p.offset*inv};
-    }
-    std::vector<vk::Buffer> indirects;
-    indirects.reserve(data.meshes.size());
-    for(const auto& mesh:data.meshes)
-        if(!mesh.transforms.empty())
-            indirects.push_back(mesh.frames.at(image).indirect.handle);
-    // The original camera's draws have read the same indirect and
-    // visible-instance buffers. Finish those reads before the reflected
-    // cull overwrites them later in this command buffer.
-    vk::MemoryBarrier reuse{};
-    reuse.srcAccessMask=vk::AccessFlagBits::eIndirectCommandRead |
-                        vk::AccessFlagBits::eVertexAttributeRead;
-    reuse.dstAccessMask=vk::AccessFlagBits::eTransferWrite |
-                        vk::AccessFlagBits::eShaderWrite;
-    command.pipelineBarrier(
-        vk::PipelineStageFlagBits::eDrawIndirect |
-        vk::PipelineStageFlagBits::eVertexInput,
-        vk::PipelineStageFlagBits::eTransfer |
-        vk::PipelineStageFlagBits::eComputeShader,{},{reuse},{},{});
-    data.cull.begin(command,indirects);
-    const std::array<vec4,6> unbounded{};
-    for(const auto& mesh:data.meshes) {
-        if(mesh.transforms.empty())continue;
-        data.cull.dispatch(command,mesh.frames.at(image).set,
-            mesh.joint_count?unbounded:planes,
-            std::uint32_t(mesh.transforms.size()),mesh.index_count);
-    }
-    data.cull.end(command);
-    std::array<vk::ClearValue,4> clears{};
-    for(int i=0;i<3;++i)
-        clears[i].color=vk::ClearColorValue(std::array<float,4>{0,0,0,0});
-    clears[3].depthStencil=vk::ClearDepthStencilValue(1.f,0);
-    vk::RenderPassBeginInfo begin{};
-    begin.renderPass=data.render_pass;
-    begin.framebuffer=data.reflection_targets.at(image).framebuffer->framebuffer();
-    begin.renderArea=vk::Rect2D{{0,0},extent};
-    begin.clearValueCount=std::uint32_t(clears.size());
-    begin.pClearValues=clears.data();
-    ::render::renderer graphics(command);
-    graphics.begin_pass(begin);
-    graphics.viewport(vk::Viewport{0,0,float(extent.width),
-                                   float(extent.height),.1f,1.f},
-                      vk::Rect2D{{0,0},extent});
-    for(const auto& mesh:data.meshes) {
-        if(mesh.transforms.empty())continue;
-        auto params=material_parameters(mesh.surface,vp,mesh.joint_count);
-        params.clip_plane={planar.clip.x,planar.clip.y,
-                           planar.clip.z,planar.clip.w};
-        // mesh.frag excludes glass/mirrors, leaving opaque, masked and
-        // animated geometry in the reflected PCloud G-buffer.
-        draw_mesh(graphics,mesh,mesh.frames.at(image),params,true,1);
-    }
-    graphics.end_pass();
+    auto& data = get();
+    if (!data.snapshot || optical_rects(original).empty()) return;
+    const auto extent = vk::swapchain::get()->extent;
+    const auto vp = perspective(planar.reflected.pose.fov, float(extent.width)/float(extent.height), .1f, 1000.f) * planar.reflected.view;
+    cull_world(command, image, vp, true);
+    draw_target(command, image, data.reflection_targets, [&](auto& graphics) {
+        draw_world(graphics, image, vp, {planar.clip.x, planar.clip.y, planar.clip.z, planar.clip.w});
+    });
 }
 
 void shutdown()

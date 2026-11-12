@@ -1,4 +1,5 @@
 #pragma once
+#include "../../server/net/scene_stream.hpp"
 #include "../../server/game/secure_config.hpp"
 #include "../../server/net/animation.hpp"
 #include "../../server/net/editor_light.hpp"
@@ -28,6 +29,7 @@
 #include <random>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -81,23 +83,8 @@ struct state
     bool initialized = false;
 };
 
-state *get();
 std::shared_ptr<const ::scene::state> snapshot();
 std::optional<net::animation::resource> animation(std::uint32_t instance_id);
-bool send_editor_light(net::editor_light::resource command);
-bool send_editor_cube(net::editor_cube::resource command);
-bool send_weapon(net::weapon::command command);
-std::deque<net::weapon::snapshot> take_weapon_updates();
-std::deque<net::weapon::shot> take_weapon_shots();
-void check_error();
-void send_input(const ::player::input &input);
-void request_respawn(std::uint32_t last_input);
-bool respawning();
-std::optional<net::movement::snapshot> take_authority();
-std::optional<::player::parameters_t> movement_parameters();
-std::vector<net::movement::peer> remote_players();
-void init();
-void shutdown() noexcept;
 
 using clock = std::chrono::steady_clock;
 
@@ -269,19 +256,14 @@ std::optional<net::animation::resource> animation(std::uint32_t instance_id)
     return it->second;
 }
 
-bool send_editor_light(net::editor_light::resource command)
+// One in-order editor command queue for both cube and light packets.
+// The in-flight front is never overwritten, and coalescing keeps its sequence.
+template<class Command>
+bool queue_editor(Command command,std::deque<Command>& outgoing,
+                  std::uint32_t& sequence)
 {
-    if ((command.type != net::editor_light::kind::create && command.type != net::editor_light::kind::edit && command.type != net::editor_light::kind::remove) || !net::editor_light::valid(command.light) ||
-        !get()->connected.load(std::memory_order_relaxed))
-        return false;
-    auto &data = *get();
-    std::lock_guard<std::mutex> lock(data.editor_mutex);
-
-    // Replace only unsent consecutive edits to the same property.
-    // Never mutate the in-flight front packet or skip a sequence number.
-    if(data.editor_outgoing.size()>1 &&
-       command.type==net::editor_light::kind::edit) {
-        auto& last=data.editor_outgoing.back();
+    if(outgoing.size()>1 && command.type==net::editor_light::kind::edit) {
+        auto& last=outgoing.back();
         if(last.type==command.type && last.index==command.index &&
            last.revision==command.revision) {
             command.sequence=last.sequence;
@@ -289,38 +271,33 @@ bool send_editor_light(net::editor_light::resource command)
             return true;
         }
     }
-    if (data.editor_outgoing.size() >= 64) return false;
-    command.sequence = ++data.editor_sequence;
-
-    if (!command.sequence) command.sequence = ++data.editor_sequence;
-    command.index = command.type == net::editor_light::kind::create ? UINT32_MAX : command.index;
-    data.editor_outgoing.push_back(command);
-
+    if(outgoing.size()>=64)return false;
+    command.sequence=++sequence;
+    if(!command.sequence)command.sequence=++sequence;
+    if(command.type==net::editor_light::kind::create)command.index=UINT32_MAX;
+    outgoing.push_back(command);
     return true;
 }
-
+bool send_editor_light(net::editor_light::resource command)
+{
+    if((command.type!=net::editor_light::kind::create &&
+        command.type!=net::editor_light::kind::edit &&
+        command.type!=net::editor_light::kind::remove) ||
+       !net::editor_light::valid(command.light) ||
+       !get()->connected.load(std::memory_order_relaxed))return false;
+    auto& data=*get();
+    std::lock_guard lock(data.editor_mutex);
+    return queue_editor(command,data.editor_outgoing,data.editor_sequence);
+}
 bool send_editor_cube(net::editor_cube::resource command)
 {
     using namespace net::editor_cube;
-    if ((command.type != kind::create && command.type != kind::edit && command.type != kind::remove) ||
-        !valid(command.cube) || !get()->connected.load(std::memory_order_relaxed)) return false;
-    auto &data = *get();
+    if((command.type!=kind::create && command.type!=kind::edit &&
+        command.type!=kind::remove) || !valid(command.cube) ||
+       !get()->connected.load(std::memory_order_relaxed))return false;
+    auto& data=*get();
     std::lock_guard lock(data.editor_mutex);
-    if(data.cube_outgoing.size()>1 && command.type==kind::edit) {
-        auto& last=data.cube_outgoing.back();
-        if(last.type==command.type && last.index==command.index &&
-           last.revision==command.revision) {
-            command.sequence=last.sequence;
-            last=command;
-            return true;
-        }
-    }
-    if (data.cube_outgoing.size() >= 64) return false;
-    command.sequence = ++data.cube_sequence;
-    if (!command.sequence) command.sequence = ++data.cube_sequence;
-    command.index = command.type == kind::create ? UINT32_MAX : command.index;
-    data.cube_outgoing.push_back(command);
-    return true;
+    return queue_editor(command,data.cube_outgoing,data.cube_sequence);
 }
 
 bool send_weapon(net::weapon::command command)
@@ -584,53 +561,48 @@ void run(const std::string &host, std::uint16_t port)
                     break;
 
                 if (!net::endpoint::equal(peer, server)) continue;
-                if (const auto update = net::editor_cube::decode(buffer.data(), *size)) {
-                    if (update->token == token && data.connected.load(std::memory_order_relaxed) &&
-                        (update->type == net::editor_cube::kind::state || update->type == net::editor_cube::kind::ack)) {
-                        if (update->type == net::editor_cube::kind::ack) {
-                            std::lock_guard lock(data.editor_mutex);
-                            if (!data.cube_outgoing.empty() && data.cube_outgoing.front().sequence == update->sequence)
-                                data.cube_outgoing.pop_front();
-                        }
-                        {
-                            std::lock_guard lock(data.scene_mutex);
-                            const auto found = data.cube_states.find(update->index);
-                            if ((found == data.cube_states.end() && data.cube_states.size() < net::editor_cube::max_cubes) ||
-                                (found != data.cube_states.end() && net::message::newer(update->revision, found->second.revision))) {
-                                data.cube_states[update->index] = *update;
-                                data.cubes_dirty = true;
-                            }
-                        }
-                        last_received = now;
+                // A decoded packet is consumed even if authentication fails.
+                // Only the configured endpoint reaches this dispatcher.
+                const auto dispatch = [&](auto decode, auto accept) {
+                    const auto packet = decode(buffer.data(), *size);
+                    if (!packet) return false;
+                    const auto packet_token = [&] {
+                        if constexpr (requires { packet->token; }) return packet->token;
+                        else return packet->state.token;
+                    }();
+                    if (packet_token == token && data.connected.load(std::memory_order_relaxed)) accept(*packet);
+                    return true;
+                };
+                const auto accept_editor = [&](const auto& update, auto& outgoing, auto merge) {
+                    if (update.type != net::editor_light::kind::state && update.type != net::editor_light::kind::ack) return;
+                    if (update.type == net::editor_light::kind::ack) {
+                        std::lock_guard lock(data.editor_mutex);
+                        if (!outgoing.empty() && outgoing.front().sequence == update.sequence) outgoing.pop_front();
                     }
-                    continue;
-                }
-                if (const auto update = net::editor_light::decode(buffer.data(), *size)) {
-                    if (update->token == token && data.connected.load(std::memory_order_relaxed) && (update->type == net::editor_light::kind::state || update->type == net::editor_light::kind::ack)) {
-                        if (update->type == net::editor_light::kind::ack) {
-                            std::lock_guard<std::mutex> lock(data.editor_mutex);
-
-                            if (!data.editor_outgoing.empty() && data.editor_outgoing.front().sequence == update->sequence) {
-                                data.editor_outgoing.pop_front();
-                                std::clog << "clt: editor light " << update->index
-                                          << " confirmed by server\n";
-                            }
-                        }
-                        {
-                            std::lock_guard<std::mutex> lock(data.scene_mutex);
-                            auto &revision = data.light_versions[update->index];
-
-                            if (net::message::newer(update->revision, revision)) {
-                                revision = update->revision;
-                                data.light_pending[update->index] = *update;
-                            }
-                        }
-
-                        last_received = now;
+                    {
+                        std::lock_guard lock(data.scene_mutex);
+                        merge(update);
                     }
-
-                    continue;
-                }
+                    last_received = now;
+                };
+                if (dispatch(net::editor_cube::decode, [&](const auto& update) {
+                    accept_editor(update, data.cube_outgoing, [&](const auto& value) {
+                        const auto found = data.cube_states.find(value.index);
+                        if ((found == data.cube_states.end() && data.cube_states.size() < net::editor_cube::max_cubes) ||
+                            (found != data.cube_states.end() && net::message::newer(value.revision, found->second.revision))) {
+                            data.cube_states[value.index] = value;
+                            data.cubes_dirty = true;
+                        }
+                    });
+                }) || dispatch(net::editor_light::decode, [&](const auto& update) {
+                    accept_editor(update, data.editor_outgoing, [&](const auto& value) {
+                        auto& revision = data.light_versions[value.index];
+                        if (net::message::newer(value.revision, revision)) {
+                            revision = value.revision;
+                            data.light_pending[value.index] = value;
+                        }
+                    });
+                })) continue;
 
                 auto accept_weapon = [&](const net::weapon::snapshot &update)
                 {
@@ -664,86 +636,40 @@ void run(const std::string &host, std::uint16_t port)
                     return true;
                 };
 
-                if (const auto shot = net::weapon::decode_shot(buffer.data(), *size)) {
-                    if (shot->state.token == token && data.connected.load(std::memory_order_relaxed) &&
-                        !data.respawn_pending.load(std::memory_order_acquire) &&
-                        (!respawn_server_tick ||
-                         net::message::newer(shot->state.tick,respawn_server_tick))) {
-                        accept_weapon(shot->state);
-                        std::lock_guard<std::mutex> lock(data.weapon_mutex);
-
-                        if (data.weapon_shots.size() >= 64)
-                            data.weapon_shots.pop_front();
-                        data.weapon_shots.push_back(*shot);
+                if (dispatch(net::weapon::decode_shot, [&](const auto& shot) {
+                    if (data.respawn_pending.load(std::memory_order_acquire) ||
+                        (respawn_server_tick && !net::message::newer(shot.state.tick, respawn_server_tick))) return;
+                    accept_weapon(shot.state);
+                    std::lock_guard lock(data.weapon_mutex);
+                    if (data.weapon_shots.size() >= 64) data.weapon_shots.pop_front();
+                    data.weapon_shots.push_back(shot);
+                }) || dispatch(net::weapon::decode_snapshot, accept_weapon) ||
+                dispatch(net::animation::decode, [&](const auto& value) {
+                    std::lock_guard lock(data.animation_mutex);
+                    const auto old = data.animations.find(value.instance_id);
+                    if (old == data.animations.end() || net::message::newer(value.server_tick, old->second.server_tick))
+                        data.animations[value.instance_id] = value;
+                    last_received = now;
+                }) || dispatch(net::movement::decode_parameters, [&](const auto& settings) {
+                    std::lock_guard lock(data.player_mutex);
+                    data.server_parameters = settings.values;
+                    last_received = now;
+                }) || dispatch(net::movement::decode_peers, [&](const auto& peers) {
+                    std::lock_guard lock(data.peers_mutex);
+                    if (data.peers_received == clock::time_point{} || net::message::newer(peers.tick, data.peers.tick)) {
+                        data.peers = peers;
+                        data.peers_received = now;
                     }
-
-                    continue;
-                }
-
-                if (const auto update = net::weapon::decode_snapshot(buffer.data(), *size)) {
-                    if (update->token == token && data.connected.load(std::memory_order_relaxed))
-                        accept_weapon(*update);
-
-                    continue;
-                }
-
-                if (const auto state = net::animation::decode(buffer.data(), *size)) {
-                    if (state->token == token && data.connected.load(std::memory_order_relaxed)) {
-                        std::lock_guard<std::mutex> lock(data.animation_mutex);
-
-                        const auto old = data.animations.find(state->instance_id);
-
-                        if (old == data.animations.end() || net::message::newer(state->server_tick, old->second.server_tick))
-                            data.animations[state->instance_id] = *state;
-                        last_received = now;
-                    }
-
-                    continue;
-                }
-
-                if (const auto settings = net::movement::decode_parameters(buffer.data(), *size)) {
-                    if (settings->token == token && data.connected.load(std::memory_order_relaxed)) {
-                        std::lock_guard<std::mutex> lock(data.player_mutex);
-                        data.server_parameters = settings->values;
-                        last_received = now;
-                    }
-
-                    continue;
-                }
-
-                if (const auto peers = net::movement::decode_peers(buffer.data(), *size)) {
-                    if (peers->token == token && data.connected.load(std::memory_order_relaxed)) {
-                        std::lock_guard lock(data.peers_mutex);
-
-                        if (data.peers_received == clock::time_point{} ||
-                            net::message::newer(peers->tick, data.peers.tick))
-                        {
-                            data.peers = *peers;
-                            data.peers_received = now;
-                        }
-
-                        last_received = now;
-                    }
-
-                    continue;
-                }
-
-                if (const auto update = net::movement::decode_snapshot(buffer.data(), *size)) {
-                    if (update->token == token && data.connected.load(std::memory_order_relaxed)) {
-                        last_received = now;
-
-                        if (!net::message::newer(update->tick, last_player_tick))
-                            continue;
-                        last_player_tick = update->tick;
-
-                        while (!unacknowledged.empty() && !net::message::newer(unacknowledged.front().sequence, update->sequence))
-                            unacknowledged.pop_front();
-                        std::lock_guard<std::mutex> lock(data.player_mutex);
-                        data.authority = *update;
-                    }
-
-                    continue;
-                }
+                    last_received = now;
+                }) || dispatch(net::movement::decode_snapshot, [&](const auto& update) {
+                    last_received = now;
+                    if (!net::message::newer(update.tick, last_player_tick)) return;
+                    last_player_tick = update.tick;
+                    while (!unacknowledged.empty() && !net::message::newer(unacknowledged.front().sequence, update.sequence))
+                        unacknowledged.pop_front();
+                    std::lock_guard lock(data.player_mutex);
+                    data.authority = update;
+                })) continue;
 
                 const auto message = net::message::decode(buffer.data(), *size);
                 if(message && message->type==net::message::type::respawned &&

@@ -171,14 +171,6 @@ struct gun
     std::uint32_t max_impacts = 192;
 };
 
-inline void validate(const definition &);
-inline state make_state(const definition &);
-inline void advance(state &, double, const definition &);
-inline result apply(state &, std::uint32_t, action, double, const definition &);
-inline vec3 direction(float, float);
-inline void append(world &, const std::vector<scene::mesh> &, std::span<const scene::instance>);
-inline hit trace(const world &, vec3, vec3, float);
-inline timing load_timing(const std::filesystem::path &, const std::string &, const std::string &, float, float);
 inline void validate(const definition &value)
 {
     const auto &t = value.reload;
@@ -269,28 +261,29 @@ inline void append(world &data, const std::vector<scene::mesh> &meshes, std::spa
     using namespace vk::util::math;
     std::vector<spatial::bounds> boxes;
 
-    for (const auto &instance : instances)
-    {
-        const auto mesh = std::find_if(meshes.begin(), meshes.end(), [&](const scene::mesh &m)
-                                       { return m.id == instance.mesh_id; });
-        if (mesh == meshes.end()) continue;
-
-        const auto transform = [&](vec3 p)
-        {
-            return instance.pose.position + rotate(instance.pose.rotation,
-                                                   {p.x * instance.pose.scale.x, p.y * instance.pose.scale.y, p.z * instance.pose.scale.z});
+    ::scene::each_mesh_instance(meshes,instances,
+                                 [&](const auto& mesh,const auto& instance) {
+        const auto transform=[&](vec3 p) {
+            return ::scene::transform_position(instance.pose,p);
         };
-
-        for (std::size_t i = 0; i + 2 < mesh->indices.size(); i += 3)
-        {
-            const auto a = mesh->indices[i], b = mesh->indices[i + 1], c = mesh->indices[i + 2];
-
-            if (a >= mesh->vertices.size() || b >= mesh->vertices.size() || c >= mesh->vertices.size()) continue;
-            triangle t{transform(mesh->vertices[a].position), transform(mesh->vertices[b].position), transform(mesh->vertices[c].position), instance.id, std::uint32_t(i / 3)};
+        for(std::size_t i=0;i+2<mesh.indices.size();i+=3) {
+            const auto a=mesh.indices[i],b=mesh.indices[i+1],c=mesh.indices[i+2];
+            if(a>=mesh.vertices.size()||b>=mesh.vertices.size()||
+               c>=mesh.vertices.size())continue;
+            triangle t{transform(mesh.vertices[a].position),
+                       transform(mesh.vertices[b].position),
+                       transform(mesh.vertices[c].position),
+                       instance.id,std::uint32_t(i/3)};
             data.triangles.push_back(t);
-            boxes.push_back({{std::min({t.a.x, t.b.x, t.c.x}), std::min({t.a.y, t.b.y, t.c.y}), std::min({t.a.z, t.b.z, t.c.z})}, {std::max({t.a.x, t.b.x, t.c.x}), std::max({t.a.y, t.b.y, t.c.y}), std::max({t.a.z, t.b.z, t.c.z})}});
+            boxes.push_back({{
+                std::min({t.a.x,t.b.x,t.c.x}),std::min({t.a.y,t.b.y,t.c.y}),
+                std::min({t.a.z,t.b.z,t.c.z})
+            },{
+                std::max({t.a.x,t.b.x,t.c.x}),std::max({t.a.y,t.b.y,t.c.y}),
+                std::max({t.a.z,t.b.z,t.c.z})
+            }});
         }
-    }
+    });
 
     data.index.append(boxes);
 }

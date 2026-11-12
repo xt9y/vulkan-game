@@ -1,74 +1,9 @@
-#include "util/math/quaternion.hpp"
-#include "util/math/vector.hpp"
-#include <algorithm>
-#include <array>
-#include <atomic>
-#include <chrono>
-#include <climits>
-#include <cmath>
-#include <csignal>
-#include <cstddef>
-#include <cstdint>
-#include <cstdlib>
-#include <cstring>
-#include <deque>
-#include <exception>
-#include <fastgltf/core.hpp>
-#include <fastgltf/tools.hpp>
-#include <fastgltf/types.hpp>
-#include <filesystem>
-#include <fstream>
-#include <functional>
-#include <iostream>
-#include <iterator>
-#include <jobs/pool.hpp>
-#include <limits>
-#include <memory>
-#include <network/endpoint.hpp>
-#include <network/secure.hpp>
-#include <network/session.hpp>
-#include <network/socket.hpp>
-#include <numeric>
-#include <optional>
-#include <ozz/animation/offline/animation_builder.h>
-#include <ozz/animation/offline/raw_animation.h>
-#include <ozz/animation/offline/raw_skeleton.h>
-#include <ozz/animation/offline/skeleton_builder.h>
-#include <ozz/animation/runtime/animation.h>
-#include <ozz/animation/runtime/skeleton.h>
-#include <ozz/base/io/archive.h>
-#include <ozz/base/io/stream.h>
-#include <ozz/base/memory/unique_ptr.h>
-#include <regex>
-#include <span>
-#include <spatial/index.hpp>
-#include <stdexcept>
-#include <string>
-#include <string_view>
-#include <thread>
-#include <utility>
-#include <vector>
-#include <vk/vk.hpp>
-
 #include "game/application.hpp"
 #include "game/options.hpp"
-#include "game/secure_config.hpp"
 #include "game_weapons.hpp"
-#include "net/animation.hpp"
-#include "net/editor_light.hpp"
-#include "net/limits.hpp"
-#include "net/message.hpp"
-#include "net/movement.hpp"
-#include "net/movement/detail.hpp"
-#include "net/weapon.hpp"
-#include "player.hpp"
-#include "scene.hpp"
-#include "srv/assets.hpp"
-#include "weapon.hpp"
-
-#ifndef VULKAN_GAME_SHARED_ONLY
 #include "srv/application.hpp"
-#include "srv/session.hpp"
+#include <csignal>
+#include <iostream>
 
 static ::scene::mesh box_mesh(std::uint32_t id, vk::util::math::vec3 h, bool checker = false)
 {
@@ -190,9 +125,6 @@ int main(int argc, char **argv)
         game::options::state settings{};
         settings.bind_host = "0.0.0.0";
         settings.port = 27015;
-        settings.duration = 0;
-        settings.headless = false;
-        settings.help = false;
         game::options::init(argc, argv, game::options::mode::server_only, std::move(settings));
 
         if (game::options::get()->help) {
@@ -235,4 +167,3 @@ int main(int argc, char **argv)
         return 1;
     }
 }
-#endif

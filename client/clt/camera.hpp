@@ -24,16 +24,8 @@ struct frame
     vk::util::math::vec3 eye;
 };
 
-state *get();
-void init();
-void reset_view();
-void look(float dx, float dy);
 void set_look_sensitivity(float base, float ads_multiplier);
-void set_ads_fraction(float fraction);
-state snapshot();
-frame capture();
 void kick(float radians);
-void aim(float fraction);
 vk::util::math::mat4 view_projection(float aspect);
 
 using namespace vk::util::math;

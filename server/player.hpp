@@ -39,7 +39,6 @@ struct parameters_t
     float walk_speed, sprint_speed, gravity, radius, height;
 };
 
-void configure(parameters_t values);
 const parameters_t &parameters();
 struct state
 {
@@ -49,17 +48,9 @@ struct state
     bool grounded = false;
 };
 
-struct box
-{
-    vk::util::math::vec3 min;
-    vk::util::math::vec3 max;
-};
-
-using collision_world = std::vector<box>;
-spatial::index build_index(const collision_world &world);
-collision_world build_colliders(const ::scene::state &scene);
+using box=spatial::bounds;
+using collision_world=std::vector<box>;
 collision_world build_colliders(const std::vector<::scene::mesh> &meshes, std::span<const ::scene::instance> instances);
-void step(state &player, const input &input, const collision_world &world, const spatial::index *broadphase = nullptr);
 namespace
 {
 using namespace vk::util::math;
@@ -103,56 +94,32 @@ collision_world build_colliders(const std::vector<::scene::mesh> &meshes, std::s
     collision_world boxes;
     boxes.reserve(instances.size());
 
-    std::unordered_map<std::uint32_t,const ::scene::mesh*> by_id;
-    by_id.reserve(meshes.size());
-    for(const auto& mesh:meshes)by_id.emplace(mesh.id,&mesh);
-    for (const auto &instance : instances)
-    {
-        const auto it=by_id.find(instance.mesh_id);
-        if(it==by_id.end() || it->second->vertices.empty())continue;
-        const auto& mesh=*it->second;
-
-        const float limit = std::numeric_limits<float>::max();
-        box b{{limit, limit, limit}, {-limit, -limit, -limit}};
-        const auto &pose = instance.pose;
-
-        for (const auto &v : mesh.vertices)
-        {
-            const vec3 scaled{
-                v.position.x * pose.scale.x, v.position.y * pose.scale.y, v.position.z * pose.scale.z
-            };
-
-            const vec3 p = pose.position + rotate(pose.rotation, scaled);
-            b.min = {std::min(b.min.x, p.x), std::min(b.min.y, p.y), std::min(b.min.z, p.z)};
-            b.max = {std::max(b.max.x, p.x), std::max(b.max.y, p.y), std::max(b.max.z, p.z)};
+    ::scene::each_mesh_instance(meshes,instances,
+                                 [&](const auto& mesh,const auto& instance) {
+        if(mesh.vertices.empty())return;
+        const float limit=std::numeric_limits<float>::max();
+        box b{{limit,limit,limit},{-limit,-limit,-limit}};
+        const auto& pose=instance.pose;
+        for(const auto& v:mesh.vertices) {
+            const vec3 p=::scene::transform_position(pose,v.position);
+            b.min={std::min(b.min.x,p.x),std::min(b.min.y,p.y),std::min(b.min.z,p.z)};
+            b.max={std::max(b.max.x,p.x),std::max(b.max.y,p.y),std::max(b.max.z,p.z)};
         }
-
         boxes.push_back(b);
-    }
+    });
 
     return boxes;
-}
-
-std::vector<spatial::bounds> collision_bounds(const collision_world &boxes)
-{
-    std::vector<spatial::bounds> result;
-    result.reserve(boxes.size());
-
-    for (const auto &box : boxes)
-        result.push_back({box.min, box.max});
-
-    return result;
 }
 
 spatial::index build_index(const collision_world &boxes)
 {
     spatial::index index;
-    index.rebuild(collision_bounds(boxes));
+    index.rebuild(boxes);
 
     return index;
 }
 
-void step(state &p, const input &keys, const collision_world &world, const spatial::index *broadphase)
+void step(state &p, const input &keys, const collision_world &world, const spatial::index *broadphase = nullptr)
 {
     using namespace vk::util::math;
     const auto &settings = parameters();

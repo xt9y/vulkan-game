@@ -1,71 +1,3 @@
-#define VULKAN_GAME_SHARED_ONLY
-#include "../server/server.cpp"
-#undef VULKAN_GAME_SHARED_ONLY
-
-#include <algorithm>
-#include <array>
-#include <atomic>
-#include <bit>
-#include <chrono>
-#include <climits>
-#include <cmath>
-#include <csignal>
-#include <cstddef>
-#include <cstdint>
-#include <cstdlib>
-#include <cstring>
-#include <deque>
-#include <editor/editor.hpp>
-#include <editor/vulkan.hpp>
-#include <exception>
-#include <filesystem>
-#include <gpu/culler.hpp>
-#include <gpu/descriptors.hpp>
-#include <gpu/graph.hpp>
-#include <gpu/resource.hpp>
-#include <gpu/texture_cache.hpp>
-#include <gpu/timestamps.hpp>
-#include <gpu/upload.hpp>
-#include <iostream>
-#include <iterator>
-#include <limits>
-#include <map>
-#include <memory>
-#include <mutex>
-#include <network/endpoint.hpp>
-#include <network/secure.hpp>
-#include <network/session.hpp>
-#include <network/socket.hpp>
-#include <optional>
-#include <ozz/animation/runtime/animation.h>
-#include <ozz/animation/runtime/blending_job.h>
-#include <ozz/animation/runtime/local_to_model_job.h>
-#include <ozz/animation/runtime/sampling_job.h>
-#include <ozz/animation/runtime/skeleton.h>
-#include <ozz/base/io/archive.h>
-#include <ozz/base/io/stream.h>
-#include <ozz/base/maths/simd_math.h>
-#include <ozz/base/maths/soa_transform.h>
-#include <pcloud/pcloud.hpp>
-#include <random>
-#include <render/attachments.hpp>
-#include <render/frame.hpp>
-#include <render/geometry.hpp>
-#include <render/pipeline.hpp>
-#include <render/renderer.hpp>
-#include <render/sequence.hpp>
-#include <render/target.hpp>
-#include <stdexcept>
-#include <string>
-#include <string_view>
-#include <thread>
-#include <tuple>
-#include <unordered_map>
-#include <unordered_set>
-#include <utility>
-#include <vector>
-#include <vk/vk.hpp>
-
 #include "clt/animation.hpp"
 #include "clt/camera.hpp"
 #include "clt/connection.hpp"
@@ -78,6 +10,10 @@
 #include "clt/vulkan_loader.hpp"
 #include "clt/weapon.hpp"
 #include "clt/window.hpp"
+#include "../server/game/application.hpp"
+#include "../server/game/options.hpp"
+#include "../server/game_weapons.hpp"
+#include <csignal>
 
 static constexpr std::uint64_t editor_light_ids = 1ull << 32;
 static constexpr std::uint64_t editor_cube_ids = 2ull << 32;
@@ -152,10 +88,7 @@ static void on_geometry_action(const editor::action &action)
         ::scene::unit_cube_mesh_id;
     if (action.kind == editor::action_kind::insert) {
         const auto frame = clt::camera::capture();
-        const auto yaw = frame.pose.yaw, pitch = frame.pose.pitch;
-        const vk::util::math::vec3 forward{
-            std::sin(yaw) * std::cos(pitch), std::sin(pitch), -std::cos(yaw) * std::cos(pitch)
-        };
+        const auto forward=::weapon::direction(frame.pose.yaw,frame.pose.pitch);
         command.type = kind::create;
         command.index = UINT32_MAX;
         command.cube.pose.position = frame.eye + forward * 2.5f;
@@ -206,11 +139,7 @@ static void on_editor_action(const editor::action &action)
         if (action.type != "light") return;
 
         const auto frame = clt::camera::capture();
-        const float yaw = frame.pose.yaw, pitch = frame.pose.pitch;
-
-        const vk::util::math::vec3 forward{
-            std::sin(yaw) * std::cos(pitch), std::sin(pitch), -std::cos(yaw) * std::cos(pitch)
-        };
+        const auto forward=::weapon::direction(frame.pose.yaw,frame.pose.pitch);
 
         command.type = net::editor_light::kind::create;
         command.index = UINT32_MAX;
@@ -370,9 +299,6 @@ int main(int argc, char **argv)
         game::options::state settings{};
         settings.host = "127.0.0.1";
         settings.port = 27015;
-        settings.duration = 0;
-        settings.headless = false;
-        settings.help = false;
         settings.graphics.width = 1280;
         settings.graphics.height = 720;
         settings.graphics.title = "vulkan-game";

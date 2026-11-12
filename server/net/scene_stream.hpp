@@ -1,12 +1,16 @@
 #pragma once
+#include "movement/detail.hpp"
 #include "../scene.hpp"
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <climits>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
+#include <type_traits>
 #include <stb_image.h>
 #include <stdexcept>
 #include <utility>
@@ -30,89 +34,75 @@ namespace
 using bytes = std::vector<std::uint8_t>;
 using vec3 = vk::util::math::vec3;
 
-struct cursor
-{
-    const bytes &data;
-    std::size_t pos;
+// One archive drives both directions, so field ordering has one definition.
+struct invalid_scene : std::runtime_error {
+    invalid_scene() : std::runtime_error("Invalid scene payload or batch budget exceeded") {}
+};
+void require(bool condition) { if (!condition) throw invalid_scene{}; }
+
+template<bool Reading>
+struct archive {
+    std::conditional_t<Reading, const bytes, bytes>& data;
+    std::size_t pos = 0;
+    std::size_t left() const { return data.size() - pos; }
+    template<class T> void value(T& v) {
+        if constexpr (std::is_same_v<std::remove_cv_t<T>, vec3>) {
+            (*this)(v.x, v.y, v.z);
+        } else if constexpr (requires { v.begin(); v.end(); }) {
+            for (auto& item : v) value(item);
+        } else {
+            if constexpr (Reading) {
+                require(left() >= 4);
+                const auto bits = net::movement::detail::get(data.data() + pos);
+                if constexpr (std::is_floating_point_v<T>) v = std::bit_cast<float>(bits);
+                else v = bits;
+                pos += 4;
+            } else {
+                require(data.size() <= max_scene_bytes - 4);
+                const auto offset = data.size();
+                data.resize(offset + 4);
+                if constexpr (std::is_floating_point_v<T>)
+                    net::movement::detail::put(data.data() + offset, std::bit_cast<std::uint32_t>(v));
+                else net::movement::detail::put(data.data() + offset, v);
+            }
+            if constexpr (std::is_floating_point_v<std::remove_cv_t<T>>) require(std::isfinite(v));
+        }
+    }
+    template<class... T> void operator()(T&... values) { (value(values), ...); }
+    template<class T> void blob(T& target, std::size_t length) {
+        if constexpr (Reading) {
+            require(length <= left());
+            target.assign(data.begin() + pos, data.begin() + pos + length);
+            pos += length;
+        } else {
+            require(length <= max_scene_bytes - data.size());
+            data.insert(data.end(), target.begin(), target.end());
+        }
+    }
+    template<class T, class F>
+    void items(T& target, std::size_t count, std::size_t minimum, F visit) {
+        if constexpr (Reading) {
+            require(count <= left() / minimum);
+            target.resize(count);
+        }
+        for (auto& item : target) visit(item);
+    }
 };
 
-std::size_t left(const cursor &c) { return c.data.size() - c.pos; }
-void put(bytes &b, std::uint32_t value)
-{
+// Batch envelopes use the same network-order words as scene archives.
+struct cursor { const bytes& data; std::size_t pos; };
+std::size_t left(const cursor& c) { return c.data.size() - c.pos; }
+template<class... T> bool take_all(cursor& c, T&... values) {
+    if (left(c) < sizeof...(T) * 4) return false;
+    net::movement::detail::read_fields(c.data.data() + c.pos, values...);
+    c.pos += sizeof...(T) * 4;
+    return true;
+}
+template<class... T> void put_all(bytes& b, const T&... values) {
     const auto offset = b.size();
-    b.resize(offset + 4);
-    net::movement::detail::put(b.data() + offset, value);
+    b.resize(offset + sizeof...(T) * 4);
+    net::movement::detail::write_fields(b.data() + offset, values...);
 }
-
-void put(bytes &b, float value)
-{
-    if (!std::isfinite(value)) throw std::runtime_error("Non-finite scene value");
-    put(b, std::bit_cast<std::uint32_t>(value));
-}
-
-void put(bytes &b, vec3 value)
-{
-    put(b, value.x);
-    put(b, value.y);
-    put(b, value.z);
-}
-
-template <class... T>
-void put_all(bytes &b, const T &...values) { (put(b, values), ...); }
-bool take(cursor &c, std::uint32_t &value)
-{
-    if (left(c) < 4) return false;
-    value = net::movement::detail::get(c.data.data() + c.pos);
-    c.pos += 4;
-
-    return true;
-}
-
-bool take(cursor &c, float &value)
-{
-    std::uint32_t bits = 0;
-
-    if (!take(c, bits)) return false;
-    value = std::bit_cast<float>(bits);
-
-    return std::isfinite(value);
-}
-
-bool take(cursor &c, vec3 &value)
-{
-    return take(c, value.x) && take(c, value.y) && take(c, value.z);
-}
-
-template <class... T>
-bool take_all(cursor &c, T &...values) { return (take(c, values) && ...); }
-void material_put(bytes &out, const ::scene::material &m)
-{
-    for (auto x : m.base_color)
-        put(out, x);
-
-    for (auto x : m.emissive)
-        put(out, x);
-    put_all(out, m.metallic, m.roughness, m.occlusion, m.alpha_cutoff, m.base_color_texture, m.metallic_roughness_texture, m.normal_texture, m.occlusion_texture, m.emissive_texture,
-            m.alpha_mode, std::uint32_t(m.double_sided), m.procedural_pattern);
-}
-
-bool material_take(cursor &in, ::scene::material &m)
-{
-    for (auto &x : m.base_color)
-        if (!take(in, x)) return false;
-
-    for (auto &x : m.emissive)
-        if (!take(in, x)) return false;
-    std::uint32_t double_sided = 0;
-
-    if (!take_all(in, m.metallic, m.roughness, m.occlusion, m.alpha_cutoff, m.base_color_texture, m.metallic_roughness_texture, m.normal_texture, m.occlusion_texture, m.emissive_texture, m.alpha_mode,
-                  double_sided, m.procedural_pattern)) return false;
-    if (double_sided > 1 || m.alpha_mode > 2 || m.procedural_pattern > 1) return false;
-    m.double_sided = double_sided != 0;
-
-    return true;
-}
-
 void append(bytes &out, const bytes &src)
 {
     out.insert(out.end(), src.begin(), src.end());
@@ -138,247 +128,131 @@ bool valid_light(const ::scene::point_light &l)
     return std::isfinite(l.radius) && l.radius > 0 && std::isfinite(l.strength) && l.strength >= 0 && l.color.x >= 0 && l.color.y >= 0 && l.color.z >= 0;
 }
 } // namespace
-std::vector<std::uint8_t> serialize(const ::scene::state &scene)
+namespace {
+template<bool Reading, class Scene>
+void transfer(archive<Reading>& ar, Scene& scene)
 {
-    if (scene.meshes.size() > max_scene_bytes / 12 || scene.instances.size() > max_scene_bytes / 108 || scene.lights.size() > 64)
-        throw std::runtime_error("Scene snapshot exceeds maximum batch size");
-    bytes out{'S', 'C', 'N', 'B'};
-    put_all(out, std::uint32_t(scene.meshes.size()), std::uint32_t(scene.instances.size()), std::uint32_t(scene.textures.size()), std::uint32_t(scene.skins.size()), std::uint32_t(scene.collision_boxes.size()),
-            std::uint32_t(scene.lights.size()));
-    for (const auto &t : scene.textures)
-    {
-        const bool encoded = !t.encoded.empty();
-        const auto &payload = encoded ? t.encoded : t.pixels;
+    std::uint32_t meshes = scene.meshes.size(), instances = scene.instances.size();
+    std::uint32_t textures = scene.textures.size(), skins = scene.skins.size();
+    std::uint32_t boxes = scene.collision_boxes.size(), lights = scene.lights.size();
+    ar(meshes, instances, textures, skins, boxes, lights);
+    require(lights <= 64);
+    if constexpr (Reading)
+        require(lights <= ar.left()/32 && boxes <= ar.left()/24 && textures <= ar.left()/20 &&
+                skins <= ar.left()/16 && meshes <= ar.left()/12 && instances <= ar.left()/108);
+    else require(meshes <= max_scene_bytes/12 && instances <= max_scene_bytes/108);
 
+    ar.items(scene.textures, textures, 20, [&](auto& t) {
+        std::uint32_t encoding = !t.encoded.empty();
+        std::uint32_t length = encoding ? t.encoded.size() : t.pixels.size();
+        ar(t.id, t.width, t.height, encoding, length);
         const auto raw = std::uint64_t(t.width) * t.height * 4u;
-
-        if (!t.id || !t.width || !t.height || raw > max_scene_bytes - 20 || (!encoded && raw != t.pixels.size()) || payload.empty() || payload.size() > max_scene_bytes - 20 || out.size() + 20 + payload.size() > max_scene_bytes)
-            throw std::runtime_error("Invalid texture or scene batch too large");
-        put_all(out, t.id, t.width, t.height, std::uint32_t(encoded), std::uint32_t(payload.size()));
-        append(out, payload);
-    }
-
-    for (const auto &skin : scene.skins)
-    {
-        if (!skin.id || skin.skeleton.empty() || skin.inverse_bind.empty() || skin.inverse_bind.size() > 1024)
-            throw std::runtime_error("Invalid skeletal asset");
-        put_all(out, skin.id, std::uint32_t(skin.inverse_bind.size()), std::uint32_t(skin.skeleton.size()), std::uint32_t(skin.clips.size()));
-        append(out, skin.skeleton);
-
-        for (const auto &matrix : skin.inverse_bind)
-            for (float value : matrix)
-                put(out, value);
-
-        for (const auto &clip : skin.clips)
-        {
-            if (clip.name.size() > 255 || clip.bytes.empty())
-                throw std::runtime_error("Invalid skeletal animation clip");
-            put(out, std::uint32_t(clip.name.size()));
-            out.insert(out.end(), clip.name.begin(), clip.name.end());
-            put(out, std::uint32_t(clip.bytes.size()));
-            append(out, clip.bytes);
-        }
-
-        if (out.size() > max_scene_bytes)
-            throw std::runtime_error("Skeletal asset exceeds scene batch budget");
-    }
-
-    for (const auto &m : scene.meshes)
-    {
-        if (m.vertices.empty() || m.indices.empty() || m.indices.size() % 3 || m.vertices.size() > max_scene_bytes / 64 || m.indices.size() > max_scene_bytes / 4)
-            throw std::runtime_error("Invalid scene mesh");
-        put_all(out, m.id, m.skin_id, std::uint32_t(m.vertices.size()), std::uint32_t(m.indices.size()));
-        material_put(out, m.surface);
-
-        for (const auto &v : m.vertices)
-        {
-            put_all(out, v.position, v.normal, v.u, v.v);
-
-            if (m.skin_id) {
-                for (auto joint : v.joints)
-                    put(out, joint);
-
-                for (auto weight : v.weights)
-                    put(out, weight);
+        require(t.id && t.width && t.height && encoding <= 1 && raw <= max_scene_bytes - 20);
+        if constexpr (Reading) {
+            require(length <= ar.left());
+            if (encoding) {
+                require(length <= INT_MAX && t.width <= INT_MAX && t.height <= INT_MAX);
+                int w = 0, h = 0, c = 0;
+                std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> pixels(
+                    stbi_load_from_memory(ar.data.data() + ar.pos, int(length), &w, &h, &c, 4), stbi_image_free);
+                require(pixels && w == int(t.width) && h == int(t.height));
+                t.pixels.assign(pixels.get(), pixels.get() + raw);
+                ar.pos += length;
+            } else {
+                require(raw == length);
+                ar.blob(t.pixels, length);
             }
+        } else {
+            require(length && length <= max_scene_bytes - 20 && (encoding || raw == length));
+            ar.blob(encoding ? t.encoded : t.pixels, length);
         }
-
-        for (auto index : m.indices)
-        {
-            if (index >= m.vertices.size())
-                throw std::runtime_error("Scene mesh index out of bounds");
-            put(out, index);
+    });
+    ar.items(scene.skins, skins, 16, [&](auto& skin) {
+        std::uint32_t joints = skin.inverse_bind.size(), length = skin.skeleton.size(), clips = skin.clips.size();
+        ar(skin.id, joints, length, clips);
+        require(skin.id && joints && joints <= 1024);
+        if constexpr (Reading)
+            require(length <= ar.left() && std::uint64_t(joints)*64 <= ar.left()-length && clips <= max_scene_bytes/8);
+        else require(length);
+        ar.blob(skin.skeleton, length);
+        ar.items(skin.inverse_bind, joints, 64, [&](auto& matrix) { ar(matrix); });
+        ar.items(skin.clips, clips, 8, [&](auto& clip) {
+            std::uint32_t name = clip.name.size(), size = clip.bytes.size();
+            ar(name);
+            require(name <= 255);
+            ar.blob(clip.name, name);
+            ar(size);
+            require(size);
+            ar.blob(clip.bytes, size);
+        });
+    });
+    ar.items(scene.meshes, meshes, 12, [&](auto& mesh) {
+        std::uint32_t vertices = mesh.vertices.size(), indices = mesh.indices.size();
+        ar(mesh.id, mesh.skin_id, vertices, indices);
+        require(vertices && indices && indices % 3 == 0);
+        if constexpr (Reading)
+            require(ar.left() >= 76 && std::uint64_t(vertices)*(mesh.skin_id ? 64 : 32) + std::uint64_t(indices)*4 <= ar.left()-76);
+        else require(vertices <= max_scene_bytes/64 && indices <= max_scene_bytes/4);
+        auto& m = mesh.surface;
+        ar(m.base_color, m.emissive, m.metallic, m.roughness, m.occlusion, m.alpha_cutoff,
+           m.base_color_texture, m.metallic_roughness_texture, m.normal_texture, m.occlusion_texture, m.emissive_texture, m.alpha_mode);
+        std::uint32_t sided = m.double_sided;
+        ar(sided, m.procedural_pattern);
+        if constexpr (Reading) {
+            require(sided <= 1 && m.alpha_mode <= 2 && m.procedural_pattern <= 1);
+            m.double_sided = sided;
         }
+        ar.items(mesh.vertices, vertices, mesh.skin_id ? 64 : 32, [&](auto& v) {
+            ar(v.position, v.normal, v.u, v.v);
+            if (mesh.skin_id) {
+                ar(v.joints, v.weights);
+                if constexpr (Reading)
+                    for (auto weight : v.weights) require(weight >= 0 && weight <= 1);
+            }
+        });
+        ar.items(mesh.indices, indices, 4, [&](auto& index) { ar(index); require(index < vertices); });
+    });
+    ar.items(scene.instances, instances, 108, [&](auto& i) {
+        ar(i.id, i.mesh_id, i.animation, i.animation_tick, i.overlay_animation, i.overlay_root, i.overlay_weight,
+           i.pose.position, i.pose.scale, i.pose.rotation.x, i.pose.rotation.y, i.pose.rotation.z, i.pose.rotation.w,
+           i.tint, i.pattern, i.rotation_reference, i.optical_strength, i.optical_mattness, i.editor_group);
+        if constexpr (Reading)
+            require(i.overlay_weight >= 0 && i.overlay_weight <= 1 &&
+                    i.tint.x >= 0 && i.tint.x <= 1 && i.tint.y >= 0 && i.tint.y <= 1 && i.tint.z >= 0 && i.tint.z <= 1 &&
+                    (i.pattern <= 3 || i.pattern == UINT32_MAX) && i.optical_strength >= 0 && i.optical_strength <= 1 &&
+                    i.optical_mattness >= 0 && i.optical_mattness <= 1);
+    });
+    ar.items(scene.collision_boxes, boxes, 24, [&](auto& b) {
+        ar(b.minimum, b.maximum);
+        require(valid_box(b.minimum, b.maximum));
+    });
+    ar.items(scene.lights, lights, 32, [&](auto& l) {
+        ar(l.position, l.radius, l.color, l.strength);
+        require(valid_light(l));
+    });
+}
+} // namespace
 
-        if (out.size() > max_scene_bytes)
-            throw std::runtime_error("Scene snapshot exceeds maximum batch size");
-    }
-
-    for (const auto &i : scene.instances)
-        put_all(out, i.id, i.mesh_id, i.animation, i.animation_tick, i.overlay_animation, i.overlay_root, i.overlay_weight, i.pose.position, i.pose.scale, i.pose.rotation.x, i.pose.rotation.y, i.pose.rotation.z, i.pose.rotation.w, i.tint, i.pattern, i.rotation_reference, i.optical_strength, i.optical_mattness, i.editor_group);
-
-    for (const auto &b : scene.collision_boxes)
-    {
-        if (!valid_box(b.minimum, b.maximum))
-            throw std::runtime_error("Invalid scene collision bounds");
-        put_all(out, b.minimum, b.maximum);
-    }
-
-    for (const auto &l : scene.lights)
-    {
-        if (!valid_light(l)) throw std::runtime_error("Invalid scene light");
-        put_all(out, l.position, l.radius, l.color, l.strength);
-    }
-
-    if (out.size() > max_scene_bytes)
-        throw std::runtime_error("Scene snapshot exceeds maximum batch size");
-
+std::vector<std::uint8_t> serialize(const ::scene::state& scene)
+{
+    bytes out{'S', 'C', 'N', 'B'};
+    archive<false> writer{out};
+    transfer(writer, scene);
     return out;
 }
 
-bool deserialize(const std::vector<std::uint8_t> &bytes, ::scene::state &scene)
+bool deserialize(const std::vector<std::uint8_t>& bytes, ::scene::state& scene)
 {
-    if (bytes.size() < 28 || bytes.size() > max_scene_bytes || bytes[0] != 'S' || bytes[1] != 'C' || bytes[2] != 'N' || bytes[3] != 'B')
-        return false;
-    cursor in{bytes, 4};
-    std::uint32_t meshes = 0, instances = 0, textures = 0, skins = 0, boxes = 0, lights = 0;
-
-    if (!take_all(in, meshes, instances, textures, skins, boxes, lights) || lights > 64 || lights > left(in) / 32 || boxes > left(in) / 24 || textures > left(in) / 20 || skins > left(in) / 16 || meshes > left(in) / 12 || instances > left(in) / 108) return false;
-    ::scene::state result;
-    result.meshes.reserve(meshes);
-    result.instances.reserve(instances);
-    result.textures.reserve(textures);
-    result.skins.reserve(skins);
-    result.collision_boxes.reserve(boxes);
-    result.lights.reserve(lights);
-
-    for (std::uint32_t i = 0; i < textures; ++i)
-    {
-        ::scene::texture t;
-        std::uint32_t encoding = 0, length = 0;
-
-        if (!take_all(in, t.id, t.width, t.height, encoding, length) || !t.id || !t.width || !t.height || encoding > 1 || length > left(in) || std::uint64_t(t.width) * t.height * 4u > max_scene_bytes - 20) return false;
-        if (encoding == 0) {
-            if (std::uint64_t(t.width) * t.height * 4u != length) return false;
-            t.pixels.assign(bytes.begin() + in.pos, bytes.begin() + in.pos + length);
-        }
-        else {
-            if (length > INT_MAX || t.width > INT_MAX || t.height > INT_MAX) return false;
-
-            int w = 0, h = 0, c = 0;
-            auto *p = stbi_load_from_memory(bytes.data() + in.pos, int(length), &w, &h, &c, 4);
-
-            if (!p || w != int(t.width) || h != int(t.height)) {
-                stbi_image_free(p);
-
-                return false;
-            }
-
-            t.pixels.assign(p, p + std::size_t(w) * h * 4u);
-            stbi_image_free(p);
-        }
-
-        in.pos += length;
-        result.textures.push_back(std::move(t));
-    }
-
-    for (std::uint32_t i = 0; i < skins; ++i)
-    {
-        ::scene::skin skin;
-        std::uint32_t joints = 0, length = 0, clips = 0;
-
-        if (!take_all(in, skin.id, joints, length, clips) || !skin.id || !joints || joints > 1024 || length > left(in) || std::uint64_t(joints) * 64 > left(in) - length || clips > max_scene_bytes / 8) return false;
-        skin.skeleton.assign(bytes.begin() + in.pos, bytes.begin() + in.pos + length);
-        in.pos += length;
-        skin.inverse_bind.resize(joints);
-
-        for (auto &matrix : skin.inverse_bind)
-            for (auto &value : matrix)
-                if (!take(in, value)) return false;
-
-        for (std::uint32_t j = 0; j < clips; ++j)
-        {
-            std::uint32_t name = 0, size = 0;
-
-            if (!take(in, name) || name > 255 || name > left(in)) return false;
-            ::scene::clip clip;
-            clip.name.assign(reinterpret_cast<const char *>(bytes.data() + in.pos), name);
-            in.pos += name;
-
-            if (!take(in, size) || !size || size > left(in)) return false;
-            clip.bytes.assign(bytes.begin() + in.pos, bytes.begin() + in.pos + size);
-            in.pos += size;
-            skin.clips.push_back(std::move(clip));
-        }
-
-        result.skins.push_back(std::move(skin));
-    }
-
-    for (std::uint32_t i = 0; i < meshes; ++i)
-    {
-        ::scene::mesh mesh;
-        std::uint32_t vertices = 0, indices = 0;
-
-        if (!take_all(in, mesh.id, mesh.skin_id, vertices, indices) || !vertices || !indices || indices % 3 || left(in) < 76 || std::uint64_t(vertices) * (mesh.skin_id ? 64u : 32u) + std::uint64_t(indices) * 4u > left(in) - 76) return false;
-        if (!material_take(in, mesh.surface)) return false;
-        mesh.vertices.resize(vertices);
-        mesh.indices.resize(indices);
-
-        for (auto &v : mesh.vertices)
-        {
-            if (!take_all(in, v.position, v.normal, v.u, v.v)) return false;
-            if (mesh.skin_id) {
-                for (auto &joint : v.joints)
-                    if (!take(in, joint)) return false;
-
-                for (auto &weight : v.weights)
-                    if (!take(in, weight) || weight < 0 || weight > 1) return false;
-            }
-        }
-
-        for (auto &index : mesh.indices)
-            if (!take(in, index) || index >= vertices) return false;
-        result.meshes.push_back(std::move(mesh));
-    }
-
-    if (instances > left(in) / 108) return false;
-
-    for (std::uint32_t i = 0; i < instances; ++i)
-    {
-        ::scene::instance item;
-
-        if (!take_all(in, item.id, item.mesh_id, item.animation, item.animation_tick, item.overlay_animation, item.overlay_root, item.overlay_weight, item.pose.position, item.pose.scale, item.pose.rotation.x,
-                      item.pose.rotation.y, item.pose.rotation.z, item.pose.rotation.w, item.tint, item.pattern, item.rotation_reference, item.optical_strength, item.optical_mattness, item.editor_group) ||
-            item.overlay_weight < 0 || item.overlay_weight > 1 ||
-            item.tint.x < 0 || item.tint.x > 1 || item.tint.y < 0 || item.tint.y > 1 || item.tint.z < 0 || item.tint.z > 1 ||
-            (item.pattern > 3 && item.pattern != UINT32_MAX) ||
-            !std::isfinite(item.optical_strength) || item.optical_strength < 0.f || item.optical_strength > 1.f ||
-            !std::isfinite(item.optical_mattness) || item.optical_mattness < 0.f || item.optical_mattness > 1.f) return false;
-        result.instances.push_back(std::move(item));
-    }
-
-    for (std::uint32_t i = 0; i < boxes; ++i)
-    {
-        ::scene::collision_box b{};
-
-        if (!take_all(in, b.minimum, b.maximum) || !valid_box(b.minimum, b.maximum))
-            return false;
-        result.collision_boxes.push_back(b);
-    }
-
-    for (std::uint32_t i = 0; i < lights; ++i)
-    {
-        ::scene::point_light l{};
-
-        if (!take_all(in, l.position, l.radius, l.color, l.strength) || !valid_light(l))
-            return false;
-        result.lights.push_back(l);
-    }
-
-    if (left(in)) return false;
-    scene = std::move(result);
-
-    return true;
+    if (bytes.size() < 28 || bytes.size() > max_scene_bytes ||
+        bytes[0] != 'S' || bytes[1] != 'C' || bytes[2] != 'N' || bytes[3] != 'B') return false;
+    try {
+        archive<true> reader{bytes, 4};
+        ::scene::state result;
+        transfer(reader, result);
+        if (reader.left()) return false;
+        scene = std::move(result);
+        return true;
+    } catch (const invalid_scene&) { return false; }
 }
 
 std::uint32_t checksum(const std::vector<std::uint8_t> &bytes)

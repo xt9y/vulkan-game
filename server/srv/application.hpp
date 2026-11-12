@@ -1,4 +1,9 @@
 #pragma once
+#include "../game/application.hpp"
+#include "../game/options.hpp"
+#include "../game/secure_config.hpp"
+#include "../net/animation.hpp"
+#include "assets.hpp"
 #include "../net/editor_light.hpp"
 #include "../net/editor_cube.hpp"
 #include "../net/movement.hpp"
@@ -79,15 +84,9 @@ struct state
     bool initialized = false;
 };
 
-state *get();
-void set_scene(::scene::state scene);
-void load_model(std::filesystem::path path, ::scene::transform pose, std::uint32_t animation);
-void add_weapon(::weapon::definition definition);
 void init();
 void begin_stream();
 void append_scene(::scene::state patch, bool final = false);
-int run();
-void shutdown() noexcept;
 
 using clock = std::chrono::steady_clock;
 
@@ -132,7 +131,6 @@ void reply(const net::endpoint::resource &peer, net::message::type type, const n
 void tick_players();
 void tick_weapons();
 void handle_weapon(const net::endpoint::resource &peer, const net::weapon::command &command);
-net::weapon::snapshot weapon_snapshot(const session::resource &client, double now);
 } // namespace
 state *get()
 {
@@ -326,7 +324,7 @@ void append_scene(::scene::state patch, bool final)
     data.editor_light_versions.insert(data.editor_light_versions.end(),
                                       patch.lights.size(), data.editor_light_revision);
     append(data.scene.lights, patch.lights);
-    data.collision_index.append(player::collision_bounds(added_colliders));
+    data.collision_index.append(added_colliders);
     append(data.colliders, added_colliders);
     data.scene_batches.push_back({std::move(bytes), final});
 }
@@ -357,46 +355,36 @@ int run()
             ::scene::state patch;
             constexpr std::size_t target_bytes = 4 * 1024 * 1024;
             std::size_t used = 20;
-            auto fits = [&](std::size_t size)
-            {
-                return used == 20 || size <= target_bytes - used;
+            // Stream each asset category in wire order, respecting the same
+            // per-tick byte budget and allowing one oversized first item.
+            auto drain=[&](auto& src,auto& dst,std::size_t slot,auto measure) {
+                auto& cursor=get()->import_cursor[slot];
+                while(cursor<src.size() && used<target_bytes) {
+                    const std::size_t bytes=measure(src[cursor]);
+                    if(used!=20 && bytes>target_bytes-used)return false;
+                    dst.push_back(std::move(src[cursor++]));
+                    used+=bytes;
+                }
+                return true;
             };
-            while (true)
-            {
-                std::size_t size = 0;
-                if (get()->import_cursor[state::texture_slot] < imported.textures.size()) {
-                    auto &texture = imported.textures[get()->import_cursor[state::texture_slot]];
-                    size = 20 + (texture.encoded.empty() ? texture.pixels.size() : texture.encoded.size());
-                    if (!fits(size)) break;
-                    patch.textures.push_back(std::move(texture));
-                    ++get()->import_cursor[state::texture_slot];
-                }
-                else if (get()->import_cursor[state::skin_slot] < imported.skins.size()) {
-                    auto &skin = imported.skins[get()->import_cursor[state::skin_slot]];
-                    size = 16 + skin.skeleton.size() + skin.inverse_bind.size() * 64;
-                    for (const auto &clip : skin.clips)
-                        size += 8 + clip.name.size() + clip.bytes.size();
-                    if (!fits(size)) break;
-                    patch.skins.push_back(std::move(skin));
-                    ++get()->import_cursor[state::skin_slot];
-                }
-                else if (get()->import_cursor[state::mesh_slot] < imported.meshes.size()) {
-                    auto &mesh = imported.meshes[get()->import_cursor[state::mesh_slot]];
-                    size = 96 + mesh.vertices.size() * (mesh.skin_id ? 64 : 32) + mesh.indices.size() * 4;
-                    if (!fits(size)) break;
-                    patch.meshes.push_back(std::move(mesh));
-                    ++get()->import_cursor[state::mesh_slot];
-                }
-                else if (get()->import_cursor[state::instance_slot] < imported.instances.size()) {
-                    size = 108; // Serialized instance including editor group.
-                    if (!fits(size)) break;
-                    patch.instances.push_back(std::move(imported.instances[get()->import_cursor[state::instance_slot]++]));
-                }
-                else
-                    break;
-                used += size;
-                if (used >= target_bytes) break;
-            }
+            const auto texture_bytes=[](const auto& t) {
+                return 20+(t.encoded.empty()?t.pixels.size():t.encoded.size());
+            };
+            const auto skin_bytes=[](const auto& skin) {
+                std::size_t bytes=16+skin.skeleton.size()+skin.inverse_bind.size()*64;
+                for(const auto& clip:skin.clips)
+                    bytes+=8+clip.name.size()+clip.bytes.size();
+                return bytes;
+            };
+            const auto mesh_bytes=[](const auto& mesh) {
+                return 96+mesh.vertices.size()*(mesh.skin_id?64u:32u)+
+                    mesh.indices.size()*4u;
+            };
+            drain(imported.textures,patch.textures,state::texture_slot,texture_bytes) &&
+            drain(imported.skins,patch.skins,state::skin_slot,skin_bytes) &&
+            drain(imported.meshes,patch.meshes,state::mesh_slot,mesh_bytes) &&
+            drain(imported.instances,patch.instances,state::instance_slot,
+                [](const auto&){return std::size_t(108);});
             const bool final = get()->import_cursor[state::texture_slot] == imported.textures.size() && get()->import_cursor[state::skin_slot] == imported.skins.size() && get()->import_cursor[state::mesh_slot] == imported.meshes.size() && get()->import_cursor[state::instance_slot] == imported.instances.size();
             if (!patch.textures.empty() || !patch.skins.empty() || !patch.meshes.empty() || !patch.instances.empty())
                 append_scene(std::move(patch), final);
@@ -448,6 +436,18 @@ void shutdown() noexcept
 }
 namespace
 {
+template<class Packet>
+void send_editor(const session::resource& client,Packet packet)
+{
+    packet.token=client.token;
+    const auto bytes=encode(packet);
+    net::secure::send(get()->socket,client.endpoint,bytes.data(),bytes.size());
+}
+template<class F>
+void with_client(const net::endpoint::resource& peer,std::uint32_t token,F&& action)
+{
+    if (auto* client = session::authenticated(peer, token)) action(*client);
+}
 bool editor_local(const net::endpoint::resource &peer)
 {
     if (peer.address.ss_family == AF_INET) {
@@ -463,10 +463,7 @@ bool editor_local(const net::endpoint::resource &peer)
 void handle_editor_light(const net::endpoint::resource &peer, const net::editor_light::resource &command)
 {
     if (!editor_local(peer)) return;
-    for (auto &client : session::get()->clients)
-    {
-        if (!client.active || client.token != command.token || !net::endpoint::equal(client.endpoint, peer))
-            continue;
+    with_client(peer,command.token,[&](session::resource& client) {
         const bool duplicate = command.sequence == client.editor_light_sequence;
         if (!duplicate && (!net::message::newer(command.sequence, client.editor_light_sequence) || (client.editor_light_sequence && command.sequence - client.editor_light_sequence > 256u)))
             return;
@@ -511,13 +508,11 @@ void handle_editor_light(const net::endpoint::resource &peer, const net::editor_
                 if (!recipient.active) continue;
                 net::editor_light::resource changed{};
                 changed.type = net::editor_light::kind::state;
-                changed.token = recipient.token;
                 changed.index = index;
                 changed.sequence = get()->editor_light_versions[index];
                 changed.revision = changed.sequence;
                 changed.light = get()->scene.lights[index];
-                const auto bytes = net::editor_light::encode(changed);
-                net::secure::send(get()->socket, recipient.endpoint, bytes.data(), bytes.size());
+                send_editor(recipient,changed);
             }
             std::clog << "srv: editor light " << index
                       << (command.type == net::editor_light::kind::create ? " placed" : command.type == net::editor_light::kind::remove ? " deleted"
@@ -528,16 +523,14 @@ void handle_editor_light(const net::endpoint::resource &peer, const net::editor_
             return;
         net::editor_light::resource ack{};
         ack.type = net::editor_light::kind::ack;
-        ack.token = client.token;
         ack.sequence = client.editor_light_sequence;
         ack.index = client.editor_light_index;
         ack.revision = get()->editor_light_versions[ack.index];
         ack.light = get()->scene.lights[ack.index];
-        const auto bytes = net::editor_light::encode(ack);
-        net::secure::send(get()->socket, peer, bytes.data(), bytes.size());
+        send_editor(client,ack);
         client.last_seen = clock::now();
         return;
-    }
+    });
 }
 void handle_editor_cube(const net::endpoint::resource &peer, const net::editor_cube::resource &command)
 {
@@ -546,8 +539,7 @@ void handle_editor_cube(const net::endpoint::resource &peer, const net::editor_c
         (command.type != kind::create && command.type != kind::edit &&
          command.type != kind::remove)) return;
     auto &data = *get();
-    for (auto &client : session::get()->clients) {
-        if (!client.active || client.token != command.token || !net::endpoint::equal(client.endpoint, peer)) continue;
+    with_client(peer,command.token,[&](session::resource& client) {
         const bool duplicate = command.sequence == client.editor_cube_sequence;
         if (!duplicate && (!net::message::newer(command.sequence, client.editor_cube_sequence) ||
             (client.editor_cube_sequence && command.sequence - client.editor_cube_sequence > 256u))) return;
@@ -651,25 +643,18 @@ void handle_editor_cube(const net::endpoint::resource &peer, const net::editor_c
             client.editor_cube_index=changed.index;
             for(const auto& recipient:session::get()->clients) {
                 if(!recipient.active)continue;
-                for(auto update:updates) {
-                    update.token=recipient.token;
-                    const auto bytes=encode(update);
-                    net::secure::send(data.socket,recipient.endpoint,
-                                      bytes.data(),bytes.size());
-                }
+                for(const auto& update:updates)send_editor(recipient,update);
             }
         }
         const auto found = data.editor_cubes.find(client.editor_cube_index);
         if (found == data.editor_cubes.end()) return;
         auto ack = found->second;
         ack.type = kind::ack;
-        ack.token = client.token;
         ack.sequence = client.editor_cube_sequence;
-        const auto bytes = encode(ack);
-        net::secure::send(data.socket, peer, bytes.data(), bytes.size());
+        send_editor(client,ack);
         client.last_seen = clock::now();
         return;
-    }
+    });
 }
 
 void send_editor_cubes()
@@ -686,10 +671,7 @@ void send_editor_cubes()
     for (std::size_t i = 0; i < std::min(per_tick, get()->editor_cubes.size() - start); ++i, ++it) {
         for (const auto &client : session::get()->clients) {
             if (!client.active) continue;
-            auto update = it->second;
-            update.token = client.token;
-            const auto bytes = net::editor_cube::encode(update);
-            net::secure::send(get()->socket, client.endpoint, bytes.data(), bytes.size());
+            send_editor(client,it->second);
         }
     }
 }
@@ -704,13 +686,11 @@ void send_editor_lights()
         {
             net::editor_light::resource update{};
             update.type = net::editor_light::kind::state;
-            update.token = client.token;
             update.index = static_cast<std::uint32_t>(i);
             update.sequence = i < get()->editor_light_versions.size() ? get()->editor_light_versions[i] : 1;
             update.revision = update.sequence;
             update.light = get()->scene.lights[i];
-            const auto bytes = net::editor_light::encode(update);
-            net::secure::send(get()->socket, client.endpoint, bytes.data(), bytes.size());
+            send_editor(client,update);
         }
     }
 }
@@ -742,14 +722,10 @@ void receive_messages()
             continue;
         }
         if (const auto command = net::movement::decode_input(buffer.data(), *size)) {
-            for (auto &client : session::get()->clients)
-            {
-                if (!client.active || client.token != command->token || !net::endpoint::equal(client.endpoint, peer))
-                    continue;
-                if (!queue_input(client.inputs, command->input, client.processed_input, 128)) break;
-                client.last_seen = clock::now();
-                break;
-            }
+            with_client(peer,command->token,[&](session::resource& client) {
+                if(queue_input(client.inputs,command->input,client.processed_input,128))
+                    client.last_seen=clock::now();
+            });
             continue;
         }
         if (const auto message = net::message::decode(buffer.data(), *size))
@@ -778,9 +754,7 @@ net::weapon::snapshot weapon_snapshot(const session::resource &client, double no
 }
 void handle_weapon(const net::endpoint::resource &peer, const net::weapon::command &command)
 {
-    for (auto &client : session::get()->clients)
-    {
-        if (!client.active || client.token != command.token || !net::endpoint::equal(client.endpoint, peer)) continue;
+    with_client(peer,command.token,[&](session::resource& client) {
         const auto now = clock::now();
         client.last_seen = now;
         if (!net::message::newer(command.sequence, client.weapon_sequence)) {
@@ -820,7 +794,7 @@ void handle_weapon(const net::endpoint::resource &peer, const net::weapon::comma
             }
         }
         return;
-    }
+    });
 }
 void tick_weapons()
 {

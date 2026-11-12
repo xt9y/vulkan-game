@@ -8,7 +8,6 @@ struct state
     std::atomic<bool> stop{false};
 };
 
-state *get();
 
 state *get()
 {

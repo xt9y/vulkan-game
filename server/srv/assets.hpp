@@ -26,12 +26,11 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 namespace srv::assets
 {
-std::vector<::scene::texture> images(const fastgltf::Asset &asset, std::uint32_t first_texture);
 
-::scene::state load(const std::filesystem::path &path, std::uint32_t first_mesh, std::uint32_t first_instance, std::uint32_t first_texture, std::uint32_t first_skin);
 
 struct rig
 {
@@ -423,12 +422,15 @@ rig import_rig(const fastgltf::Asset &asset, std::size_t skin_index)
     if (!result.skeleton)
         throw std::runtime_error("Ozz skeleton build failed");
 
-    for (auto joint : skin.joints)
-    {
-        auto it = std::find(ordered.begin(), ordered.end(), joint);
-
-        if (it == ordered.end()) throw std::runtime_error("Skin remap missing joint");
-        result.skin_joints.push_back(std::uint32_t(it - ordered.begin()));
+    std::unordered_map<std::size_t,std::uint32_t> joint_to_track;
+    joint_to_track.reserve(ordered.size());
+    for(std::size_t i=0;i<ordered.size();++i)
+        joint_to_track.emplace(ordered[i],std::uint32_t(i));
+    for(const auto joint:skin.joints) {
+        const auto it=joint_to_track.find(joint);
+        if(it==joint_to_track.end())
+            throw std::runtime_error("Skin remap missing joint");
+        result.skin_joints.push_back(it->second);
     }
 
     for (const auto &source : asset.animations)
@@ -444,10 +446,9 @@ rig import_rig(const fastgltf::Asset &asset, std::size_t skin_index)
         {
             if (!channel.nodeIndex) continue;
 
-            auto joint = std::find(ordered.begin(), ordered.end(), *channel.nodeIndex);
-
-            if (joint == ordered.end()) continue;
-            if (channel.path == fastgltf::AnimationPath::Weights) continue;
+            const auto joint=joint_to_track.find(*channel.nodeIndex);
+            if(joint==joint_to_track.end() ||
+               channel.path==fastgltf::AnimationPath::Weights)continue;
             const auto &sampler = source.samplers.at(channel.samplerIndex);
 
             if (sampler.interpolation != fastgltf::AnimationInterpolation::Linear)
@@ -457,7 +458,7 @@ rig import_rig(const fastgltf::Asset &asset, std::size_t skin_index)
 
             if (inputs.count != outputs.count)
                 throw std::runtime_error("Mismatched glTF animation channels");
-            auto &track = clip.tracks[std::size_t(joint - ordered.begin())];
+            auto& track=clip.tracks[joint->second];
 
             for (std::size_t i = 0; i < inputs.count; ++i)
             {

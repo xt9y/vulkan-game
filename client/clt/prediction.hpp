@@ -77,7 +77,7 @@ void run()
                 if (append) {
                     const auto added = std::span<const ::scene::instance>(scene->instances).subspan(previous_scene->instances.size());
                     auto new_boxes = ::player::build_colliders(scene->meshes, added);
-                    index.append(::player::collision_bounds(new_boxes));
+                    index.append(new_boxes);
                     colliders.insert(colliders.end(), new_boxes.begin(), new_boxes.end());
                 }
                 else {
