@@ -182,7 +182,7 @@ void init(const char *vertex_path, const char *fragment_path)
         vk::queue::init(family);
         vk::command::init(family);
         get()->timestamps_supported = vk::physical_device::get()->handle.getQueueFamilyProperties()[family].timestampValidBits > 0;
-        get()->frames.create(1); // transport-only mapper reuses GPU photon buffers
+        get()->frames.create(1); // rendering frame scheduler
         scene_renderer::init(vertex_path, fragment_path);
         resize();
     }
@@ -405,7 +405,6 @@ void draw_frame()
             scene_renderer::draw_reflection(cmd,image,render_camera,*planar);
         else {
             postprocess::update_skinned(image,render_camera);
-            postprocess::update_photons(cmd,image,render_camera);
         }
     });
     add("point-cloud",1,{buffer(target.points,true)},
