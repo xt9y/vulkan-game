@@ -382,10 +382,10 @@ bool single_glass()
     for(const auto& instance:scene->instances) {
         if(instance.pattern!=2u && instance.pattern!=3u)continue;
         const auto& scale=instance.pose.scale;
-        const bool solid=instance.mesh_id==::scene::unit_sphere_mesh_id ||
-            (instance.mesh_id==::scene::unit_cube_mesh_id &&
-             std::min({std::abs(scale.x),std::abs(scale.y),
-                       std::abs(scale.z)})>=.06f);
+        const bool solid=(instance.mesh_id==::scene::unit_sphere_mesh_id ||
+            instance.mesh_id==::scene::unit_cube_mesh_id) &&
+            std::min({std::abs(scale.x),std::abs(scale.y),
+                      std::abs(scale.z)})>=.06f;
         if(instance.pattern!=2u || found || solid)return false;
         found=true;
     }
@@ -761,9 +761,9 @@ void append_instance(gpu_mesh &mesh, const ::scene::instance &instance)
     // interfaces. Thin panes retain kind 2 and the cheap transparent path.
     const bool glass_solid=instance.pattern==2u &&
         (instance.mesh_id==::scene::unit_sphere_mesh_id ||
-         (instance.mesh_id==::scene::unit_cube_mesh_id &&
-          std::min({std::abs(pose.scale.x),std::abs(pose.scale.y),
-                    std::abs(pose.scale.z)})>=.06f));
+         instance.mesh_id==::scene::unit_cube_mesh_id) &&
+        std::min({std::abs(pose.scale.x),std::abs(pose.scale.y),
+                  std::abs(pose.scale.z)})>=.06f;
     const float kind=instance.pattern==UINT32_MAX?-1.f:
         float(glass_solid?4u:instance.pattern);
     const unsigned strength=static_cast<unsigned>(std::lround(std::clamp(instance.optical_strength,0.f,1.f)*255.f));

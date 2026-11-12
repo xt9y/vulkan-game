@@ -336,10 +336,10 @@ std::vector<optics::surface> optical_scene(
                 // but never magnify through thin panels or arbitrary cards.
                 surface.solid=inst.pattern==2u &&
                     (inst.mesh_id==::scene::unit_sphere_mesh_id ||
-                     (inst.mesh_id==::scene::unit_cube_mesh_id &&
-                      std::min({std::abs(inst.pose.scale.x),
-                                std::abs(inst.pose.scale.y),
-                                std::abs(inst.pose.scale.z)})>=.06f));
+                     inst.mesh_id==::scene::unit_cube_mesh_id) &&
+                    std::min({std::abs(inst.pose.scale.x),
+                              std::abs(inst.pose.scale.y),
+                              std::abs(inst.pose.scale.z)})>=.06f;
                 surface.optical_strength=inst.pattern==3u?
                     1.f:inst.optical_strength;
                 surface.roughness=inst.pattern==3u?
