@@ -393,8 +393,9 @@ bool single_glass()
     return found;
 }
 
-// Only planar mirrors need a reflected-camera raster pass. Glass already
-// traces real reflections in optics, so a second full scene render is wasted.
+// One planar mirror can be rasterized efficiently even with glass in
+// front of it. The glass compositor samples its reflection after
+// checking whether the transmitted ray intersects the mirror plane.
 std::optional<planar_view> planar_reflection(const camera::frame& camera)
 {
     // Compare exact rasterized planar mirrors with the original per-pixel

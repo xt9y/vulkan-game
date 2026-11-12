@@ -739,21 +739,24 @@ void present(vk::CommandBuffer cmd, std::uint32_t image,
                 const auto glass_regions=scene_renderer::optical_rects(view,2u);
                 const auto mirror_regions=scene_renderer::optical_rects(view,3u);
                 static std::uint32_t observations=0,active=0;
-                static std::uint64_t submitted_pixels=0;
+                static std::uint64_t glass_pixels=0,mirror_pixels=0;
                 if(!glass_regions.empty() || !mirror_regions.empty())++active;
-                const auto count_pixels=[&](const auto& regions) {
+                const auto count_pixels=[](const auto& regions) {
+                    std::uint64_t area=0;
                     for(const auto& r:regions)
-                        submitted_pixels+=std::uint64_t(r.extent.width)*
-                                          r.extent.height;
+                        area+=std::uint64_t(r.extent.width)*r.extent.height;
+                    return area;
                 };
-                count_pixels(glass_regions);
-                count_pixels(mirror_regions);
+                glass_pixels+=count_pixels(glass_regions);
+                mirror_pixels+=count_pixels(mirror_regions);
                 if(++observations==120) {
                     std::clog<<"optics: active_frames="<<active
                              <<"/120 scissor_pixels_per_frame="
-                             <<submitted_pixels/120<<"\n";
+                             <<(glass_pixels+mirror_pixels)/120
+                             <<" glass_pixels="<<glass_pixels/120
+                             <<" mirror_pixels="<<mirror_pixels/120<<"\n";
                     observations=active=0;
-                    submitted_pixels=0;
+                    glass_pixels=mirror_pixels=0;
                 }
                 material_compositor->record(command,image,params,
                     glass_regions,mirror_regions,extent);
