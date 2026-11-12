@@ -509,7 +509,7 @@ void synchronize_scene()
 
     if (source == registered) return;
     const bool reuse_atlas=source && registered &&
-        atlas_unchanged(*registered,*source);
+        !optical_surfaces.empty() && atlas_unchanged(*registered,*source);
     const bool same_light_shape=source && registered &&
         lighting_shape_unchanged(*registered,*source);
     if(!same_light_shape) {

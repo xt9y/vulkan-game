@@ -32,8 +32,8 @@ static void compile_shaders(void)
         char output[256],command[640];
         struct stat source,binary;
         snprintf(output,sizeof(output),"build/shaders/%s%s.spv",
-                 strstr(shaders[i],"/optics/")?"optics_":
-                 "",name?name+1:shaders[i]);
+                 strstr(shaders[i],"/optics/")?"optics_":"",
+                 name?name+1:shaders[i]);
         if(stat(shaders[i],&source))
         {
             fprintf(stderr,"Missing shader: %s\n",shaders[i]);
@@ -53,7 +53,6 @@ static void compile_shaders(void)
                         binary.st_mtime>=include.st_mtime)))continue;
         snprintf(command,sizeof(command),
                  "glslangValidator -V %s\"%s\" -o \"%s\"",
-                 
                  optics?"-Ithird-party/vulkan-systems/optics/optics/shaders -Ithird-party/vulkan-systems/pcloud/pcloud/shaders ":"",
                  shaders[i],output);
         if(system(command))
