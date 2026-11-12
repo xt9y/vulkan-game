@@ -30,6 +30,7 @@ namespace clt::scene_renderer
 struct planar_view {
     camera::frame reflected;
     vk::util::math::vec4 clip;
+    vk::util::math::vec4 center,axis_y,axis_z;
 };
 
 namespace
@@ -404,11 +405,12 @@ std::optional<planar_view> planar_reflection(const camera::frame& camera)
     if(!scene)return std::nullopt;
     const ::scene::instance* optical=nullptr;
     for(const auto& instance:scene->instances) {
-        if(instance.pattern!=2u && instance.pattern!=3u)continue;
+        // A glass object does not invalidate the single planar mirror.
+        if(instance.pattern!=3u)continue;
         if(optical)return std::nullopt;
         optical=&instance;
     }
-    if(!optical || optical->pattern!=3u ||
+    if(!optical ||
        optical->mesh_id!=::scene::unit_cube_mesh_id ||
        std::abs(optical->pose.scale.x)>.5f ||
        std::abs(optical->pose.scale.x)<.001f ||
@@ -431,6 +433,19 @@ std::optional<planar_view> planar_reflection(const camera::frame& camera)
     const float face=side>=0.f?hi:lo;
     const vec3 point=optical->pose.position+
                      axis*(face*optical->pose.scale.x);
+    float min_y=found->vertices.front().position.y;
+    float max_y=min_y,min_z=found->vertices.front().position.z,max_z=min_z;
+    for(const auto& vertex:found->vertices) {
+        min_y=std::min(min_y,vertex.position.y);
+        max_y=std::max(max_y,vertex.position.y);
+        min_z=std::min(min_z,vertex.position.z);
+        max_z=std::max(max_z,vertex.position.z);
+    }
+    const vec3 center=point+rotate(optical->pose.rotation,{
+        0.f,(min_y+max_y)*.5f*optical->pose.scale.y,
+        (min_z+max_z)*.5f*optical->pose.scale.z});
+    const vec3 axis_y=normalize(rotate(optical->pose.rotation,{0,1,0}));
+    const vec3 axis_z=normalize(rotate(optical->pose.rotation,{0,0,1}));
     const float distance=dot(camera.eye-point,N);
     if(distance<.02f)return std::nullopt;
     const auto reflect=[&](vec3 v){return v-N*(2.f*dot(v,N));};
@@ -442,7 +457,12 @@ std::optional<planar_view> planar_reflection(const camera::frame& camera)
         virtual_eye+reflected_forward,reflect(up));
     return planar_view{
         {camera.pose,reflected_view,virtual_eye},
-        {N.x,N.y,N.z,-dot(N,point)+.0002f}
+        {N.x,N.y,N.z,-dot(N,point)+.0002f},
+        {center.x,center.y,center.z,1.f},
+        {axis_y.x,axis_y.y,axis_y.z,
+            (max_y-min_y)*.5f*std::abs(optical->pose.scale.y)},
+        {axis_z.x,axis_z.y,axis_z.z,
+            (max_z-min_z)*.5f*std::abs(optical->pose.scale.z)}
     };
 }
 

@@ -707,13 +707,27 @@ void present(vk::CommandBuffer cmd, std::uint32_t image,
                 const float half_tan=std::tan(view.pose.fov*.5f);
                 const auto& v=view.view;
                 optics::camera params{};
-                params.view_projection=perspective(view.pose.fov,
-                    float(extent.width)/float(extent.height),.1f,1000.f)*v;
-                // 2: planar raster, 3: isolated glass with HDR transmission,
-                // 1: nested BVH optics.
-                const bool planar=scene_renderer::planar_reflection(view).has_value();
+                // None of the optics shaders consumes a camera VP.
+                // Reuse its existing push-constant space to expose the
+                // planar mirror to transmissive glass without extra buffers.
+                params.view_projection={};
+                const auto planar=scene_renderer::planar_reflection(view);
+                if(planar) {
+                    const auto pack=[&](int column,const vec4& data) {
+                        params.view_projection(0,column)=data.x;
+                        params.view_projection(1,column)=data.y;
+                        params.view_projection(2,column)=data.z;
+                        params.view_projection(3,column)=data.w;
+                    };
+                    pack(0,planar->clip);
+                    pack(1,planar->center);
+                    pack(2,planar->axis_y);
+                    pack(3,planar->axis_z);
+                }
+                // 2: planar reflected camera, 3: thin glass transmission.
                 params.eye={view.eye.x,view.eye.y,view.eye.z,
-                            planar?2.f:scene_renderer::single_glass()?3.f:1.f};
+                            planar.has_value()?2.f:
+                                scene_renderer::single_glass()?3.f:1.f};
                 params.right={v(0,0),v(0,1),v(0,2),
                               half_tan*float(extent.width)/float(extent.height)};
                 params.up={v(1,0),v(1,1),v(1,2),half_tan};
