@@ -14,8 +14,6 @@
 #include <gpu/timestamps.hpp>
 #include <pcloud/pcloud.hpp>
 #include <optics/optics.hpp>
-#include <pmap/pmap.hpp>
-#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <climits>
@@ -26,8 +24,7 @@ namespace clt::postprocess
 {
 namespace {
 std::unique_ptr<optics::compositor> material_compositor;
-std::unique_ptr<pm::mapper> photon_transport;
-bool transport_pending=false;
+std::vector<optics::surface> optical_surfaces;
 struct skinned_face {
     std::uint32_t face=0;
     const ::scene::instance* instance=nullptr;
@@ -235,7 +232,7 @@ std::shared_ptr<pc::world> prepare_world(const ::scene::state *source)
                                  [&](const auto& selected,const auto& instance) {
         const auto* mesh=&selected;
 
-        // Transparent glass is handled by photonic transmission, not
+        // Transparent glass uses optical transmission, not
         // opaque point-cloud shadow blocking.
         if (mesh->surface.alpha_mode == 2 || instance.pattern == 2u) return;
         std::vector<animation::matrix> palette;
@@ -290,26 +287,19 @@ std::shared_ptr<pc::world> prepare_world(const ::scene::state *source)
 
     return prepared;
 }
-// Convert the authoritative scene into GPU photon-tracing surfaces.
-// The transport-only mapper owns the same BVH used by the raster scene.
-// Face UVs and vertex normals retain exact BVH face ordering.
-std::optional<pm::scene> photon_scene(const ::scene::state& world,
-                                       std::vector<optics::face_uv>& faces,
-                                       std::vector<optics::face_normals>& normals)
+// Flatten the streamed world into triangles for the optics-owned BVH.
+// Face UVs, smooth normals and animated-face IDs retain exact source order.
+std::vector<optics::surface> optical_scene(
+    const ::scene::state& world,std::vector<optics::face_uv>& faces,
+    std::vector<optics::face_normals>& normals)
 {
     using namespace vk::util::math;
-    const auto light=std::find_if(world.lights.begin(),world.lights.end(),
-        [](const auto& l){return l.enabled && l.strength>0.f;});
-    // Optical geometry must exist even in a dark scene: reflecting the
-    // world is not conditional on a point light being enabled.
-    pm::scene result{};
+    std::vector<optics::surface> result;
     faces.clear();
     normals.clear();
     skinned_faces.clear();
-    result.omnidirectional_emitter=true;
     ::scene::each_mesh_instance(world.meshes,world.instances,
-                                 [&](const auto& mesh,const auto& inst) {
-        // Match the raster pass's stable clip rule for blended hair cards.
+                                  [&](const auto& mesh,const auto& inst) {
         if(mesh.surface.alpha_mode==2 && !mesh.surface.base_color_texture &&
            mesh.surface.base_color[3]<.42f)return;
         const auto transform=[&](vec3 p) {
@@ -323,14 +313,11 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
             const vec3 u=transform(mesh.vertices[ib].position)-a;
             const vec3 v=transform(mesh.vertices[ic].position)-a;
             const auto n=cross(u,v);
-            // Use PMap's actual triangle metric threshold. A second,
-            // larger cross-product cutoff was discarding many small but
-            // valid scaled Mermaid triangles before the reflection BVH.
-            const float dot_uv=dot(u,v);
-            const float metric=dot(u,u)*dot(v,v)-dot_uv*dot_uv;
+            const float uv=dot(u,v);
+            const float metric=dot(u,u)*dot(v,v)-uv*uv;
             if(!std::isfinite(n.x) || !std::isfinite(n.y) ||
                !std::isfinite(n.z) || !(metric>1e-9f))continue;
-            pm::surface surface{};
+            optics::surface surface{};
             surface.origin=a;surface.u=u;surface.v=v;
             surface.normal=normalize(n);
             surface.albedo={
@@ -338,7 +325,6 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
                 std::clamp(mesh.surface.base_color[1]*inst.tint.y,0.f,1.f),
                 std::clamp(mesh.surface.base_color[2]*inst.tint.z,0.f,1.f)
             };
-            surface.triangle=true;
             surface.emission={mesh.surface.emissive[0],mesh.surface.emissive[1],
                               mesh.surface.emissive[2]};
             surface.pattern=inst.pattern==1u?2u:
@@ -346,8 +332,6 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
                  mesh.surface.procedural_pattern==1u?1u:0u);
             if(inst.pattern==2u || inst.pattern==3u) {
                 surface.optical_type=inst.pattern==2u?1u:2u;
-                // Full-strength mirror reflection is RGB-filtered by its tint,
-                // including when a secondary BVH ray hits this mirror.
                 surface.optical_strength=inst.pattern==3u?
                     1.f:inst.optical_strength;
                 surface.roughness=inst.pattern==3u?
@@ -355,12 +339,9 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
             }
             if(mesh.skin_id)
                 skinned_faces.push_back({
-                    std::uint32_t(result.surfaces.size()),&inst,&mesh,
-                    {ia,ib,ic}
+                    std::uint32_t(result.size()),&inst,&mesh,{ia,ib,ic}
                 });
-            result.surfaces.push_back(surface);
-            // Match the primary mesh vertex shader: inverse transpose
-            // under nonuniform scaling, then rotate into world space.
+            result.push_back(surface);
             const auto smooth=[&](const ::scene::vertex& vertex) {
                 const auto& scale=inst.pose.scale;
                 vec3 n=rotate(inst.pose.rotation,{
@@ -399,20 +380,6 @@ std::optional<pm::scene> photon_scene(const ::scene::state& world,
                 mesh.surface.alpha_mode==2 ? .42f : 0.f;
             faces.push_back(mapping);
         }
-    });
-    pm::surface emitter{};
-    emitter.origin=light==world.lights.end()?vec3{}:light->position;
-    emitter.u={.4f,0.f,0.f};
-    emitter.v={0.f,0.f,.4f};
-    emitter.normal={0.f,-1.f,0.f};
-    emitter.emission=light==world.lights.end()?vec3{}:
-        light->color*std::max(light->strength,0.f)*6.f;
-    emitter.albedo={0.f,0.f,0.f};
-    result.emitter=std::uint32_t(result.surfaces.size());
-    result.surfaces.push_back(emitter);
-    faces.emplace_back(); // The point-light emitter has no texture.
-    normals.push_back({
-        {0.f,-1.f,0.f,0.f},{0.f,-1.f,0.f,0.f},{0.f,-1.f,0.f,0.f}
     });
     return result;
 }
@@ -499,7 +466,7 @@ void create()
 // Reuse the GPU texture atlas when a network update changes only lights,
 // object transforms or optical strengths. UV/texture contents and triangle
 // ordering are the only data relevant to this atlas; uploaded materials
-// and acceleration structures are handled separately by the mapper.
+// and acceleration structures are handled by the optics compositor.
 bool atlas_unchanged(const ::scene::state& a,const ::scene::state& b)
 {
     if(a.atlas_revision!=b.atlas_revision ||
@@ -513,7 +480,7 @@ bool atlas_unchanged(const ::scene::state& a,const ::scene::state& b)
 }
 
 // The optical BVH depends on actual triangles, instance material
-// properties and the first photon emitter, not on unrelated light edits.
+// properties, not on unrelated light edits.
 bool optical_geometry_unchanged(const ::scene::state& a,
                                 const ::scene::state& b)
 {
@@ -533,17 +500,6 @@ bool optical_geometry_unchanged(const ::scene::state& a,
            x.overlay_weight!=y.overlay_weight)
             return false;
     }
-    const auto emitter=[](const ::scene::state& v) {
-        return std::find_if(v.lights.begin(),v.lights.end(),
-            [](const auto& l){return l.enabled && l.strength>0.f;});
-    };
-    const auto x=emitter(a),y=emitter(b);
-    if((x==a.lights.end())!=(y==b.lights.end()))return false;
-    if(x!=a.lights.end() &&
-       (x->position.x!=y->position.x ||
-        x->position.y!=y->position.y ||
-        x->position.z!=y->position.z))
-        return false;
     return true;
 }
 
@@ -553,7 +509,7 @@ void synchronize_scene()
 
     if (source == registered) return;
     const bool reuse_atlas=source && registered &&
-        atlas_unchanged(*registered,*source);
+        !optical_surfaces.empty() && atlas_unchanged(*registered,*source);
     const bool same_light_shape=source && registered &&
         lighting_shape_unchanged(*registered,*source);
     if(!same_light_shape) {
@@ -587,68 +543,33 @@ void synchronize_scene()
         material_compositor->set_probe_space(pc::probe_space());
     }
     const bool same_optical_geometry=source && registered &&
-        photon_transport && optical_geometry_unchanged(*registered,*source);
+        optical_geometry_unchanged(*registered,*source);
     if(same_optical_geometry) {
-        // No face, atlas, BVH, skin index, or emitted-ray origin changed.
-        // Update light colors/intensity without allocating a second BVH.
         if(material_compositor)material_compositor->set_lights(lights);
-        const auto first=std::find_if(source->lights.begin(),source->lights.end(),
-            [](const auto& l){return l.enabled && l.strength>0.f;});
-        const auto emission=first==source->lights.end() ?
-            vk::util::math::vec3{} :
-            first->color*std::max(first->strength,0.f)*6.f;
-        const auto& world=photon_transport->current_scene();
-        const auto old=world.surfaces[world.emitter].emission;
-        if(old.x!=emission.x || old.y!=emission.y || old.z!=emission.z) {
-            photon_transport->set_emission(world.emitter,emission);
-            transport_pending=true;
-        }
         registered=source;
         return;
     }
-    // Prior GPU submissions have completed. New *geometry* requires new
-    // photon traversal buffers; lighting-only changes never enter here.
+    // Scene replacement occurs after previous GPU submissions have completed.
     if(material_compositor)material_compositor->set_scene({},lights);
-    photon_transport.reset();
     optical_geometry_source.reset();
+    optical_surfaces.clear();
     skinned_faces.clear();
-    transport_pending=false;
     if(source && std::any_of(source->instances.begin(),source->instances.end(),
         [](const auto& inst){return inst.pattern==2u || inst.pattern==3u;})) {
         std::vector<optics::face_uv> face_uvs;
         std::vector<optics::face_normals> face_normals;
-        auto scene=photon_scene(*source,face_uvs,face_normals);
-        if(scene) {
-            // skinned_faces stores pointers into this immutable state.
+        optical_surfaces=optical_scene(*source,face_uvs,face_normals);
+        if(!optical_surfaces.empty() && material_compositor) {
             optical_geometry_source=source;
-            pm::configuration config{};
-            config.transport_only=true;
-            config.photons=8192; // Invisible indirect-lighting cache; no projected splats.
-            config.gi_updates=1; // Stable photon map, reprojected from the camera every frame.
-            config.bounces=4;
-            config.atlas_tile=32;
-            auto mapper=std::make_unique<pm::mapper>();
-            mapper->create(*scene,{1,1},config);
-            const auto g=mapper->geometry_buffers();
-            if(material_compositor)
-            {
-                material_compositor->set_scene({
-                    g.faces,g.nodes,g.triangles,g.scene_info,
-                    g.photons,g.offsets,
-                    std::uint32_t(scene->surfaces.size()),g.face_ids
-                },lights,std::any_of(source->instances.begin(),
-                    source->instances.end(),
+            material_compositor->set_scene(optical_surfaces,lights,
+                std::any_of(source->instances.begin(),source->instances.end(),
                     [](const auto& inst){return inst.pattern==2u;}));
-                material_compositor->set_normals(face_normals);
-                if(!reuse_atlas)
-                    material_compositor->set_textures(
-                        face_uvs,optical_textures(*source,face_uvs));
-            }
-            photon_transport=std::move(mapper);
-            transport_pending=true;
-            std::clog << "optics: initialized photon transport with "
-                      << scene->surfaces.size() << " surfaces and "
-                      << config.photons << " emitted paths\n";
+            material_compositor->set_normals(face_normals);
+            if(!reuse_atlas)
+                material_compositor->set_textures(
+                    face_uvs,optical_textures(*source,face_uvs));
+            std::clog<<"optics: own BVH with "<<optical_surfaces.size()
+                     <<" triangle faces, PCloud indirect lighting\n";
         }
     }
     registered=source;
@@ -657,20 +578,19 @@ void synchronize_scene()
 void release()
 {
     material_compositor.reset();
-    photon_transport.reset();
+    optical_surfaces.clear();
     optical_geometry_source.reset();
     skinned_faces.clear();
-    transport_pending=false;
     pc::release();
     registered.reset();
 }
 
 // Refit only skinned faces, using the *same* palette that was uploaded
 // to mesh.vert this frame. CPU skinning happens once per unique vertex,
-// then PMap refits the existing sorted BVH without changing its topology.
+// then optics refits its own sorted BVH without changing its topology.
 void update_skinned(std::uint32_t image,const camera::frame& view)
 {
-    if(!photon_transport || !material_compositor || skinned_faces.empty() ||
+    if(optical_surfaces.empty() || !material_compositor || skinned_faces.empty() ||
        scene_renderer::optical_rects(view).empty())
         return;
     const auto refit_start=std::chrono::steady_clock::now();
@@ -681,11 +601,11 @@ void update_skinned(std::uint32_t image,const camera::frame& view)
     if(poses.empty())return;
     struct transformed_vertex {vec3 position{},normal{};};
     std::unordered_map<std::uint32_t,std::vector<transformed_vertex>> vertices;
-    std::vector<pm::geometry_update> surfaces;
+    std::vector<optics::geometry_update> surfaces;
     std::vector<optics::face_normal_update> normals;
     surfaces.reserve(skinned_faces.size());
     normals.reserve(skinned_faces.size());
-    const auto& base=photon_transport->current_scene().surfaces;
+    const auto& base=optical_surfaces;
     for(const auto& face:skinned_faces) {
         const auto pose=poses.find(face.instance->id);
         if(pose==poses.end() || face.face>=base.size())continue;
@@ -730,11 +650,7 @@ void update_skinned(std::uint32_t image,const camera::frame& view)
         normals.push_back({face.face,shaded});
     }
     if(surfaces.empty())return;
-    const auto g=photon_transport->refit_geometry(image,surfaces);
-    material_compositor->set_geometry_frame(image,{
-        g.faces,g.nodes,g.triangles,g.scene_info,g.photons,g.offsets,
-        std::uint32_t(base.size()),g.face_ids
-    });
+    material_compositor->update_geometry_frame(image,surfaces);
     material_compositor->update_normals(image,normals);
     // GPU timestamps do not include the CPU vertex skin/refit work.
     static std::uint32_t refits=0;
@@ -749,23 +665,6 @@ void update_skinned(std::uint32_t image,const camera::frame& view)
         refits=0;
         total_ms=worst_ms=0.0;
     }
-}
-
-void update_photons(vk::CommandBuffer cmd,std::uint32_t,
-                    const camera::frame&)
-{
-    if(!transport_pending || !photon_transport ||
-       !scene_renderer::has_optics())return;
-    photon_transport->record_transport(cmd);
-    // The reflection shader samples the transport buffers directly,
-    // without reduced-resolution/interpolated surface lighting.
-    vk::MemoryBarrier barrier{};
-    barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
-    barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead;
-    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
-                        vk::PipelineStageFlagBits::eFragmentShader,{},
-                        {barrier},{},{});
-    transport_pending=false;
 }
 
 void present(vk::CommandBuffer cmd, std::uint32_t image,
